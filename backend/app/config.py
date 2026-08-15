@@ -1,4 +1,6 @@
+from decimal import Decimal
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -19,6 +21,21 @@ class Settings(BaseSettings):
     vault_master_key: str = "dev-only-insecure-fernet-key-000000000000="
 
     object_storage_root: str = "./data/objects"
+
+    # AI provider selection (§0/§10). Defaults to "fake" — a fresh checkout
+    # with no API keys runs LLM-dependent agents (injection/xss/access-control
+    # triage+validation) against a no-op adapter that finds nothing, rather
+    # than crashing. Set to "claude"/"openai" + the matching API key for
+    # real reasoning.
+    ai_provider: Literal["claude", "openai", "fake"] = "fake"
+    ai_model: str = "claude-haiku-4-5"
+    anthropic_api_key: str | None = None
+    openai_api_key: str | None = None
+
+    # §10.5 visible budget guardrail — per-scan-run cap on estimated LLM
+    # spend. Once exceeded, remaining LLM-dependent agent nodes are skipped
+    # (recorded on their AgentJob), not silently truncated.
+    max_llm_cost_usd_per_scan: Decimal = Decimal("2.00")
 
 
 @lru_cache

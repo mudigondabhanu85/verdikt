@@ -1,6 +1,7 @@
 import asyncio
 import re
-from urllib.parse import urljoin, urlsplit
+from dataclasses import dataclass, field
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -12,12 +13,38 @@ _ROBOTS_DISALLOW_RE = re.compile(r"^\s*Disallow:\s*(\S+)", re.IGNORECASE | re.MU
 _SITEMAP_LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.IGNORECASE)
 
 
+@dataclass
+class FormField:
+    name: str
+    type: str  # the input's type= attribute, e.g. "text", "password", "hidden"
+
+
+@dataclass
+class FormInfo:
+    action_url: str
+    method: str  # "GET" or "POST"
+    fields: list[FormField] = field(default_factory=list)
+
+
+@dataclass
+class DiscoveredParameter:
+    """One (submission target, parameter) pair the Injection/XSS agents can
+    probe — either a query-string key already observed on a crawled URL,
+    or a non-hidden <form> field. HTML-only surface (see Phase 2 plan's
+    NoSQLi scope note for why JSON API bodies aren't covered).
+    """
+
+    url: str
+    method: str
+    name: str
+    sample_value: str = ""
+
+
 def _looks_html(response: httpx.Response) -> bool:
     return "html" in response.headers.get("content-type", "").lower()
 
 
-def _extract_links(base_url: str, html: str) -> list[str]:
-    soup = BeautifulSoup(html, "html.parser")
+def _extract_links(base_url: str, soup: BeautifulSoup) -> list[str]:
     links = []
     for tag in soup.find_all("a", href=True):
         href = tag["href"].strip()
@@ -25,6 +52,33 @@ def _extract_links(base_url: str, html: str) -> list[str]:
             continue
         links.append(urljoin(base_url, href))
     return links
+
+
+def extract_forms(base_url: str, soup: BeautifulSoup) -> list[FormInfo]:
+    forms = []
+    for form_tag in soup.find_all("form"):
+        action = form_tag.get("action") or base_url
+        method = (form_tag.get("method") or "GET").strip().upper()
+        fields = []
+        for input_tag in form_tag.find_all(["input", "textarea", "select"]):
+            name = input_tag.get("name")
+            if not name:
+                continue
+            field_type = input_tag.get("type", "text") if input_tag.name == "input" else "text"
+            fields.append(FormField(name=name, type=field_type))
+        forms.append(FormInfo(action_url=urljoin(base_url, action), method=method, fields=fields))
+    return forms
+
+
+def _extract_query_params(url: str) -> list[DiscoveredParameter]:
+    query = urlsplit(url).query
+    if not query:
+        return []
+    parsed = parse_qs(query, keep_blank_values=True)
+    return [
+        DiscoveredParameter(url=url, method="GET", name=name, sample_value=(values[0] if values else ""))
+        for name, values in parsed.items()
+    ]
 
 
 def _seed_urls_for_target(target: Target) -> list[str]:
@@ -40,8 +94,10 @@ def _seed_urls_for_target(target: Target) -> list[str]:
 class ReconAgent:
     """Same-origin crawl from each in-scope Target, bounded (§1.2
     safe-by-default) rather than unbounded even against fully authorized
-    targets: depth 2, max 40 pages, modest concurrency. Returns the
-    endpoints discovered (status < 400) for the HeaderConfigAgent to check.
+    targets: depth 2, max 40 pages, modest concurrency. run() returns the
+    endpoints discovered (status < 400); discovered_parameters and
+    discovered_forms are populated as a side effect of the same crawl for
+    later agents (Injection/XSS probe parameters, login auto-discovery).
     """
 
     MAX_PAGES = 40
@@ -52,6 +108,8 @@ class ReconAgent:
         self._client = client
         self._targets = targets
         self._semaphore = asyncio.Semaphore(self.CONCURRENCY)
+        self.discovered_parameters: list[DiscoveredParameter] = []
+        self.discovered_forms: list[FormInfo] = []
 
     async def _fetch(self, url: str) -> httpx.Response | None:
         async with self._semaphore:
@@ -84,6 +142,7 @@ class ReconAgent:
                     continue
                 if response.status_code < 400:
                     discovered[url] = response
+                    self.discovered_parameters.extend(_extract_query_params(url))
                 next_frontier.extend(self._follow_up_links(url, response))
 
             frontier = next_frontier
@@ -98,5 +157,7 @@ class ReconAgent:
         if path == "/sitemap.xml" and response.status_code < 400:
             return _SITEMAP_LOC_RE.findall(response.text)
         if _looks_html(response):
-            return _extract_links(url, response.text)
+            soup = BeautifulSoup(response.text, "html.parser")
+            self.discovered_forms.extend(extract_forms(url, soup))
+            return _extract_links(url, soup)
         return []

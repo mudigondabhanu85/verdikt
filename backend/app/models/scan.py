@@ -1,13 +1,16 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
 SCAN_RUN_STATUSES = ("pending", "running", "completed", "failed")
-AGENT_JOB_STATUSES = ("pending", "running", "completed", "failed")
+# "skipped" (§10.5): the §2 budget guardrail stopped this agent before it
+# ran, not a failure — see app/ai/budget.py.
+AGENT_JOB_STATUSES = ("pending", "running", "completed", "failed", "skipped")
 
 
 class ScanRun(Base):
@@ -19,6 +22,8 @@ class ScanRun(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
+    # Running total of estimated LLM spend for this run (§10.5 budget guardrail).
+    llm_cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal(0))
 
 
 class AgentJob(Base):

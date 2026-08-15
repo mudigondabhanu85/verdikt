@@ -29,6 +29,11 @@ async def add_credential_set(
         credential_type=payload.credential_type,
         encrypted_secret=encrypt_credential(payload.username, payload.secret),
         masked_reference=mask_reference(payload.username, payload.secret),
+        login_endpoint=payload.login_endpoint,
+        login_method=payload.login_method,
+        login_body_template=payload.login_body_template,
+        login_content_type=payload.login_content_type,
+        token_response_path=payload.token_response_path,
     )
     session.add(credential)
     # Audit the creation event, never the secret material itself (§1.5).

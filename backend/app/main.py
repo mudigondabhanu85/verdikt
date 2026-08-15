@@ -5,6 +5,7 @@ from app.api.routes import (
     credentials,
     organizations,
     projects,
+    review_candidates,
     scans,
     targets,
     traffic_import,
@@ -21,6 +22,7 @@ app.include_router(targets.router)
 app.include_router(credentials.router)
 app.include_router(traffic_import.router)
 app.include_router(scans.router)
+app.include_router(review_candidates.router)
 
 
 @app.get("/health")

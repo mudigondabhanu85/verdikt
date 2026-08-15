@@ -1,0 +1,96 @@
+# Auth agent's deterministic check catalog (§3, A07 Authentication
+# Failures). No LLM needed — these are all binary, deterministic checks,
+# same "narrative in config, logic in code" split as the Phase 1 catalog.
+
+- id: session-not-invalidated-on-logout
+  title: "Session Not Invalidated on Logout"
+  owasp_2025_category: "A07 Authentication Failures"
+  cwe_id: "CWE-613"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+  cvss_score: 7.1
+  portswigger_reference_url: "https://portswigger.net/web-security/authentication"
+  plain_language_summary: >
+    Logging out of this application does not actually end the session — the
+    same session token still works afterward, so a stolen or leaked token
+    remains usable even after the legitimate user has logged out.
+  technical_description: >
+    After calling the logout endpoint ({logout_url}) with an authenticated
+    session, the same session credential was still accepted by a
+    previously-protected endpoint ({url}). The server is not invalidating
+    the session server-side on logout.
+  remediation: >
+    Invalidate the session token server-side (delete the server-side
+    session record, or add the token to a revocation list) when a user
+    logs out, not just on the client.
+  references:
+    - "https://cwe.mitre.org/data/definitions/613.html"
+
+- id: jwt-alg-none
+  title: "JWT Issued With \"none\" Signing Algorithm"
+  owasp_2025_category: "A07 Authentication Failures"
+  cwe_id: "CWE-347"
+  severity: "Critical"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+  cvss_score: 9.1
+  portswigger_reference_url: "https://portswigger.net/web-security/jwt"
+  plain_language_summary: >
+    The session token issued by this application is a JWT that is not
+    cryptographically signed, meaning anyone could forge a valid-looking
+    token for any user without knowing any secret.
+  technical_description: >
+    The JWT issued at {url} has "alg": "none" in its header. Tokens using
+    this algorithm carry no signature at all, so their claims (including
+    the user identity) cannot be trusted or verified.
+  remediation: >
+    Configure the JWT library to only issue and accept tokens signed with
+    a strong algorithm (e.g. RS256 or HS256 with a properly managed
+    secret), and explicitly reject "none" on verification.
+  references:
+    - "https://cwe.mitre.org/data/definitions/347.html"
+
+- id: jwt-missing-expiration
+  title: "JWT Issued Without an Expiration Claim"
+  owasp_2025_category: "A07 Authentication Failures"
+  cwe_id: "CWE-613"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"
+  cvss_score: 5.4
+  portswigger_reference_url: "https://portswigger.net/web-security/jwt"
+  plain_language_summary: >
+    The session token issued by this application never expires, so a
+    stolen token would remain valid indefinitely instead of expiring after
+    a reasonable time.
+  technical_description: >
+    The JWT issued at {url} has no "exp" (expiration) claim, so it does
+    not naturally expire — a captured token remains valid forever unless
+    separately revoked.
+  remediation: >
+    Set a reasonable "exp" claim on every issued JWT (e.g. 15–60 minutes
+    for access tokens, with a separate refresh-token flow for longer
+    sessions).
+  references:
+    - "https://cwe.mitre.org/data/definitions/613.html"
+
+- id: weak-session-token-entropy
+  title: "Session Token Has Low Entropy"
+  owasp_2025_category: "A07 Authentication Failures"
+  cwe_id: "CWE-330"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+  cvss_score: 6.5
+  portswigger_reference_url: "https://portswigger.net/web-security/authentication/other-mechanisms"
+  plain_language_summary: >
+    The session token issued by this application is short and/or
+    predictable, which could make it feasible for an attacker to guess a
+    valid session belonging to another user.
+  technical_description: >
+    The session token issued at {url} is {token_length} characters long
+    and/or matches a predictable pattern ({pattern_note}), well below what
+    is generally considered a securely random session identifier.
+  remediation: >
+    Generate session tokens using a cryptographically secure random
+    generator with at least 128 bits of entropy (e.g. 32+ random bytes,
+    base64/hex encoded).
+  references:
+    - "https://cwe.mitre.org/data/definitions/330.html"

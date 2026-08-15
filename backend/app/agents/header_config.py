@@ -1,33 +1,14 @@
-from collections import defaultdict
 from urllib.parse import urlsplit
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.checks import CHECKS, CheckHit, FetchedPage, run_all_checks
+from app.agents.evidence import format_request_raw, format_response_raw
 from app.agents.http_client import ScopedHttpClient, ScopeViolationError
 from app.checks.loader import CheckDefinition, get_check
+from app.checks.render import render_check_template as _render
 from app.models.finding import Evidence, Finding
-
-
-def _format_request_raw(request: httpx.Request) -> str:
-    lines = [f"{request.method} {request.url.raw_path.decode()} HTTP/1.1"]
-    lines += [f"{k}: {v}" for k, v in request.headers.items()]
-    return "\n".join(lines)
-
-
-def _format_response_raw(response: httpx.Response) -> str:
-    lines = [f"HTTP/1.1 {response.status_code} {response.reason_phrase}"]
-    lines += [f"{k}: {v}" for k, v in response.headers.items()]
-    body = response.text
-    if len(body) > 4000:
-        body = body[:4000] + "\n... (truncated)"
-    return "\n".join(lines) + "\n\n" + body
-
-
-def _render(template: str, url: str, extra: dict) -> str:
-    context = defaultdict(str, url=url, **extra)
-    return template.format_map(context)
 
 
 def _steps_to_reproduce(check_def: CheckDefinition, hit: CheckHit) -> list[str]:
@@ -135,15 +116,16 @@ class HeaderConfigAgent:
             references=_references(check_def),
             confirmation_status="ai_confirmed",
         )
-        self._session.add(finding)
-        await self._session.flush()
+        async with self._client.session_lock:
+            self._session.add(finding)
+            await self._session.flush()
 
-        self._session.add(
-            Evidence(
-                finding_id=finding.id,
-                request_raw=_format_request_raw(response.request),
-                response_raw=_format_response_raw(response),
+            self._session.add(
+                Evidence(
+                    finding_id=finding.id,
+                    request_raw=format_request_raw(response),
+                    response_raw=format_response_raw(response),
+                )
             )
-        )
-        await self._session.commit()
+            await self._session.commit()
         return finding

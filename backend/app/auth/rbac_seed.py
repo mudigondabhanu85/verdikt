@@ -4,7 +4,16 @@ schema bootstrap) and the test fixtures (SQLite-backed test DB) build the
 same rows from this, so the two never drift apart.
 """
 
-RESOURCES = ("organization", "project", "version", "target", "credential", "traffic", "scan")
+RESOURCES = (
+    "organization",
+    "project",
+    "version",
+    "target",
+    "credential",
+    "traffic",
+    "scan",
+    "review_candidate",
+)
 ACTIONS = ("create", "read", "update", "delete")
 
 
@@ -19,15 +28,17 @@ def baseline_grants() -> list[tuple[str, str, str]]:
 
     # project_lead: full CRUD on engagement resources; read-only on the org itself.
     grants.append(("project_lead", "organization", "read"))
-    for resource in ("project", "version", "target", "credential", "traffic", "scan"):
+    for resource in ("project", "version", "target", "credential", "traffic", "scan", "review_candidate"):
         for action in ACTIONS:
             grants.append(("project_lead", resource, action))
 
-    # analyst: read everywhere, plus create on traffic/scan (runs imports/scans).
+    # analyst: read everywhere, plus create on traffic/scan (runs imports/scans)
+    # and update on review_candidate (promotes/dismisses candidates).
     for resource in RESOURCES:
         grants.append(("analyst", resource, "read"))
     grants.append(("analyst", "traffic", "create"))
     grants.append(("analyst", "scan", "create"))
+    grants.append(("analyst", "review_candidate", "update"))
 
     # viewer: read-only everywhere.
     for resource in RESOURCES:
@@ -36,8 +47,18 @@ def baseline_grants() -> list[tuple[str, str, str]]:
     return grants
 
 
+def _grants_for_resource(resource: str) -> list[tuple[str, str, str]]:
+    return [g for g in baseline_grants() if g[1] == resource]
+
+
 def scan_resource_grants() -> list[tuple[str, str, str]]:
     """Just the "scan" resource rows — used by the incremental migration
     0002, which runs against DBs that already have every other resource's
     rows seeded by 0001 and must not re-insert them (unique constraint)."""
-    return [g for g in baseline_grants() if g[1] == "scan"]
+    return _grants_for_resource("scan")
+
+
+def review_candidate_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "review_candidate" resource rows — used by the incremental
+    migration 0003, same reasoning as scan_resource_grants() above."""
+    return _grants_for_resource("review_candidate")
