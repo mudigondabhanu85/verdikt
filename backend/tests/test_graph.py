@@ -84,6 +84,7 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             scan_run_id=scan_run.id,
             targets=targets,
             credential_sets=[credential],
+            business_rules=[],
             budget_guard=guard,
             ai_model="fake-model",
         )
@@ -101,6 +102,7 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             "xss",
             "auth",
             "access_control",
+            "business_logic",
         }
         assert all(j.status == "completed" for j in jobs), jobs
 

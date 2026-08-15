@@ -10,6 +10,7 @@ from app.ai import provider as ai_provider
 from app.ai.budget import BudgetGuard
 from app.config import get_settings
 from app.db import session as db_session
+from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
 from app.models.project import ScopeEntry
 from app.models.scan import ScanRun
@@ -57,6 +58,13 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
                     )
                 ).scalars()
             )
+            business_rules = list(
+                (
+                    await session.execute(
+                        select(BusinessRule).where(BusinessRule.version_id == scan_run.version_id)
+                    )
+                ).scalars()
+            )
 
             # One lock for every write to this shared AsyncSession across
             # the whole scan run — Phase 2's LangGraph orchestrator runs
@@ -78,6 +86,7 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
                 scan_run_id=scan_run.id,
                 targets=targets,
                 credential_sets=credential_sets,
+                business_rules=business_rules,
                 budget_guard=budget_guard,
                 ai_model=get_settings().ai_model,
             )

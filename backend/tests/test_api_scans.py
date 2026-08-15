@@ -84,9 +84,10 @@ async def test_full_scan_flow_completes_and_produces_report(client, fixture_site
     assert detail.status_code == 200
     body = detail.json()
     assert body["status"] == "completed", body
-    # Phase 2's LangGraph orchestrator runs the full agent set (§13) even
-    # with no credentials configured — auth/access-control/injection/xss
-    # just find nothing to do rather than failing.
+    # The LangGraph orchestrator runs the full agent set (§13) even with
+    # no credentials/business rules configured — auth/access-control/
+    # injection/xss/business-logic just find nothing to do rather than
+    # failing.
     assert {job["agent_type"] for job in body["agent_jobs"]} == {
         "recon",
         "header_config",
@@ -95,6 +96,7 @@ async def test_full_scan_flow_completes_and_produces_report(client, fixture_site
         "xss",
         "auth",
         "access_control",
+        "business_logic",
     }
     assert all(job["status"] == "completed" for job in body["agent_jobs"]), body["agent_jobs"]
     assert sum(body["finding_counts_by_severity"].values()) > 0

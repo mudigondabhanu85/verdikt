@@ -54,8 +54,10 @@ class ScopedHttpClient:
     """The only way agents talk to a target. Enforces the scope allow-list
     on every single request (§1.1) and records every request/response as a
     TrafficInteraction with source="agent" (§1.3's audit trail for agent
-    HTTP calls). GET and POST only — still no PUT/DELETE/PATCH in Phase 2;
-    write-method probing is Business Logic (Phase 3) territory.
+    HTTP calls). GET/POST plus generic request() for PUT/PATCH/DELETE
+    (Phase 3's Business Logic agent needs those for workflow-order and
+    price/quantity-tampering rules — Phase 1/2 agents only ever needed
+    GET/POST, so those stay as the named convenience methods).
     """
 
     def __init__(
@@ -100,6 +102,19 @@ class ScopedHttpClient:
         session: AuthenticatedSession | None = None,
     ) -> httpx.Response:
         return await self._request("POST", url, body=body, content_type=content_type, session=session)
+
+    async def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        body: str | None = None,
+        content_type: str | None = None,
+        session: AuthenticatedSession | None = None,
+    ) -> httpx.Response:
+        """Generic escape hatch for PUT/PATCH/DELETE (or anything else) —
+        get()/post() are just named convenience wrappers around this."""
+        return await self._request(method, url, body=body, content_type=content_type, session=session)
 
     async def _request(
         self,

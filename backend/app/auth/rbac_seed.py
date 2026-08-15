@@ -13,6 +13,7 @@ RESOURCES = (
     "traffic",
     "scan",
     "review_candidate",
+    "business_rule",
 )
 ACTIONS = ("create", "read", "update", "delete")
 
@@ -28,17 +29,28 @@ def baseline_grants() -> list[tuple[str, str, str]]:
 
     # project_lead: full CRUD on engagement resources; read-only on the org itself.
     grants.append(("project_lead", "organization", "read"))
-    for resource in ("project", "version", "target", "credential", "traffic", "scan", "review_candidate"):
+    for resource in (
+        "project",
+        "version",
+        "target",
+        "credential",
+        "traffic",
+        "scan",
+        "review_candidate",
+        "business_rule",
+    ):
         for action in ACTIONS:
             grants.append(("project_lead", resource, action))
 
-    # analyst: read everywhere, plus create on traffic/scan (runs imports/scans)
-    # and update on review_candidate (promotes/dismisses candidates).
+    # analyst: read everywhere, plus create on traffic/scan/business_rule
+    # (runs imports/scans, defines business rules) and update on
+    # review_candidate (promotes/dismisses candidates).
     for resource in RESOURCES:
         grants.append(("analyst", resource, "read"))
     grants.append(("analyst", "traffic", "create"))
     grants.append(("analyst", "scan", "create"))
     grants.append(("analyst", "review_candidate", "update"))
+    grants.append(("analyst", "business_rule", "create"))
 
     # viewer: read-only everywhere.
     for resource in RESOURCES:
@@ -62,3 +74,9 @@ def review_candidate_resource_grants() -> list[tuple[str, str, str]]:
     """Just the "review_candidate" resource rows — used by the incremental
     migration 0003, same reasoning as scan_resource_grants() above."""
     return _grants_for_resource("review_candidate")
+
+
+def business_rule_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "business_rule" resource rows — used by the incremental
+    migration 0004, same reasoning as scan_resource_grants() above."""
+    return _grants_for_resource("business_rule")

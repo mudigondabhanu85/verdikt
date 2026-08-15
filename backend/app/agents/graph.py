@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.access_control import AccessControlAgent
 from app.agents.auth_agent import AuthAgent
+from app.agents.business_logic import BusinessLogicAgent
 from app.agents.header_config import HeaderConfigAgent
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
 from app.agents.injection import InjectionAgent
@@ -15,6 +16,7 @@ from app.agents.login import SessionManager
 from app.agents.recon import DiscoveredParameter, FormInfo, ReconAgent
 from app.agents.xss import XSSAgent
 from app.ai.budget import BudgetGuard
+from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
 from app.models.finding import Finding
 from app.models.review_candidate import ReviewCandidate
@@ -38,20 +40,21 @@ def build_graph(
     scan_run_id: uuid.UUID,
     targets: list[Target],
     credential_sets: list[CredentialSet],
+    business_rules: list[BusinessRule],
     budget_guard: BudgetGuard,
     ai_model: str,
 ):
-    """Wires the Phase-2 agent graph: recon fans out to [header_config,
-    login] in parallel; once login has sessions established, it fans out
-    to [injection, xss, auth, access_control] in parallel too (§10.2's
-    "single biggest lever" — real parallel fan-out, not Phase 1's
+    """Wires the agent graph: recon fans out to [header_config, login] in
+    parallel; once login has sessions established, it fans out to
+    [injection, xss, auth, access_control, business_logic] in parallel too
+    (§10.2's "single biggest lever" — real parallel fan-out, not Phase 1's
     sequential loop). header_config only depends on recon's endpoint
     list, so it runs fully concurrently with the whole second wave, not
     just the first.
 
     Each node still creates/updates its own AgentJob row (recon/
-    header_config/login/injection/xss/auth/access_control) — orchestration
-    engine changed, the audit trail shape didn't.
+    header_config/login/injection/xss/auth/access_control/business_logic)
+    — orchestration engine changed, the audit trail shape didn't.
     """
 
     credential_labels = {c.id: c.label for c in credential_sets}
@@ -206,6 +209,32 @@ def build_graph(
         )
         return {"findings": findings}
 
+    async def business_logic_node(state: ScanState) -> dict:
+        job = await _start_job("business_logic")
+        agent = BusinessLogicAgent(
+            client,
+            scan_run_id=scan_run_id,
+            agent_job_id=job.id,
+            db_session=session,
+            budget_guard=budget_guard,
+            ai_model=ai_model,
+            sessions=state.get("sessions", {}),
+            credential_labels=credential_labels,
+        )
+        try:
+            findings = await agent.run(business_rules)
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        status = "skipped" if agent.budget_exceeded else "completed"
+        await _finish_job(
+            job,
+            status=status,
+            stats={"findings_confirmed": len(findings)},
+            error="budget exceeded" if agent.budget_exceeded else None,
+        )
+        return {"findings": findings}
+
     graph = StateGraph(ScanState)
     graph.add_node("recon", recon_node)
     graph.add_node("header_config", header_config_node)
@@ -214,6 +243,7 @@ def build_graph(
     graph.add_node("xss", xss_node)
     graph.add_node("auth", auth_node)
     graph.add_node("access_control", access_control_node)
+    graph.add_node("business_logic", business_logic_node)
 
     graph.set_entry_point("recon")
     graph.add_edge("recon", "header_config")
@@ -222,10 +252,12 @@ def build_graph(
     graph.add_edge("login", "xss")
     graph.add_edge("login", "auth")
     graph.add_edge("login", "access_control")
+    graph.add_edge("login", "business_logic")
     graph.add_edge("header_config", END)
     graph.add_edge("injection", END)
     graph.add_edge("xss", END)
     graph.add_edge("auth", END)
     graph.add_edge("access_control", END)
+    graph.add_edge("business_logic", END)
 
     return graph.compile()

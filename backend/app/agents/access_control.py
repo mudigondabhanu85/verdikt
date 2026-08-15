@@ -1,12 +1,11 @@
-import re
 import uuid
 from dataclasses import dataclass
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 from app.agents.evidence import format_request_raw, format_response_raw
 from app.agents.http_client import ScopedHttpClient, ScopeViolationError
+from app.agents.idor import find_numeric_id_segment, nearby_ids, substitute_path_segment
 from app.agents.matrix import Identity, build_identities
 from app.ai.budget import BudgetExceededError, BudgetGuard
 from app.ai.prompts.loader import render_prompt
@@ -14,7 +13,6 @@ from app.ai.verdict import parse_verdict
 from app.models.finding import Evidence, Finding
 
 _TRUNCATE = 2000
-_NUMERIC_ID_RE = re.compile(r"^\d+$")
 
 _ACCESS_CONTROL_METADATA = {
     "vertical": {
@@ -69,26 +67,6 @@ class AccessControlCandidate:
     deterministic_signal: str
 
 
-def _find_numeric_id_segment(url: str) -> tuple[int, str] | None:
-    segments = urlsplit(url).path.split("/")
-    for index in range(len(segments) - 1, -1, -1):
-        if _NUMERIC_ID_RE.match(segments[index]):
-            return index, segments[index]
-    return None
-
-
-def _substitute_path_segment(url: str, index: int, new_value: str) -> str:
-    parsed = urlsplit(url)
-    segments = parsed.path.split("/")
-    segments[index] = new_value
-    return urlunsplit((parsed.scheme, parsed.netloc, "/".join(segments), parsed.query, ""))
-
-
-def _nearby_ids(value: str) -> list[str]:
-    n = int(value)
-    return [str(candidate) for candidate in (n - 1, n + 1) if candidate >= 0 and str(candidate) != value]
-
-
 def _similar_length(a: int, b: int, *, tolerance: float = 0.1, floor: int = 20) -> bool:
     return abs(a - b) <= max(floor, tolerance * max(a, b, 1))
 
@@ -136,7 +114,7 @@ async def _detect_vertical(
 async def _detect_horizontal(
     client: ScopedHttpClient, endpoint: str, identities: list[Identity]
 ) -> AccessControlCandidate | None:
-    id_info = _find_numeric_id_segment(endpoint)
+    id_info = find_numeric_id_segment(endpoint)
     if id_info is None:
         return None
     index, value = id_info
@@ -149,8 +127,8 @@ async def _detect_horizontal(
             continue
         if original_resp.status_code >= 300:
             continue
-        for candidate_id in _nearby_ids(value):
-            alt_url = _substitute_path_segment(endpoint, index, candidate_id)
+        for candidate_id in nearby_ids(value):
+            alt_url = substitute_path_segment(endpoint, index, candidate_id)
             try:
                 alt_resp = await client.get(alt_url, session=identity.session)
             except (ScopeViolationError, httpx.HTTPError):
