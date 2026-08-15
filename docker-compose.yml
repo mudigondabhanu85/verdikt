@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: verdikt
+      POSTGRES_PASSWORD: verdikt
+      POSTGRES_DB: verdikt
+    ports:
+      - "5432:5432"
+    volumes:
+      - verdikt_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U verdikt"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://verdikt:verdikt@db:5432/verdikt
+      JWT_SECRET: dev-only-change-me-to-something-random-and-32-bytes-plus
+      VAULT_MASTER_KEY: dev-only-insecure-fernet-key-000000000000=
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+volumes:
+  verdikt_pgdata:

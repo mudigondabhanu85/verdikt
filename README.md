@@ -1,0 +1,68 @@
+# Verdikt
+
+AI multi-agent web application & API security testing platform. See the build prompt
+for full product scope; this repo currently implements **Phase 0 — Foundations**:
+data model, `DatabaseAdapter`, auth/RBAC skeleton, project/version CRUD, credential
+vault, canonical `HttpInteraction` schema, and a HAR importer.
+
+## Stack
+
+- Backend: Python 3.11+, FastAPI, SQLAlchemy 2.0, Alembic, Postgres (default) via `uv`.
+- Local dev DB: Docker Compose Postgres.
+
+## Local development
+
+```bash
+cp .env.example backend/.env   # adjust as needed
+docker compose up -d db
+cd backend
+uv sync
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload
+```
+
+API docs at http://localhost:8000/docs once running.
+
+## Tests
+
+The DB layer is intentionally dialect-agnostic (SQLAlchemy ORM only, no Postgres-only
+column types), so the test suite runs against an ephemeral SQLite database with no
+external services required:
+
+```bash
+cd backend
+uv sync
+uv run pytest
+```
+
+Postgres via Docker Compose remains the documented default for real dev/staging/prod
+use (see `docker-compose.yml`); the migrations in `alembic/` target Postgres.
+
+## Repo layout
+
+```
+backend/
+  app/
+    db/          DatabaseAdapter ABC + Postgres/SQLAlchemy implementation
+    storage/     ObjectStorageAdapter ABC + local-disk implementation
+    models/      SQLAlchemy ORM models (Organization -> Project -> Version -> ...)
+    schemas/     Pydantic API contracts, incl. the canonical HttpInteraction schema
+    auth/        Password hashing, JWT, RBAC permission-matrix enforcement
+    vault/       KMSAdapter ABC + credential envelope encryption
+    importers/   TrafficImporter ABC + HarImporter
+    api/         FastAPI routes
+  alembic/       Migrations (schema + seeded role_permissions matrix)
+  tests/         pytest suite
+```
+
+## Security notes (Phase 0 scope)
+
+- Every `Version` (engagement) carries `ScopeEntry` rows (the technical allow-list
+  future agents must respect) and requires at least one `AuthorizationRecord` before
+  it can be marked authorized — see §1 of the build prompt.
+- Credential secrets are envelope-encrypted via `KMSAdapter` before hitting the
+  database and are only ever returned to API clients as a masked reference.
+  `LocalKMSAdapter` (Fernet, keyed by `VAULT_MASTER_KEY`) is dev-only — production
+  must implement a real KMS-backed adapter.
+- RBAC is a real `role_permissions` DB table (org_admin / project_lead / analyst /
+  viewer), not hardcoded role checks, so new roles/permissions are data, not code.
