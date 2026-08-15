@@ -6,6 +6,7 @@ from app.models.audit import AuditLogEntry
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
 from app.models.finding import Evidence, Finding
+from app.models.login_macro import LoginMacro
 from app.models.organization import Organization, User
 from app.models.project import AuthorizationRecord, Project, ScopeEntry, Version
 from app.models.rbac import RolePermission
@@ -20,6 +21,7 @@ __all__ = [
     "CredentialSet",
     "Evidence",
     "Finding",
+    "LoginMacro",
     "Organization",
     "User",
     "AuthorizationRecord",

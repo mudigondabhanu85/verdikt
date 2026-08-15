@@ -52,3 +52,16 @@ class TrafficInteractionOut(BaseModel):
 class TrafficImportResult(BaseModel):
     imported_count: int
     interaction_ids: list[uuid.UUID]
+
+
+class ManualTrafficCreate(BaseModel):
+    """Body for POST /versions/{id}/traffic/manual — a single HTTP
+    exchange submitted directly (e.g. by the Montoya Burp extension's
+    "Send to Verdikt" context-menu action, §4), rather than a whole file.
+    source is always forced to "manual" server-side, not caller-supplied.
+    """
+
+    request: HttpRequest
+    response: HttpResponse
+    credential_set_id: uuid.UUID | None = None
+    timestamp: datetime | None = None

@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from app.api.routes import (
     auth,
+    burp,
     business_rules,
     credentials,
     organizations,
@@ -25,6 +26,7 @@ app.include_router(traffic_import.router)
 app.include_router(scans.router)
 app.include_router(review_candidates.router)
 app.include_router(business_rules.router)
+app.include_router(burp.router)
 
 
 @app.get("/health")

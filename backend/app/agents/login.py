@@ -2,10 +2,14 @@ import json
 from urllib.parse import urlencode
 
 import httpx
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
+from app.agents.macro import MacroPlayer, MacroStep
 from app.agents.recon import FormInfo
 from app.models.credential import CredentialSet
+from app.models.login_macro import LoginMacro
 from app.vault.credential_vault import decrypt_credential
 
 _DEFAULT_JSON_BODY_TEMPLATE = '{"username": "{username}", "password": "{password}"}'
@@ -78,15 +82,21 @@ def _bearer_token_from_response(response: httpx.Response, token_path: str | None
 
 
 class SessionManager:
-    """Phase 2's lightweight precursor to the Phase 4 Playwright macro
-    recorder (§4/§5). Tries an explicit CredentialSet login config first
-    (needed for JSON/REST SPA logins auto-discovery can't find), then
-    falls back to auto-discovering a classic server-rendered <form> with
-    a password field from recon'd pages.
+    """Tries three session-establishment strategies in order (§4/§5):
+    1. Explicit CredentialSet login config (needed for JSON/REST SPA
+       logins auto-discovery can't find).
+    2. Auto-discovering a classic server-rendered <form> with a password
+       field from recon'd pages.
+    3. Replaying a recorded Playwright login macro (app.agents.macro) —
+       covers logins that are neither a plain JSON endpoint nor a simple
+       <form> (client-side validation, multi-step flows, manual-OTP
+       flows recorded once by an analyst). Only tried when a db_session
+       is supplied, since it needs to look up a LoginMacro row.
     """
 
-    def __init__(self, client: ScopedHttpClient):
+    def __init__(self, client: ScopedHttpClient, db_session: AsyncSession | None = None):
         self._client = client
+        self._db_session = db_session
 
     async def login(
         self, credential_set: CredentialSet, forms: list[FormInfo]
@@ -98,9 +108,38 @@ class SessionManager:
 
         form = _find_login_form(forms)
         if form is not None:
-            return await self._login_via_form(credential_set, form, username, secret)
+            session = await self._login_via_form(credential_set, form, username, secret)
+            if session is not None:
+                return session
+
+        if self._db_session is not None:
+            return await self._login_via_macro(credential_set, username, secret)
 
         return None
+
+    async def _login_via_macro(
+        self, credential_set: CredentialSet, username: str, secret: str
+    ) -> AuthenticatedSession | None:
+        assert self._db_session is not None
+        result = await self._db_session.execute(
+            select(LoginMacro)
+            .where(LoginMacro.credential_set_id == credential_set.id)
+            .order_by(LoginMacro.created_at.desc())
+            .limit(1)
+        )
+        macro = result.scalar_one_or_none()
+        if macro is None:
+            return None
+
+        steps = [MacroStep.from_dict(raw) for raw in macro.steps]
+        player = MacroPlayer()
+        return await player.replay(
+            steps,
+            credential_set_id=credential_set.id,
+            username=username,
+            password=secret,
+            headless=True,
+        )
 
     async def _login_explicit(
         self, credential_set: CredentialSet, username: str, secret: str

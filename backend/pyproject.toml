@@ -22,6 +22,8 @@ dependencies = [
     "anthropic>=0.39.0",
     "openai>=1.55.0",
     "langgraph>=0.2.60",
+    "playwright>=1.48.0",
+    "zstandard>=0.23.0",
 ]
 
 [dependency-groups]

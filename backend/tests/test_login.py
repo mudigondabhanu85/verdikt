@@ -4,8 +4,10 @@ import httpx
 
 from app.agents.http_client import ScopedHttpClient
 from app.agents.login import SessionManager
+from app.agents.macro import MacroRecorder
 from app.agents.recon import FormField, FormInfo
 from app.models.credential import CredentialSet
+from app.models.login_macro import LoginMacro
 from app.models.project import ScopeEntry
 from app.vault.credential_vault import encrypt_credential
 from tests.conftest import session_scope
@@ -124,6 +126,85 @@ async def test_form_auto_discovery_login_extracts_cookie(db_adapter):
         assert auth_session is not None
         assert auth_session.cookies == {"sid": "abc123"}
         assert auth_session.bearer_token is None
+
+        await client.aclose()
+
+
+async def _drive_fixture_login(page, *, username="whatever-typed", password="whatever-typed"):
+    await page.fill("#username", username)
+    await page.fill("#password", password)
+    await page.click("#submit-btn")
+    await page.wait_for_load_state("networkidle")
+
+
+async def test_macro_replay_fallback_used_when_no_config_or_form(db_adapter, fixture_login_server):
+    host, port = fixture_login_server
+    start_url = f"http://{host}:{port}/"
+
+    recorder = MacroRecorder()
+    steps = await recorder.record(start_url, headless=True, drive=_drive_fixture_login)
+
+    credential = _credential_set(username="expected_user", secret="expected_pass")
+
+    async with session_scope(db_adapter) as session:
+        session.add(
+            LoginMacro(
+                version_id=credential.version_id,
+                credential_set_id=credential.id,
+                steps=[s.to_dict() for s in steps],
+            )
+        )
+        await session.commit()
+
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=443, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+
+        # No login_endpoint on this credential and no forms available —
+        # explicit config and form auto-discovery both decline, so only
+        # the macro-replay fallback can produce a session.
+        manager = SessionManager(client, db_session=session)
+        auth_session = await manager.login(credential, forms=[])
+
+        assert auth_session is not None
+        assert auth_session.credential_set_id == credential.id
+        assert auth_session.cookies == {"session": "abc123-real-session"}
+
+        await client.aclose()
+
+
+async def test_macro_replay_fallback_not_tried_without_db_session(db_adapter, fixture_login_server):
+    host, port = fixture_login_server
+    start_url = f"http://{host}:{port}/"
+
+    recorder = MacroRecorder()
+    steps = await recorder.record(start_url, headless=True, drive=_drive_fixture_login)
+
+    credential = _credential_set(username="expected_user", secret="expected_pass")
+
+    async with session_scope(db_adapter) as session:
+        session.add(
+            LoginMacro(
+                version_id=credential.version_id,
+                credential_set_id=credential.id,
+                steps=[s.to_dict() for s in steps],
+            )
+        )
+        await session.commit()
+
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=443, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+
+        manager = SessionManager(client)  # no db_session -> macro fallback skipped
+        auth_session = await manager.login(credential, forms=[])
+        assert auth_session is None
 
         await client.aclose()
 

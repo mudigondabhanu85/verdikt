@@ -110,7 +110,7 @@ def build_graph(
 
     async def login_node(state: ScanState) -> dict:
         job = await _start_job("login")
-        manager = SessionManager(client)
+        manager = SessionManager(client, db_session=session)
         forms = state.get("discovered_forms", [])
         sessions: dict[uuid.UUID, AuthenticatedSession] = {}
         try:

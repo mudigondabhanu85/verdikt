@@ -1,11 +1,15 @@
 import os
 import tempfile
+import threading
 import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs
 
 os.environ.setdefault("VAULT_MASTER_KEY", "test-only-vault-key")
 os.environ.setdefault("JWT_SECRET", "test-only-jwt-secret-at-least-32-bytes-long")
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
@@ -88,6 +92,73 @@ async def create_user_with_role(db_adapter: PostgresAdapter, *, org_id, role: st
 
     token = create_access_token(user_id)
     return {"token": token, "headers": {"Authorization": f"Bearer {token}"}, "user_id": user_id}
+
+
+_LOGIN_FIXTURE_PAGE = b"""<html><body>
+<form method="POST" action="/login">
+  <input type="text" name="username" id="username">
+  <input type="password" name="password" id="password">
+  <button type="submit" id="submit-btn">Log in</button>
+</form>
+</body></html>"""
+
+
+class _LoginFixtureHandler(BaseHTTPRequestHandler):
+    """A tiny real HTTP server serving a classic server-rendered login
+    form (Playwright needs a real URL to navigate to — it can't drive
+    httpx.MockTransport). Accepts expected_user/expected_pass and sets a
+    session cookie on success, used by the Phase 4 macro recorder/player
+    tests to prove record -> store -> replay end-to-end against a real
+    browser and a real server round-trip."""
+
+    def do_GET(self):  # noqa: N802
+        if self.path == "/":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(_LOGIN_FIXTURE_PAGE)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):  # noqa: N802
+        if self.path != "/login":
+            self.send_response(404)
+            self.end_headers()
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode()
+        params = parse_qs(body)
+        username = params.get("username", [""])[0]
+        password = params.get("password", [""])[0]
+
+        if username == "expected_user" and password == "expected_pass":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Set-Cookie", "session=abc123-real-session; Path=/")
+            self.end_headers()
+            self.wfile.write(b"<html><body>Welcome!</body></html>")
+        else:
+            self.send_response(401)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<html><body>Invalid credentials</body></html>")
+
+    def log_message(self, format, *args):  # noqa: A002
+        pass
+
+
+@pytest.fixture
+def fixture_login_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _LoginFixtureHandler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
 
 
 async def create_project_and_version(client: AsyncClient, headers: dict, *, project_name="Test Project", version_name="v1"):

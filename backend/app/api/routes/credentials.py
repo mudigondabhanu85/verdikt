@@ -4,15 +4,27 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.macro import MacroRecorder
 from app.api.deps import get_version_or_404, write_audit_log
 from app.auth.rbac import require_permission
 from app.db.session import get_db_session
 from app.models.credential import CredentialSet
+from app.models.login_macro import LoginMacro
 from app.models.organization import User
 from app.schemas.credential import CredentialSetCreate, CredentialSetOut
+from app.schemas.login_macro import LoginMacroOut, RecordMacroRequest
 from app.vault.credential_vault import encrypt_credential, mask_reference
 
 router = APIRouter(prefix="/versions/{version_id}/credentials", tags=["credentials"])
+
+
+async def _get_credential_or_404(
+    session: AsyncSession, version_id: uuid.UUID, credential_id: uuid.UUID
+) -> CredentialSet:
+    credential = await session.get(CredentialSet, credential_id)
+    if credential is None or credential.version_id != version_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Credential set not found")
+    return credential
 
 
 @router.post("", response_model=CredentialSetOut, status_code=201)
@@ -71,9 +83,7 @@ async def delete_credential_set(
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     await get_version_or_404(session, version_id, user.org_id)
-    credential = await session.get(CredentialSet, credential_id)
-    if credential is None or credential.version_id != version_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Credential set not found")
+    credential = await _get_credential_or_404(session, version_id, credential_id)
     await write_audit_log(
         session,
         user=user,
@@ -84,3 +94,53 @@ async def delete_credential_set(
     )
     await session.delete(credential)
     await session.commit()
+
+
+@router.post("/{credential_id}/record-macro", response_model=LoginMacroOut, status_code=201)
+async def record_login_macro(
+    version_id: uuid.UUID,
+    credential_id: uuid.UUID,
+    payload: RecordMacroRequest,
+    user: User = Depends(require_permission("credential", "update")),
+    session: AsyncSession = Depends(get_db_session),
+) -> LoginMacroOut:
+    """Launches a local headed browser and blocks until the analyst
+    finishes logging in (including any manual OTP step) and closes it,
+    then stores the recorded action sequence as a LoginMacro tied to this
+    CredentialSet (§4/§5). Deliberately simple/synchronous for this MVP
+    rather than a full async-job+notification flow — only usable when the
+    API server has a local display to open a browser window on, which is
+    fine for the self-hosted single-analyst deployment this targets;
+    a later pass can move this to a background job with a status-poll
+    endpoint for remote/headless deployments.
+    """
+    await get_version_or_404(session, version_id, user.org_id)
+    credential = await _get_credential_or_404(session, version_id, credential_id)
+
+    recorder = MacroRecorder()
+    steps = await recorder.record(payload.start_url, headless=False)
+
+    macro = LoginMacro(
+        version_id=version_id,
+        credential_set_id=credential.id,
+        steps=[step.to_dict() for step in steps],
+    )
+    session.add(macro)
+    await write_audit_log(
+        session,
+        user=user,
+        action="credential.record_macro",
+        resource_type="version",
+        resource_id=version_id,
+        metadata={"credential_id": str(credential.id), "step_count": len(steps)},
+    )
+    await session.commit()
+    await session.refresh(macro)
+
+    return LoginMacroOut(
+        id=macro.id,
+        version_id=macro.version_id,
+        credential_set_id=macro.credential_set_id,
+        step_count=len(macro.steps),
+        created_at=macro.created_at,
+    )

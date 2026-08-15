@@ -1,3 +1,4 @@
+from app.agents.macro import MacroStep
 from tests.conftest import create_project_and_version, register_org_admin
 
 
@@ -50,3 +51,70 @@ async def test_credential_set_never_returns_plaintext_secret(client):
         f"/versions/{version_id}/credentials/{body['id']}", headers=admin["headers"]
     )
     assert deleted.status_code == 204
+
+
+async def test_record_macro_stores_steps_against_credential(client, monkeypatch):
+    """The actual browser recording mechanism (JS injection, event
+    capture, field-role inference) is covered live against a real
+    fixture login page in test_macro_recorder.py and test_login.py —
+    launching a real headed, blocks-until-closed browser here would hang
+    an automated test run. This test instead proves the API route itself
+    (RBAC, 404s, persistence, response shape) by substituting a canned
+    MacroRecorder.record() result, the same test-double pattern used for
+    the AI provider adapters elsewhere in this codebase.
+    """
+    canned_steps = [
+        MacroStep(action="goto", url="https://site.test/login"),
+        MacroStep(action="fill", selector="#username", field_role="username"),
+        MacroStep(action="fill", selector="#password", field_role="password"),
+        MacroStep(action="click", selector="#submit-btn"),
+    ]
+
+    async def _fake_record(self, start_url, *, headless=False, drive=None):
+        assert start_url == "https://site.test/login"
+        return canned_steps
+
+    monkeypatch.setattr("app.api.routes.credentials.MacroRecorder.record", _fake_record)
+
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+
+    credential = await client.post(
+        f"/versions/{version_id}/credentials",
+        json={
+            "label": "Admin",
+            "credential_type": "username_password",
+            "username": "alice",
+            "secret": "hunter2-super-secret",
+        },
+        headers=admin["headers"],
+    )
+    credential_id = credential.json()["id"]
+
+    resp = await client.post(
+        f"/versions/{version_id}/credentials/{credential_id}/record-macro",
+        json={"start_url": "https://site.test/login"},
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["credential_set_id"] == credential_id
+    assert body["version_id"] == version_id
+    assert body["step_count"] == len(canned_steps)
+
+
+async def test_record_macro_404_for_unknown_credential(client, monkeypatch):
+    async def _fake_record(self, start_url, *, headless=False, drive=None):
+        raise AssertionError("should not be called for a 404 credential")
+
+    monkeypatch.setattr("app.api.routes.credentials.MacroRecorder.record", _fake_record)
+
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+
+    resp = await client.post(
+        f"/versions/{version_id}/credentials/00000000-0000-0000-0000-000000000000/record-macro",
+        json={"start_url": "https://site.test/login"},
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 404
