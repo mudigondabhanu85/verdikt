@@ -4,15 +4,19 @@ required for create_all() in tests and for Alembic autogenerate.
 
 from app.models.audit import AuditLogEntry
 from app.models.credential import CredentialSet
+from app.models.finding import Evidence, Finding
 from app.models.organization import Organization, User
 from app.models.project import AuthorizationRecord, Project, ScopeEntry, Version
 from app.models.rbac import RolePermission
+from app.models.scan import AgentJob, ScanRun
 from app.models.target import Target
 from app.models.traffic import TrafficInteraction
 
 __all__ = [
     "AuditLogEntry",
     "CredentialSet",
+    "Evidence",
+    "Finding",
     "Organization",
     "User",
     "AuthorizationRecord",
@@ -20,6 +24,8 @@ __all__ = [
     "ScopeEntry",
     "Version",
     "RolePermission",
+    "AgentJob",
+    "ScanRun",
     "Target",
     "TrafficInteraction",
 ]

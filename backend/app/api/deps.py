@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.audit import AuditLogEntry
 from app.models.organization import User
 from app.models.project import Project, Version
+from app.models.scan import ScanRun
 
 
 async def get_project_or_404(session: AsyncSession, project_id: uuid.UUID, org_id: uuid.UUID) -> Project:
@@ -26,6 +27,19 @@ async def get_version_or_404(session: AsyncSession, version_id: uuid.UUID, org_i
     if version is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Version not found")
     return version
+
+
+async def get_scan_run_or_404(session: AsyncSession, scan_run_id: uuid.UUID, org_id: uuid.UUID) -> ScanRun:
+    result = await session.execute(
+        select(ScanRun)
+        .join(Version, ScanRun.version_id == Version.id)
+        .join(Project, Version.project_id == Project.id)
+        .where(ScanRun.id == scan_run_id, Project.org_id == org_id)
+    )
+    scan_run = result.scalar_one_or_none()
+    if scan_run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Scan run not found")
+    return scan_run
 
 
 async def write_audit_log(

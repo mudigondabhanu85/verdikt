@@ -12,6 +12,7 @@ TRAFFIC_SOURCES = (
     "har",
     "burp_file",
     "zst_traffic",
+    "agent",
     "webinspect_macro",
 )
 

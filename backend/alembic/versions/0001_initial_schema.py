@@ -1,6 +1,6 @@
 """initial schema
 
-Revision ID: e8d35f79c0a0
+Revision ID: 0001_initial_schema
 Revises: 
 Create Date: 2026-08-14 23:46:52.888489
 
@@ -12,8 +12,6 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-from app.auth.rbac_seed import baseline_grants
-
 
 # revision identifiers, used by Alembic.
 revision: str = '0001_initial_schema'
@@ -21,11 +19,42 @@ down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+# Frozen snapshot of the baseline RBAC matrix (§9) as it stood when this
+# migration was written. Deliberately NOT imported from app.auth.rbac_seed:
+# migrations must be self-contained and immutable once shipped — later
+# resources (e.g. "scan", added in 0002) must never retroactively change
+# what a fresh run of THIS migration seeds. app.auth.rbac_seed.baseline_grants()
+# is free to keep evolving; it now represents "current desired state" for
+# tests, not "what 0001 seeds".
+_RESOURCES_AT_0001 = ("organization", "project", "version", "target", "credential", "traffic")
+_ACTIONS = ("create", "read", "update", "delete")
+
+
+def _baseline_grants_at_0001() -> list[tuple[str, str, str]]:
+    grants: list[tuple[str, str, str]] = []
+
+    for resource in _RESOURCES_AT_0001:
+        for action in _ACTIONS:
+            grants.append(("org_admin", resource, action))
+
+    grants.append(("project_lead", "organization", "read"))
+    for resource in ("project", "version", "target", "credential", "traffic"):
+        for action in _ACTIONS:
+            grants.append(("project_lead", resource, action))
+
+    for resource in _RESOURCES_AT_0001:
+        grants.append(("analyst", resource, "read"))
+    grants.append(("analyst", "traffic", "create"))
+
+    for resource in _RESOURCES_AT_0001:
+        grants.append(("viewer", resource, "read"))
+
+    return grants
+
 
 def _seed_role_permissions() -> None:
-    """Seeds the baseline RBAC matrix (§9) from app.auth.rbac_seed — the
-    single source of truth shared with the test fixtures, so migration and
-    tests never drift apart."""
+    """Seeds the baseline RBAC matrix as it existed at 0001 (58 rows) —
+    see _baseline_grants_at_0001 above for why this is a frozen copy."""
     role_permissions = sa.table(
         "role_permissions",
         sa.column("id", sa.Uuid()),
@@ -46,7 +75,7 @@ def _seed_role_permissions() -> None:
             "allowed": True,
             "created_at": now,
         }
-        for role, resource, action in baseline_grants()
+        for role, resource, action in _baseline_grants_at_0001()
     ]
 
     op.bulk_insert(role_permissions, rows)

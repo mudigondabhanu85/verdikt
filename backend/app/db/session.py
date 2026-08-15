@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from functools import lru_cache
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,3 +19,17 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
     adapter = get_adapter()
     async for session in adapter.get_session():
         yield session
+
+
+@asynccontextmanager
+async def session_scope(adapter: DatabaseAdapter) -> AsyncIterator[AsyncSession]:
+    """Opens one session from a DatabaseAdapter outside of FastAPI's
+    request/Depends lifecycle — for background tasks and tests, where
+    there's no request to scope a Depends()-managed session to.
+    """
+    gen = adapter.get_session()
+    session = await gen.__anext__()
+    try:
+        yield session
+    finally:
+        await gen.aclose()

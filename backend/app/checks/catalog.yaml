@@ -1,0 +1,343 @@
+# Phase-1 slice of the §3 coverage taxonomy: header/config/info-disclosure
+# checks. Narrative + severity + taxonomy mapping live here (tunable
+# without a redeploy); the boolean detection logic lives in
+# app/agents/checks.py, keyed by `id`.
+#
+# {url} is substituted with the affected endpoint when a Finding is built.
+
+- id: missing-hsts
+  title: "Missing Strict-Transport-Security Header"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-319"
+  severity: "Low"
+  cvss_vector: "AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+  cvss_score: 3.1
+  portswigger_reference_url: "https://portswigger.net/kb/issues/00000600_strict-transport-security-not-enforced"
+  plain_language_summary: >
+    This site does not tell browsers to always use a secure (HTTPS) connection,
+    which means a user on an untrusted network could be tricked into
+    connecting over plain HTTP and having their traffic intercepted.
+  technical_description: >
+    The response from {url} does not include a Strict-Transport-Security
+    header. Without HSTS, browsers may allow a downgrade to HTTP on
+    subsequent visits, enabling network-level attackers (e.g. on public
+    Wi-Fi) to intercept or manipulate traffic via SSL-stripping techniques.
+  remediation: >
+    Add a Strict-Transport-Security response header, e.g.
+    "Strict-Transport-Security: max-age=63072000; includeSubDomains; preload",
+    on all HTTPS responses.
+  references:
+    - "https://cwe.mitre.org/data/definitions/319.html"
+
+- id: missing-csp
+  title: "Missing Content-Security-Policy Header"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-693"
+  severity: "Low"
+  cvss_vector: "AV:N/AC:H/PR:N/UI:R/S:U/C:N/I:L/A:N"
+  cvss_score: 3.7
+  portswigger_reference_url: "https://portswigger.net/web-security/cross-site-scripting/content-security-policy"
+  plain_language_summary: >
+    This page has no Content-Security-Policy, so if an attacker ever finds a
+    way to inject a script into it, the browser has no extra layer of
+    defense to stop that script from running.
+  technical_description: >
+    The response from {url} does not include a Content-Security-Policy
+    header. CSP is a defense-in-depth control that restricts which scripts,
+    styles, and other resources a page may load, meaningfully reducing the
+    impact of any XSS vulnerability found elsewhere on the site.
+  remediation: >
+    Define and send a Content-Security-Policy header appropriate to the
+    application (at minimum restrict script-src and frame-ancestors), then
+    tighten it iteratively using report-only mode first.
+  references:
+    - "https://cwe.mitre.org/data/definitions/693.html"
+
+- id: missing-x-frame-options
+  title: "Missing Clickjacking Protection (X-Frame-Options / frame-ancestors)"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-1021"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N"
+  cvss_score: 4.3
+  portswigger_reference_url: "https://portswigger.net/web-security/clickjacking"
+  plain_language_summary: >
+    This page can be loaded inside an invisible frame on another site,
+    which could let an attacker trick a logged-in user into clicking
+    something they didn't intend to (clickjacking).
+  technical_description: >
+    The response from {url} has neither an X-Frame-Options header nor a
+    Content-Security-Policy frame-ancestors directive, so the page can be
+    embedded in a third-party iframe and used in a UI-redress
+    (clickjacking) attack against authenticated users.
+  remediation: >
+    Send "X-Frame-Options: DENY" (or SAMEORIGIN if framing is required
+    same-site), or a CSP "frame-ancestors" directive with an equivalent
+    restriction.
+  references:
+    - "https://cwe.mitre.org/data/definitions/1021.html"
+
+- id: missing-x-content-type-options
+  title: "Missing X-Content-Type-Options Header"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-693"
+  severity: "Low"
+  cvss_vector: "AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N"
+  cvss_score: 2.6
+  portswigger_reference_url: "https://portswigger.net/kb/issues/00000700_x-content-type-options-header-missing"
+  plain_language_summary: >
+    This response doesn't stop browsers from "guessing" a file's content
+    type, which in some legacy browsers could be abused to trick users into
+    running attacker-controlled content.
+  technical_description: >
+    The response from {url} does not include
+    "X-Content-Type-Options: nosniff", so MIME type sniffing is not
+    disabled — some browsers may reinterpret a response as a different
+    (e.g. executable) content type than the server intended.
+  remediation: >
+    Add "X-Content-Type-Options: nosniff" to all HTTP responses.
+  references:
+    - "https://cwe.mitre.org/data/definitions/693.html"
+
+- id: missing-referrer-policy
+  title: "Missing Referrer-Policy Header"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-200"
+  severity: "Low"
+  cvss_vector: "AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"
+  cvss_score: 3.1
+  portswigger_reference_url: "https://portswigger.net/kb/issues/00000300_cross-domain-referer-leakage"
+  plain_language_summary: >
+    This page doesn't control what URL information is sent to other sites
+    when a user clicks a link away from it, which can leak sensitive data
+    embedded in the page's own URL (like a session or reset token).
+  technical_description: >
+    The response from {url} does not set a Referrer-Policy header, so the
+    full referring URL (including any query-string secrets) may be sent to
+    third-party sites linked from this page, depending on browser defaults.
+  remediation: >
+    Add "Referrer-Policy: strict-origin-when-cross-origin" (or stricter,
+    e.g. "no-referrer", for highly sensitive pages).
+  references:
+    - "https://cwe.mitre.org/data/definitions/200.html"
+
+- id: missing-permissions-policy
+  title: "Missing Permissions-Policy Header"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-693"
+  severity: "Low"
+  cvss_vector: "AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N"
+  cvss_score: 2.6
+  portswigger_reference_url: "https://portswigger.net/kb/issues/00000900_permissions-policy-header-not-implemented"
+  plain_language_summary: >
+    This page doesn't restrict which browser features (camera, microphone,
+    geolocation, etc.) it or any embedded third-party content is allowed
+    to use.
+  technical_description: >
+    The response from {url} does not include a Permissions-Policy header,
+    so no explicit restriction is placed on powerful browser APIs for this
+    origin or any content it embeds.
+  remediation: >
+    Add a Permissions-Policy header that denies features the application
+    does not use, e.g. "Permissions-Policy: geolocation=(), camera=(),
+    microphone=()".
+  references:
+    - "https://cwe.mitre.org/data/definitions/693.html"
+
+- id: cookie-missing-secure
+  title: "Cookie Set Without Secure Flag"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-614"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+  cvss_score: 5.9
+  portswigger_reference_url: "https://portswigger.net/kb/issues/00000500_cookie-without-secure-flag-set"
+  plain_language_summary: >
+    A cookie from this HTTPS site is missing the "Secure" flag, meaning a
+    browser could still send it over an unencrypted HTTP connection if one
+    is ever attempted, exposing it to network eavesdroppers.
+  technical_description: >
+    A Set-Cookie header from {url} does not include the Secure attribute.
+    On a mixed-content or downgrade scenario, this cookie could be
+    transmitted in plaintext and captured by a network attacker.
+  remediation: >
+    Set the Secure attribute on all cookies issued over HTTPS.
+  references:
+    - "https://cwe.mitre.org/data/definitions/614.html"
+
+- id: cookie-missing-httponly
+  title: "Cookie Set Without HttpOnly Flag"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-1004"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:N"
+  cvss_score: 5.4
+  portswigger_reference_url: "https://portswigger.net/kb/issues/00000400_cookie-without-httponly-flag-set"
+  plain_language_summary: >
+    A cookie from this site can be read by JavaScript running on the page,
+    which means that if an attacker ever manages to inject a script (XSS),
+    they could steal this cookie directly.
+  technical_description: >
+    A Set-Cookie header from {url} does not include the HttpOnly attribute,
+    so client-side script has access to document.cookie for this cookie —
+    removing a key mitigation against session-cookie theft via XSS.
+  remediation: >
+    Set the HttpOnly attribute on session and other sensitive cookies that
+    do not need to be read by client-side JavaScript.
+  references:
+    - "https://cwe.mitre.org/data/definitions/1004.html"
+
+- id: cookie-missing-samesite
+  title: "Cookie Set Without SameSite Attribute"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-1275"
+  severity: "Low"
+  cvss_vector: "AV:N/AC:H/PR:N/UI:R/S:U/C:N/I:L/A:N"
+  cvss_score: 3.1
+  portswigger_reference_url: "https://portswigger.net/web-security/csrf"
+  plain_language_summary: >
+    A cookie from this site does not specify when it should be sent on
+    cross-site requests, which can make cross-site request forgery (CSRF)
+    style attacks easier.
+  technical_description: >
+    A Set-Cookie header from {url} does not include a SameSite attribute.
+    Depending on browser defaults, this cookie may be sent on cross-site
+    requests, weakening one of the layers of defense against CSRF.
+  remediation: >
+    Set "SameSite=Lax" (or "Strict" where appropriate) on cookies, in
+    addition to — not instead of — CSRF tokens for state-changing requests.
+  references:
+    - "https://cwe.mitre.org/data/definitions/1275.html"
+
+- id: server-version-disclosure
+  title: "Server Software Version Disclosure"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-200"
+  severity: "Low"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+  cvss_score: 2.7
+  portswigger_reference_url: "https://portswigger.net/kb/issues/00000300_server-version-string-not-restricted"
+  plain_language_summary: >
+    This response reveals the exact software (and often version) running
+    the server, giving an attacker a head start on finding known
+    vulnerabilities for that specific version.
+  technical_description: >
+    The response from {url} includes a Server and/or X-Powered-By header
+    disclosing implementation details (e.g. "{server_value}"). This
+    information narrows the search space for a targeted attacker looking
+    for version-specific exploits.
+  remediation: >
+    Suppress or genericize the Server/X-Powered-By headers at the
+    web-server or reverse-proxy layer.
+  references:
+    - "https://cwe.mitre.org/data/definitions/200.html"
+
+- id: verbose-error-stack-trace
+  title: "Verbose Error Message / Stack Trace Disclosure"
+  owasp_2025_category: "A10 Mishandling of Exceptional Conditions"
+  cwe_id: "CWE-209"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+  cvss_score: 5.3
+  portswigger_reference_url: "https://portswigger.net/kb/issues/00000600_stack-trace-disclosure"
+  plain_language_summary: >
+    This page shows a detailed technical error message (including
+    internal code paths) instead of a generic error page, which hands an
+    attacker useful information about how the application is built.
+  technical_description: >
+    The response from {url} contains a stack trace or verbose framework
+    error output. This can disclose file paths, library versions, and
+    internal logic that materially assist an attacker in crafting further
+    exploits.
+  remediation: >
+    Disable debug/verbose error output in production; return a generic
+    error page and log full details server-side only.
+  references:
+    - "https://cwe.mitre.org/data/definitions/209.html"
+
+- id: directory-listing-enabled
+  title: "Directory Listing Enabled"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-548"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+  cvss_score: 5.3
+  portswigger_reference_url: "https://portswigger.net/kb/issues/00600100_directory-listing"
+  plain_language_summary: >
+    This URL shows a raw listing of files and folders instead of a normal
+    page, which can expose files that were never meant to be browsable.
+  technical_description: >
+    The response from {url} appears to be a directory listing (e.g. an
+    "Index of /" style page), potentially exposing backup files,
+    configuration files, or other unintended content.
+  remediation: >
+    Disable directory listing/autoindex at the web-server level for all
+    web-accessible directories.
+  references:
+    - "https://cwe.mitre.org/data/definitions/548.html"
+
+- id: plaintext-http
+  title: "Sensitive Endpoint Served Over Plaintext HTTP"
+  owasp_2025_category: "A04 Cryptographic Failures"
+  cwe_id: "CWE-319"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+  cvss_score: 7.4
+  portswigger_reference_url: "https://portswigger.net/kb/issues/00000200_unencrypted-communications"
+  plain_language_summary: >
+    This page is served over plain HTTP instead of HTTPS, so anyone on the
+    same network as a user (e.g. public Wi-Fi) could read or tamper with
+    the traffic.
+  technical_description: >
+    {url} was reached over an unencrypted HTTP connection. All data
+    exchanged, including any credentials or session identifiers, is
+    transmitted in cleartext and can be intercepted or modified in transit.
+  remediation: >
+    Serve all application traffic over HTTPS and redirect HTTP to HTTPS at
+    the edge; combine with HSTS once verified.
+  references:
+    - "https://cwe.mitre.org/data/definitions/319.html"
+
+- id: weak-tls-version
+  title: "Outdated TLS Protocol Version Supported"
+  owasp_2025_category: "A04 Cryptographic Failures"
+  cwe_id: "CWE-326"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
+  cvss_score: 4.8
+  portswigger_reference_url: "https://portswigger.net/kb/issues/00000300_ssl-tls-in-use"
+  plain_language_summary: >
+    This server accepted an outdated, less-secure version of the encryption
+    protocol that protects traffic, which is weaker than modern standards.
+  technical_description: >
+    The TLS handshake to {url} negotiated {tls_version}, which is below the
+    TLS 1.2 baseline generally considered secure. Older protocol versions
+    have known cryptographic weaknesses.
+  remediation: >
+    Disable TLS 1.0/1.1 (and SSLv3) at the server/load-balancer, requiring
+    TLS 1.2 or higher.
+  references:
+    - "https://cwe.mitre.org/data/definitions/326.html"
+
+- id: autocomplete-enabled-password-field
+  title: "Autocomplete Enabled on Password Field"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-522"
+  severity: "Low"
+  cvss_vector: "AV:P/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N"
+  cvss_score: 2.6
+  portswigger_reference_url: "https://portswigger.net/kb/issues/00000700_password-field-with-autocomplete-enabled"
+  plain_language_summary: >
+    A password field on this page allows the browser to remember and
+    autofill the password, which is risky on a shared or public computer.
+  technical_description: >
+    A password `<input>` on {url} does not set autocomplete="off" /
+    "new-password", allowing browsers to cache and autofill the credential
+    — a risk on shared devices or if the browser's saved-password store is
+    compromised.
+  remediation: >
+    Set autocomplete="new-password" (registration/change forms) or a
+    similarly restrictive value on password inputs where caching is
+    undesirable.
+  references:
+    - "https://cwe.mitre.org/data/definitions/522.html"
