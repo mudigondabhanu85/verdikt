@@ -1,0 +1,32 @@
+# Host Header agent's deterministic check catalog (§3). No LLM needed —
+# a single binary check: does the server trust a client-supplied Host
+# header when building absolute URLs in its response?
+
+- id: host-header-injection
+  title: "Host Header Injection"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-346"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
+  cvss_score: 5.4
+  portswigger_reference_url: "https://portswigger.net/web-security/host-header"
+  plain_language_summary: >
+    This application uses the Host header from the incoming request —
+    which an attacker fully controls — to build links and URLs in its own
+    responses, instead of using a fixed, server-configured hostname. An
+    attacker can abuse this to make the application generate URLs (such
+    as password-reset links) that point at an attacker-controlled domain.
+  technical_description: >
+    A request to {url} with the Host header set to an attacker-controlled
+    value ("{forged_host}") caused that value to be reflected back in the
+    response (in the response body and/or a redirect Location header),
+    confirming the server trusts the client-supplied Host header rather
+    than a fixed, server-side configured hostname.
+  remediation: >
+    Never derive absolute URLs from the incoming Host header. Use a
+    fixed, server-side configured hostname (from an environment variable
+    or config file) for generating links, redirects, and any
+    security-sensitive URL, and validate/allow-list the Host header at
+    the edge (load balancer/reverse proxy) if it must be used at all.
+  references:
+    - "https://cwe.mitre.org/data/definitions/346.html"

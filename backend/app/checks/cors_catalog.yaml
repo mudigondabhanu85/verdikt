@@ -1,0 +1,60 @@
+# CORS agent's deterministic check catalog (§3). No LLM needed — both
+# checks are binary response-header inspections after sending a forged
+# Origin header.
+
+- id: cors-reflected-origin-with-credentials
+  title: "CORS Misconfiguration: Arbitrary Origin Allowed With Credentials"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-942"
+  severity: "Critical"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+  cvss_score: 9.1
+  portswigger_reference_url: "https://portswigger.net/web-security/cors"
+  plain_language_summary: >
+    This application reflects whatever Origin an incoming request claims
+    back into its Access-Control-Allow-Origin response header, and also
+    allows credentials (cookies/authorization) on cross-origin requests.
+    A malicious website visited by a logged-in user could silently make
+    authenticated requests to this application and read the responses,
+    exactly as if it were the legitimate site.
+  technical_description: >
+    A request to {url} with the header "Origin: {forged_origin}" received
+    a response with "Access-Control-Allow-Origin: {forged_origin}" (an
+    exact reflection of the attacker-supplied value, not a fixed
+    allow-list) together with "Access-Control-Allow-Credentials: true".
+    Any website can make a credentialed cross-origin request to this
+    endpoint and read the response.
+  remediation: >
+    Validate the Origin header against a strict, server-side allow-list
+    of trusted origins before echoing it back — never reflect an
+    arbitrary Origin verbatim — and only set
+    Access-Control-Allow-Credentials: true for origins on that allow-list.
+  references:
+    - "https://cwe.mitre.org/data/definitions/942.html"
+
+- id: cors-wildcard-origin
+  title: "CORS Wildcard Access-Control-Allow-Origin"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-942"
+  severity: "Low"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+  cvss_score: 5.3
+  portswigger_reference_url: "https://portswigger.net/web-security/cors"
+  plain_language_summary: >
+    This application allows any website on the internet to read
+    responses from this endpoint via a wildcard
+    Access-Control-Allow-Origin header. This is often intentional for
+    genuinely public data, but is worth confirming the endpoint doesn't
+    return anything sensitive.
+  technical_description: >
+    A request to {url} received a response with
+    "Access-Control-Allow-Origin: *", allowing any origin to read the
+    response via a cross-origin request (without credentials, per the
+    CORS spec — but still worth confirming the response body contains
+    nothing sensitive).
+  remediation: >
+    Only use a wildcard Access-Control-Allow-Origin for endpoints that
+    are genuinely intended to be public; use a specific allow-list for
+    anything returning non-public data.
+  references:
+    - "https://cwe.mitre.org/data/definitions/942.html"

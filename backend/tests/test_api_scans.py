@@ -334,12 +334,16 @@ async def test_full_scan_flow_completes_and_produces_report(client, fixture_site
     assert {job["agent_type"] for job in body["agent_jobs"]} == {
         "recon",
         "header_config",
+        "host_header",
+        "cors",
+        "clickjacking",
         "login",
         "injection",
         "xss",
         "auth",
         "access_control",
         "business_logic",
+        "csrf",
     }
     assert all(job["status"] == "completed" for job in body["agent_jobs"]), body["agent_jobs"]
     assert sum(body["finding_counts_by_severity"].values()) > 0

@@ -90,8 +90,14 @@ class ScopedHttpClient:
         # BudgetGuard) should pass the same Lock in explicitly.
         self.session_lock = session_lock or asyncio.Lock()
 
-    async def get(self, url: str, *, session: AuthenticatedSession | None = None) -> httpx.Response:
-        return await self._request("GET", url, session=session)
+    async def get(
+        self,
+        url: str,
+        *,
+        session: AuthenticatedSession | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        return await self._request("GET", url, session=session, extra_headers=extra_headers)
 
     async def post(
         self,
@@ -100,8 +106,11 @@ class ScopedHttpClient:
         body: str,
         content_type: str = "application/json",
         session: AuthenticatedSession | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> httpx.Response:
-        return await self._request("POST", url, body=body, content_type=content_type, session=session)
+        return await self._request(
+            "POST", url, body=body, content_type=content_type, session=session, extra_headers=extra_headers
+        )
 
     async def request(
         self,
@@ -111,10 +120,13 @@ class ScopedHttpClient:
         body: str | None = None,
         content_type: str | None = None,
         session: AuthenticatedSession | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         """Generic escape hatch for PUT/PATCH/DELETE (or anything else) —
         get()/post() are just named convenience wrappers around this."""
-        return await self._request(method, url, body=body, content_type=content_type, session=session)
+        return await self._request(
+            method, url, body=body, content_type=content_type, session=session, extra_headers=extra_headers
+        )
 
     async def _request(
         self,
@@ -124,6 +136,7 @@ class ScopedHttpClient:
         body: str | None = None,
         content_type: str | None = None,
         session: AuthenticatedSession | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         if not is_in_scope(url, self._scope_entries):
             raise ScopeViolationError(f"URL outside Version scope: {url}")
@@ -141,6 +154,12 @@ class ScopedHttpClient:
                 headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in session.cookies.items())
         if content_type:
             headers["Content-Type"] = content_type
+        if extra_headers:
+            # Escape hatch for checks that need to control a specific
+            # header directly (e.g. the Host Header Injection check
+            # overriding Host itself) — merged in last so a caller can
+            # deliberately override Content-Type/anything else above too.
+            headers.update(extra_headers)
 
         start = time.monotonic()
         response = await self._client.request(method, url, headers=headers, content=body)

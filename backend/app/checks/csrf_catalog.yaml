@@ -1,0 +1,34 @@
+# CSRF agent's deterministic check catalog (§3). No LLM needed — a
+# single differential check: does a state-changing form succeed
+# identically with a forged, attacker-controlled Origin as it does with
+# the application's own origin, with no CSRF token present either way?
+
+- id: csrf-missing-protection
+  title: "Cross-Site Request Forgery (CSRF)"
+  owasp_2025_category: "A01 Broken Access Control"
+  cwe_id: "CWE-352"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:N"
+  cvss_score: 8.1
+  portswigger_reference_url: "https://portswigger.net/web-security/csrf"
+  plain_language_summary: >
+    This form performs a state-changing action using only the user's
+    session cookie for authentication, without a CSRF token and without
+    validating where the request came from. An attacker can craft a
+    malicious web page that, when visited by a logged-in user, silently
+    submits this form on the victim's behalf.
+  technical_description: >
+    A POST request to {url} succeeded identically whether it was sent
+    with an Origin/Referer matching the application's own origin or with
+    a forged, attacker-controlled Origin ({forged_origin}) — and the form
+    contains no CSRF token field. The server does not validate the
+    request's origin or require a per-session anti-CSRF token before
+    performing this state change.
+  remediation: >
+    Include a unique, unpredictable anti-CSRF token in this form, tied to
+    the user's session, and reject submissions where it's missing or
+    incorrect. As defense in depth, also validate the Origin/Referer
+    header and set the session cookie's SameSite attribute to Lax or
+    Strict.
+  references:
+    - "https://cwe.mitre.org/data/definitions/352.html"

@@ -72,6 +72,59 @@
   references:
     - "https://cwe.mitre.org/data/definitions/613.html"
 
+- id: jwt-alg-confusion
+  title: "JWT Algorithm Confusion (RS256 to HS256) Accepted"
+  owasp_2025_category: "A07 Authentication Failures"
+  cwe_id: "CWE-347"
+  severity: "Critical"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+  cvss_score: 9.8
+  portswigger_reference_url: "https://portswigger.net/web-security/jwt/algorithm-confusion"
+  plain_language_summary: >
+    This application accepted a forged session token that was re-signed
+    using its own public key as if it were a shared secret, instead of
+    properly verifying it with that public key. This lets an attacker
+    forge a valid-looking session token for any user, including an
+    administrator, without knowing any real secret.
+  technical_description: >
+    A JWT originally signed with an asymmetric algorithm (RS256) was
+    re-signed using HS256 with the server's own published RSA public key
+    (from {jwks_url}) used as the HMAC secret, then submitted to {url} —
+    and was accepted as valid. This indicates the server's JWT
+    verification logic trusts the algorithm specified in the token's own
+    header rather than enforcing the expected algorithm.
+  remediation: >
+    Explicitly pin the expected signing algorithm when verifying JWTs
+    (e.g. algorithms=["RS256"], never derived from the token itself), and
+    never allow the same key material to be used for both asymmetric
+    signing and HMAC verification.
+  references:
+    - "https://cwe.mitre.org/data/definitions/347.html"
+
+- id: jwt-weak-signing-secret
+  title: "JWT Signed With a Weak, Guessable Secret"
+  owasp_2025_category: "A07 Authentication Failures"
+  cwe_id: "CWE-330"
+  severity: "Critical"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+  cvss_score: 9.8
+  portswigger_reference_url: "https://portswigger.net/web-security/jwt/jwt-attacks#brute-forcing-secret-keys"
+  plain_language_summary: >
+    The secret key used to sign this application's session tokens is a
+    common, guessable value. Anyone who can guess it can forge a valid
+    session token for any user, including an administrator.
+  technical_description: >
+    The JWT issued at {url} was successfully verified using a well-known
+    weak secret ({matched_secret_hint}) from a small standard wordlist,
+    confirming the server's actual HMAC signing secret is guessable.
+  remediation: >
+    Generate the JWT signing secret using a cryptographically secure
+    random generator with at least 256 bits of entropy, store it outside
+    source control, and rotate it immediately since it may already be
+    compromised.
+  references:
+    - "https://cwe.mitre.org/data/definitions/330.html"
+
 - id: weak-session-token-entropy
   title: "Session Token Has Low Entropy"
   owasp_2025_category: "A07 Authentication Failures"

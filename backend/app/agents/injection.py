@@ -114,6 +114,49 @@ _INJECTION_METADATA = {
             "in output, treat it strictly as data, not template source."
         ),
     },
+    "path-traversal": {
+        "title": "Path Traversal",
+        "owasp_2025_category": "A01 Broken Access Control",
+        "cwe_id": "CWE-22",
+        "severity": "High",
+        "cvss_vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+        "cvss_score": 7.5,
+        "portswigger_reference_url": "https://portswigger.net/web-security/file-path-traversal",
+        "plain_language_summary": (
+            "This part of the application accepts attacker-controlled input "
+            "that is used to build a file path without properly sanitizing it, "
+            "which could let an attacker read arbitrary files on the server "
+            "(such as system configuration or credential files) outside the "
+            "intended directory."
+        ),
+        "remediation": (
+            "Never build file paths directly from user input. Canonicalize the "
+            "resolved path and verify it stays within an intended base "
+            "directory (strict allow-list), or reference files indirectly "
+            "(e.g. a database-backed file ID) instead of a raw path/filename."
+        ),
+    },
+    "nosql-injection": {
+        "title": "NoSQL Injection ($where / JavaScript context)",
+        "owasp_2025_category": "A05 Injection",
+        "cwe_id": "CWE-943",
+        "severity": "High",
+        "cvss_vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N",
+        "cvss_score": 8.6,
+        "portswigger_reference_url": "https://portswigger.net/web-security/nosql-injection",
+        "plain_language_summary": (
+            "This part of the application responds differently depending on an "
+            "injected true/false NoSQL query condition, indicating attacker "
+            "input reaches a MongoDB-style database query directly and could be "
+            "used to bypass authentication or extract data the user shouldn't "
+            "have access to."
+        ),
+        "remediation": (
+            "Use a query builder / ODM that parameterizes values rather than "
+            "string-concatenating user input into a query or $where clause, "
+            "and reject non-scalar input where a scalar value is expected."
+        ),
+    },
 }
 
 
@@ -233,7 +276,69 @@ async def _probe_ssti(client: ScopedHttpClient, target: ProbeTarget) -> Injectio
     return None
 
 
-_PROBE_FNS: list[ProbeFn] = [_probe_sqli_error, _probe_sqli_boolean, _probe_command_injection, _probe_ssti]
+_PATH_TRAVERSAL_MARKER_RE = re.compile(r"root:.*:0:0:", re.IGNORECASE)
+
+
+async def _probe_path_traversal(client: ScopedHttpClient, target: ProbeTarget) -> InjectionCandidate | None:
+    baseline = await fetch_with_value(client, target, BASELINE_VALUE)
+    for payload in ("../../../../../../../../etc/passwd", "..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"):
+        probe = await fetch_with_value(client, target, payload)
+        if _PATH_TRAVERSAL_MARKER_RE.search(probe.text) and not _PATH_TRAVERSAL_MARKER_RE.search(
+            baseline.text
+        ):
+            return InjectionCandidate(
+                payload_type="path-traversal",
+                target=target,
+                payload=payload,
+                deterministic_signal="The contents of /etc/passwd (a 'root:...:0:0:' entry) appeared "
+                "in the probe response only, consistent with unsanitized path traversal reaching "
+                "the filesystem.",
+                baseline_response=baseline,
+                probe_response=probe,
+                probe_fn=_probe_path_traversal,
+            )
+    return None
+
+
+async def _probe_nosqli(client: ScopedHttpClient, target: ProbeTarget) -> InjectionCandidate | None:
+    """Boolean-differential NoSQL injection via MongoDB's $where JS
+    evaluation context — same length-differential mechanism as
+    _probe_sqli_boolean, just with a payload pair meaningful to a
+    string-concatenated $where/JS query instead of a SQL one.
+    """
+    true_payload = "';return true;var x='"
+    false_payload = "';return false;var x='"
+    true_resp = await fetch_with_value(client, target, true_payload)
+    false_resp = await fetch_with_value(client, target, false_payload)
+    if true_resp.status_code != false_resp.status_code:
+        return None
+    len_true, len_false = len(true_resp.text), len(false_resp.text)
+    if abs(len_true - len_false) > max(20, 0.05 * max(len_true, len_false, 1)):
+        return InjectionCandidate(
+            payload_type="nosql-injection",
+            target=target,
+            payload=true_payload,
+            deterministic_signal=(
+                f"Response length differs meaningfully between a NoSQL $where "
+                f"true-condition payload ({len_true} bytes) and a false-condition payload "
+                f"({len_false} bytes) injected into the same parameter, consistent with "
+                "unsanitized input reaching a MongoDB $where/JS query context."
+            ),
+            baseline_response=false_resp,
+            probe_response=true_resp,
+            probe_fn=_probe_nosqli,
+        )
+    return None
+
+
+_PROBE_FNS: list[ProbeFn] = [
+    _probe_sqli_error,
+    _probe_sqli_boolean,
+    _probe_command_injection,
+    _probe_ssti,
+    _probe_path_traversal,
+    _probe_nosqli,
+]
 
 
 class InjectionAgent:

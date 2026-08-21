@@ -91,18 +91,22 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
         final_state = await graph.ainvoke({})
         await client.aclose()
 
-        # All seven agent nodes ran and each tracked its own AgentJob.
+        # All agent nodes ran and each tracked its own AgentJob.
         jobs_result = await session.execute(select(AgentJob).where(AgentJob.scan_run_id == scan_run.id))
         jobs = list(jobs_result.scalars())
         assert {j.agent_type for j in jobs} == {
             "recon",
             "header_config",
+            "host_header",
+            "cors",
+            "clickjacking",
             "login",
             "injection",
             "xss",
             "auth",
             "access_control",
             "business_logic",
+            "csrf",
         }
         assert all(j.status == "completed" for j in jobs), jobs
 

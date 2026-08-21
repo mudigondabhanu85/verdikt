@@ -1,0 +1,30 @@
+# Clickjacking agent's catalog (§3). Complements (doesn't replace) the
+# header-only "missing-clickjacking-protection" check in catalog.yaml —
+# this is the real browser-confirmed upgrade, see
+# app.agents.clickjacking_proof.
+
+- id: clickjacking-confirmed
+  title: "Clickjacking (Browser-Confirmed Framable Page)"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-1021"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N"
+  cvss_score: 4.3
+  portswigger_reference_url: "https://portswigger.net/web-security/clickjacking"
+  plain_language_summary: >
+    This page can be embedded inside another website's frame, confirmed
+    by actually loading it inside a real browser rather than just
+    checking whether a protective header is present. An attacker could
+    overlay deceptive content on top of this page and trick a user into
+    clicking something without realizing it.
+  technical_description: >
+    {url} was loaded inside a cross-origin iframe in a real headless
+    browser and rendered successfully — the browser did not block the
+    frame the way X-Frame-Options / a Content-Security-Policy
+    frame-ancestors directive is designed to.
+  remediation: >
+    Send "X-Frame-Options: DENY" (or "SAMEORIGIN" if framing by your own
+    site is required) and/or a Content-Security-Policy with a
+    "frame-ancestors" directive on this response.
+  references:
+    - "https://cwe.mitre.org/data/definitions/1021.html"

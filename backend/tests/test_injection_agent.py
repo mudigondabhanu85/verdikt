@@ -49,6 +49,23 @@ def _handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"greeting": "Hello, 49!"})
         return httpx.Response(200, json={"greeting": "Hello, there!"})
 
+    if parsed.path == "/download":
+        filename = query.get("file", [""])[0]
+        if "etc/passwd" in filename or "etc%2fpasswd" in filename.lower():
+            return httpx.Response(
+                200,
+                text="root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1::/usr/sbin:/usr/sbin/nologin\n",
+            )
+        return httpx.Response(200, text="File not found: report.pdf")
+
+    if parsed.path == "/search-notes":
+        value = query.get("q", [""])[0]
+        if "return true" in value:
+            return httpx.Response(200, text="Notes: " + "x" * 500)
+        if "return false" in value:
+            return httpx.Response(200, text="Notes: none")
+        return httpx.Response(200, text="Notes: some default notes here")
+
     if parsed.path == "/ping" and request.method == "POST":
         body = request.content.decode()
         params = parse_qs(body)
@@ -116,6 +133,48 @@ async def test_injection_agent_confirms_real_vulnerabilities(db_adapter):
 
         result = await session.execute(select(Finding))
         assert len(result.scalars().all()) == len(findings)
+
+        await client.aclose()
+
+
+async def test_path_traversal_is_confirmed(db_adapter):
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "clear /etc/passwd disclosure"}'
+        )
+        agent, client, _scan_run = await _make_agent(session, provider)
+
+        parameters = [
+            DiscoveredParameter(url="http://site.test/download?file=report.pdf", method="GET", name="file"),
+        ]
+        findings = await agent.run(parameters, [])
+
+        check_ids = {f.check_id for f in findings}
+        assert "path-traversal" in check_ids
+        finding = next(f for f in findings if f.check_id == "path-traversal")
+        assert finding.severity == "High"
+        assert finding.confirmation_status == "ai_confirmed"
+
+        await client.aclose()
+
+
+async def test_nosql_injection_is_confirmed(db_adapter):
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "boolean differential in $where context"}'
+        )
+        agent, client, _scan_run = await _make_agent(session, provider)
+
+        parameters = [
+            DiscoveredParameter(url="http://site.test/search-notes?q=x", method="GET", name="q"),
+        ]
+        findings = await agent.run(parameters, [])
+
+        check_ids = {f.check_id for f in findings}
+        assert "nosql-injection" in check_ids
+        finding = next(f for f in findings if f.check_id == "nosql-injection")
+        assert finding.severity == "High"
+        assert finding.cwe_id == "CWE-943"
 
         await client.aclose()
 
