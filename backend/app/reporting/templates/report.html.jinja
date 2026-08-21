@@ -55,6 +55,11 @@
   <dd>Common Vulnerability Scoring System — the 0–10 score behind the severity rating.</dd>
 </dl>
 
+{% if executive_summary %}
+<h2>Executive Summary</h2>
+<p>{{ executive_summary }}</p>
+{% endif %}
+
 <h2>Summary</h2>
 <table class="summary-table">
   <tr><th>Severity</th><th>Count</th></tr>

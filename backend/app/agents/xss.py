@@ -7,12 +7,32 @@ from app.agents.evidence import format_request_raw, format_response_raw
 from app.agents.http_client import ScopedHttpClient, ScopeViolationError
 from app.agents.probing import ProbeTarget, fetch_with_value, form_probe_targets, query_probe_targets
 from app.agents.recon import DiscoveredParameter, FormInfo
+from app.agents.xss_browser_proof import attempt_browser_proof
 from app.ai.budget import BudgetExceededError, BudgetGuard
 from app.ai.prompts.loader import render_prompt
 from app.ai.verdict import parse_verdict
+from app.models.finding import Evidence, Finding
 from app.models.review_candidate import ReviewCandidate
+from app.storage.local_disk import get_object_storage
 
 _CONTEXT_RADIUS = 80
+
+# Shared with app.api.routes.review_candidates' manual-promotion path —
+# a browser-confirmed reflected XSS and an analyst-promoted one describe
+# the same vulnerability class, so they share one taxonomy entry.
+XSS_FINDING_METADATA = {
+    "owasp_2025_category": "A05 Injection",
+    "cwe_id": "CWE-79",
+    "cvss_vector": "AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N",
+    "cvss_score": 6.1,
+    "portswigger_reference_url": "https://portswigger.net/web-security/cross-site-scripting",
+    "remediation": (
+        "Encode all user-controllable output for the context it's rendered in "
+        "(HTML entity encoding for HTML body content, JS string escaping inside "
+        "script contexts, etc.), and add a Content-Security-Policy as "
+        "defense in depth."
+    ),
+}
 
 
 @dataclass
@@ -47,13 +67,14 @@ async def _probe_reflected_xss(client: ScopedHttpClient, target: ProbeTarget) ->
 
 
 class XSSAgent:
-    """Reflected-XSS detection. Unlike Injection/Access-Control, a
-    confirmed candidate here becomes a ReviewCandidate, not a Finding —
-    §2 step 2 requires actual Playwright browser reproduction for
-    client-side issues, which is Phase 5 scope. This agent still does
-    deterministic re-execution (§2 step 1: re-probe, confirm the
-    reflection reproduces) before queuing a candidate, but stops short of
-    the full Finding-confirmation pipeline.
+    """Reflected-XSS detection. A GET-based candidate that survives
+    deterministic re-execution and LLM triage gets one more step — a real
+    headless-browser load to check whether the injected script actually
+    executes (§2 step 2, app.agents.xss_browser_proof) — and is persisted
+    straight as a confirmed Finding (with a screenshot as evidence) when
+    it does. A POST-based candidate, or a GET one where the browser
+    didn't execute the payload (e.g. blocked by CSP), still becomes a
+    ReviewCandidate for manual analyst review, same as before.
     """
 
     def __init__(
@@ -73,6 +94,7 @@ class XSSAgent:
         self._budget_guard = budget_guard
         self._ai_model = ai_model
         self.budget_exceeded = False
+        self.findings: list[Finding] = []
 
     async def run(
         self, parameters: list[DiscoveredParameter], forms: list[FormInfo]
@@ -117,6 +139,13 @@ class XSSAgent:
         if reproduced is None:
             return None
 
+        if reproduced.target.method == "GET":
+            proof = await attempt_browser_proof(reproduced.target)
+            if proof.executed:
+                finding = await self._persist_confirmed_finding(reproduced, verdict, proof)
+                self.findings.append(finding)
+                return None
+
         review_candidate = ReviewCandidate(
             scan_run_id=self._scan_run_id,
             agent_job_id=self._agent_job_id,
@@ -134,3 +163,64 @@ class XSSAgent:
             self._session.add(review_candidate)
             await self._session.commit()
         return review_candidate
+
+    async def _persist_confirmed_finding(self, reproduced: XssCandidate, verdict, proof) -> Finding:
+        screenshot_refs: list[str] = []
+        if proof.screenshot_png is not None:
+            storage = get_object_storage()
+            key = f"xss-browser-proof/{self._scan_run_id}/{uuid.uuid4().hex}.png"
+            await storage.put(key, proof.screenshot_png, content_type="image/png")
+            screenshot_refs = [storage.url_for(key)]
+
+        finding = Finding(
+            scan_run_id=self._scan_run_id,
+            agent_job_id=self._agent_job_id,
+            check_id="xss-reflected",
+            title="Reflected Cross-Site Scripting (XSS)",
+            severity="High",
+            owasp_2025_category=XSS_FINDING_METADATA["owasp_2025_category"],
+            cwe_id=XSS_FINDING_METADATA["cwe_id"],
+            portswigger_reference_url=XSS_FINDING_METADATA["portswigger_reference_url"],
+            cvss_vector=XSS_FINDING_METADATA["cvss_vector"],
+            cvss_score=XSS_FINDING_METADATA["cvss_score"],
+            affected_endpoints=[reproduced.target.url],
+            plain_language_summary=(
+                "This page reflects part of the web address back into the page without "
+                "removing dangerous characters. A malicious link built with a script "
+                "payload was automatically loaded in a real browser and the script "
+                "actually ran, confirming an attacker-controlled link can execute "
+                "arbitrary JavaScript in a victim's browser session."
+            ),
+            technical_description=(
+                f"The parameter {reproduced.target.param_name!r} on "
+                f"{reproduced.target.url} is reflected unescaped into the HTML "
+                f"response. A headless browser loaded a request containing an "
+                f"injected <script> payload and the payload executed, which is "
+                f"direct proof of exploitability rather than just string reflection. "
+                f"LLM triage reasoning: {verdict.reasoning}"
+            ),
+            steps_to_reproduce=[
+                f"1. Send an HTTP GET request to {reproduced.target.url} with "
+                f"{reproduced.target.param_name}=<script>alert(1)</script> "
+                "(or open it directly in a browser).",
+                "2. The injected script executes on page load — verified here by an "
+                "automated headless-browser check, with a screenshot captured as "
+                "evidence.",
+            ],
+            remediation=XSS_FINDING_METADATA["remediation"],
+            references=[XSS_FINDING_METADATA["portswigger_reference_url"]],
+            confirmation_status="ai_confirmed",
+        )
+        async with self._client.session_lock:
+            self._session.add(finding)
+            await self._session.flush()
+            self._session.add(
+                Evidence(
+                    finding_id=finding.id,
+                    request_raw=format_request_raw(reproduced.probe_response),
+                    response_raw=format_response_raw(reproduced.probe_response),
+                    screenshot_refs=screenshot_refs,
+                )
+            )
+            await self._session.commit()
+        return finding

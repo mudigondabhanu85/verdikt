@@ -167,10 +167,10 @@ def build_graph(
         await _finish_job(
             job,
             status=status,
-            stats={"candidates_queued": len(candidates)},
+            stats={"candidates_queued": len(candidates), "findings_confirmed": len(agent.findings)},
             error="budget exceeded" if agent.budget_exceeded else None,
         )
-        return {"review_candidates": candidates}
+        return {"review_candidates": candidates, "findings": agent.findings}
 
     async def auth_node(state: ScanState) -> dict:
         job = await _start_job("auth")

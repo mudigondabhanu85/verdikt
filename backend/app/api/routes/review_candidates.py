@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.xss import XSS_FINDING_METADATA
 from app.api.deps import get_review_candidate_or_404, get_scan_run_or_404, write_audit_log
 from app.auth.rbac import require_permission
 from app.db.session import get_db_session
@@ -18,23 +19,16 @@ router = APIRouter(tags=["review-candidates"])
 # Finding metadata for promoting a candidate (§2 step 5). check_type ==
 # "xss-reflected" is the only producer today (app/agents/xss.py) — a new
 # XSS-adjacent check type needs an entry here before it can be promoted.
+# Shares its taxonomy entry (OWASP/CWE/CVSS/remediation) with the
+# browser-proof auto-confirmation path in app.agents.xss — same
+# vulnerability class either way.
 _PROMOTION_METADATA = {
     "xss-reflected": {
-        "owasp_2025_category": "A05 Injection",
-        "cwe_id": "CWE-79",
-        "cvss_vector": "AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N",
-        "cvss_score": 6.1,
-        "portswigger_reference_url": "https://portswigger.net/web-security/cross-site-scripting",
+        **XSS_FINDING_METADATA,
         "plain_language_summary": (
             "An analyst manually reviewed and confirmed this reflected XSS finding. "
             "It was flagged by the automated scanner but required human/browser "
             "verification before being promoted to a confirmed finding."
-        ),
-        "remediation": (
-            "Encode all user-controllable output for the context it's rendered in "
-            "(HTML entity encoding for HTML body content, JS string escaping inside "
-            "script contexts, etc.), and add a Content-Security-Policy as "
-            "defense in depth."
         ),
     }
 }

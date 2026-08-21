@@ -121,13 +121,37 @@ async def test_full_scan_flow_completes_and_produces_report(client, fixture_site
 
     report_json = await client.get(f"/scan-runs/{scan_run_id}/report.json", headers=admin["headers"])
     assert report_json.status_code == 200
-    assert len(report_json.json()["findings"]) == len(findings_body)
+    report_json_body = report_json.json()
+    assert len(report_json_body["findings"]) == len(findings_body)
+    assert report_json_body["executive_summary"]  # populated (fallback text, no AI provider configured)
 
     report_html = await client.get(f"/scan-runs/{scan_run_id}/report.html", headers=admin["headers"])
     assert report_html.status_code == 200
     assert "Verdikt Security Assessment Report" in report_html.text
     assert "cookie-missing-secure" not in report_html.text  # check id isn't user-facing
     assert "Missing Content-Security-Policy" in report_html.text
+    assert "Executive Summary" in report_html.text
+
+    # Executive summary is generated once and cached on the ScanRun — a
+    # second report request must return byte-identical text, not
+    # regenerate it (§10.5: don't re-spend LLM budget on repeat views).
+    report_json_again = await client.get(
+        f"/scan-runs/{scan_run_id}/report.json", headers=admin["headers"]
+    )
+    assert report_json_again.json()["executive_summary"] == report_json_body["executive_summary"]
+
+    report_pdf = await client.get(f"/scan-runs/{scan_run_id}/report.pdf", headers=admin["headers"])
+    assert report_pdf.status_code == 200
+    assert report_pdf.headers["content-type"] == "application/pdf"
+    assert report_pdf.content[:5] == b"%PDF-"
+
+    report_docx = await client.get(f"/scan-runs/{scan_run_id}/report.docx", headers=admin["headers"])
+    assert report_docx.status_code == 200
+    assert (
+        report_docx.headers["content-type"]
+        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert report_docx.content[:2] == b"PK"
 
     traffic = await client.get(f"/versions/{version_id}/traffic", headers=admin["headers"])
     agent_traffic = [t for t in traffic.json() if t["source"] == "agent"]

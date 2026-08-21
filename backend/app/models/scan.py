@@ -24,6 +24,10 @@ class ScanRun(Base):
     error: Mapped[str | None] = mapped_column(Text)
     # Running total of estimated LLM spend for this run (§10.5 budget guardrail).
     llm_cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal(0))
+    # Generated lazily on first report request and cached here (§8) so
+    # repeated report.json/html/pdf/docx requests don't re-spend LLM
+    # budget regenerating the same text — see app.reporting.executive_summary.
+    executive_summary: Mapped[str | None] = mapped_column(Text)
 
 
 class AgentJob(Base):
