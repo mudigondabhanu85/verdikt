@@ -170,7 +170,12 @@ class XSSAgent:
             storage = get_object_storage()
             key = f"xss-browser-proof/{self._scan_run_id}/{uuid.uuid4().hex}.png"
             await storage.put(key, proof.screenshot_png, content_type="image/png")
-            screenshot_refs = [storage.url_for(key)]
+            # Store the raw key, not url_for(key) — screenshot_refs must
+            # stay something ObjectStorageAdapter.get() can read back
+            # directly (see app.reporting.screenshots), and url_for()'s
+            # return value is a display/locator string that isn't
+            # guaranteed to double as a valid get() key for every adapter.
+            screenshot_refs = [key]
 
         finding = Finding(
             scan_run_id=self._scan_run_id,

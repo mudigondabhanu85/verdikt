@@ -5,9 +5,9 @@ Findings Policy. Its cost counts against the same per-scan-run LLM
 budget (§10.5) as the scan's own agents, via the same BudgetGuard.
 """
 
+from app.ai.adapters.null import NullAIProviderAdapter
 from app.ai.budget import BudgetExceededError, BudgetGuard
 from app.ai.prompts.loader import render_prompt
-from app.config import get_settings
 from app.models.finding import Finding
 from app.schemas.scan import ScanRunDetail
 
@@ -53,9 +53,10 @@ async def generate_executive_summary(
     budget_guard: BudgetGuard,
     ai_model: str,
 ) -> str:
-    if get_settings().ai_provider == "fake":
-        # No real provider configured — don't call an adapter whose only
-        # possible response is a fixed placeholder JSON string.
+    if isinstance(budget_guard.provider, NullAIProviderAdapter):
+        # No real provider configured (neither a deployment-wide one nor
+        # a per-scan-run AIProviderConfig) — don't call an adapter whose
+        # only possible response is a fixed placeholder JSON string.
         return _fallback_summary(findings)
 
     ordered = sorted(findings, key=lambda f: SEVERITY_ORDER.get(f.severity, 99))

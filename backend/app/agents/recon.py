@@ -110,6 +110,10 @@ class ReconAgent:
         self._semaphore = asyncio.Semaphore(self.CONCURRENCY)
         self.discovered_parameters: list[DiscoveredParameter] = []
         self.discovered_forms: list[FormInfo] = []
+        # Every successfully-fetched response from this crawl, keyed by
+        # URL — reused by FingerprintAgent (§10 smart scan) so tech-stack
+        # detection costs zero extra requests instead of re-fetching.
+        self.discovered_responses: dict[str, httpx.Response] = {}
 
     async def _fetch(self, url: str) -> httpx.Response | None:
         async with self._semaphore:
@@ -119,7 +123,7 @@ class ReconAgent:
                 return None
 
     async def run(self) -> list[str]:
-        discovered: dict[str, httpx.Response] = {}
+        discovered = self.discovered_responses
         visited: set[str] = set()
 
         frontier: list[str] = []

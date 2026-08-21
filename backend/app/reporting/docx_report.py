@@ -4,9 +4,10 @@ summary, severity summary table, and one section per finding.
 """
 
 import io
+import uuid
 
 from docx import Document
-from docx.shared import Pt, RGBColor
+from docx.shared import Inches, Pt, RGBColor
 
 from app.models.finding import Finding
 from app.schemas.scan import ScanRunDetail
@@ -30,8 +31,13 @@ def _mono_paragraph(document: Document, text: str) -> None:
 
 
 def render_docx_report(
-    *, scan_run: ScanRunDetail, findings: list[Finding], executive_summary: str
+    *,
+    scan_run: ScanRunDetail,
+    findings: list[Finding],
+    executive_summary: str,
+    screenshots_by_finding_id: dict[uuid.UUID, list[bytes]] | None = None,
 ) -> bytes:
+    screenshots_by_finding_id = screenshots_by_finding_id or {}
     ordered = sorted(findings, key=lambda f: SEVERITY_ORDER.get(f.severity, 99))
     document = Document()
 
@@ -92,6 +98,13 @@ def render_docx_report(
             _mono_paragraph(document, finding.evidence.request_raw)
             document.add_heading("Evidence — response", level=3)
             _mono_paragraph(document, finding.evidence.response_raw)
+
+        for image_bytes in screenshots_by_finding_id.get(finding.id, []):
+            document.add_heading("Evidence — screenshot", level=3)
+            try:
+                document.add_picture(io.BytesIO(image_bytes), width=Inches(5))
+            except Exception:  # noqa: BLE001 — a corrupt/unreadable image must not break report generation
+                document.add_paragraph("(screenshot could not be embedded)")
 
     buffer = io.BytesIO()
     document.save(buffer)

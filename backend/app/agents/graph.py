@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.access_control import AccessControlAgent
 from app.agents.auth_agent import AuthAgent
 from app.agents.business_logic import BusinessLogicAgent
+from app.agents.fingerprint import FingerprintAgent
 from app.agents.header_config import HeaderConfigAgent
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
 from app.agents.injection import InjectionAgent
@@ -20,7 +21,7 @@ from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
 from app.models.finding import Finding
 from app.models.review_candidate import ReviewCandidate
-from app.models.scan import AgentJob
+from app.models.scan import AgentJob, ScanRun
 from app.models.target import Target
 
 
@@ -28,6 +29,7 @@ class ScanState(TypedDict, total=False):
     discovered_endpoints: list[str]
     discovered_parameters: list[DiscoveredParameter]
     discovered_forms: list[FormInfo]
+    tech_stack_fingerprint: dict
     sessions: dict[uuid.UUID, AuthenticatedSession]
     findings: Annotated[list[Finding], operator.add]
     review_candidates: Annotated[list[ReviewCandidate], operator.add]
@@ -90,11 +92,27 @@ def build_graph(
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
-        await _finish_job(job, status="completed", stats={"endpoints_discovered": len(endpoints)})
+
+        # §10 smart scan: deterministic tech-stack fingerprint over the
+        # pages recon already fetched — zero extra requests. Persisted on
+        # the ScanRun itself (not just AgentJob.stats) so it survives
+        # independently of this job row and is easy to surface in reports.
+        fingerprint = FingerprintAgent().run(agent.discovered_responses).to_dict()
+        async with client.session_lock:
+            scan_run = await session.get(ScanRun, scan_run_id)
+            scan_run.tech_stack_fingerprint = fingerprint
+            await session.commit()
+
+        await _finish_job(
+            job,
+            status="completed",
+            stats={"endpoints_discovered": len(endpoints), "tech_stack_fingerprint": fingerprint},
+        )
         return {
             "discovered_endpoints": endpoints,
             "discovered_parameters": agent.discovered_parameters,
             "discovered_forms": agent.discovered_forms,
+            "tech_stack_fingerprint": fingerprint,
         }
 
     async def header_config_node(state: ScanState) -> dict:

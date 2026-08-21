@@ -197,8 +197,26 @@ async def _probe_command_injection(client: ScopedHttpClient, target: ProbeTarget
     return None
 
 
+def _is_template_renderable(response: httpx.Response) -> bool:
+    """§10 smart scan: SSTI requires the payload to be evaluated as
+    template syntax in server-rendered output. A response whose
+    Content-Type is a data format (JSON/XML/etc., not HTML/plain text)
+    is very unlikely to be passing through a server-side template engine
+    in typical architectures — a pure JSON API endpoint just doesn't have
+    a template rendering step in the response path. Skipping SSTI probing
+    there saves two requests and a possible LLM triage call per target on
+    JSON-API-heavy applications, without weakening coverage on the actual
+    template-rendered surface (SQLi/command-injection aren't gated this
+    way — they apply broadly regardless of response format).
+    """
+    content_type = response.headers.get("content-type", "").lower()
+    return "json" not in content_type and "xml" not in content_type
+
+
 async def _probe_ssti(client: ScopedHttpClient, target: ProbeTarget) -> InjectionCandidate | None:
     baseline = await fetch_with_value(client, target, BASELINE_VALUE)
+    if not _is_template_renderable(baseline):
+        return None
     for payload in ("{{7*7}}", "${7*7}"):
         probe = await fetch_with_value(client, target, payload)
         if "49" in probe.text and "49" not in baseline.text:

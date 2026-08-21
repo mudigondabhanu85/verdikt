@@ -7,12 +7,15 @@ technical descriptions, reproduction steps, remediation, and evidence.
 """
 
 import io
+import uuid
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
 from reportlab.platypus import (
+    Image,
     ListFlowable,
     ListItem,
     PageBreak,
@@ -25,6 +28,8 @@ from reportlab.platypus import (
 
 from app.models.finding import Finding
 from app.schemas.scan import ScanRunDetail
+
+_MAX_IMAGE_WIDTH = 5 * inch
 
 SEVERITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
 SEVERITY_HEX = {
@@ -53,9 +58,26 @@ def _escape_pre(text: str | None) -> str:
     return _escape(truncated).replace("\n", "<br/>")
 
 
+def _image_flowable(png_bytes: bytes) -> Image | None:
+    try:
+        reader = ImageReader(io.BytesIO(png_bytes))
+        natural_width, natural_height = reader.getSize()
+    except Exception:  # noqa: BLE001 — a corrupt/unreadable image must not break report generation
+        return None
+    if not natural_width:
+        return None
+    scale = min(1.0, _MAX_IMAGE_WIDTH / natural_width)
+    return Image(io.BytesIO(png_bytes), width=natural_width * scale, height=natural_height * scale)
+
+
 def render_pdf_report(
-    *, scan_run: ScanRunDetail, findings: list[Finding], executive_summary: str
+    *,
+    scan_run: ScanRunDetail,
+    findings: list[Finding],
+    executive_summary: str,
+    screenshots_by_finding_id: dict[uuid.UUID, list[bytes]] | None = None,
 ) -> bytes:
+    screenshots_by_finding_id = screenshots_by_finding_id or {}
     ordered = sorted(findings, key=lambda f: SEVERITY_ORDER.get(f.severity, 99))
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=LETTER, title="Verdikt Security Assessment Report")
@@ -140,6 +162,12 @@ def render_pdf_report(
             story.append(Paragraph(_escape_pre(finding.evidence.request_raw), _mono))
             story.append(Paragraph("Evidence — response", _h3))
             story.append(Paragraph(_escape_pre(finding.evidence.response_raw), _mono))
+
+        for image_bytes in screenshots_by_finding_id.get(finding.id, []):
+            flowable = _image_flowable(image_bytes)
+            if flowable is not None:
+                story.append(Paragraph("Evidence — screenshot", _h3))
+                story.append(flowable)
 
     doc.build(story)
     return buffer.getvalue()

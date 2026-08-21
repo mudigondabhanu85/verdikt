@@ -8,7 +8,6 @@ from app.agents.graph import build_graph
 from app.agents.http_client import ScopedHttpClient
 from app.ai import provider as ai_provider
 from app.ai.budget import BudgetGuard
-from app.config import get_settings
 from app.db import session as db_session
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
@@ -77,7 +76,7 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
                 db_session=session,
                 session_lock=session_lock,
             )
-            provider = ai_provider.get_ai_provider()
+            provider, ai_model = await ai_provider.resolve_provider_and_model(session, scan_run)
             budget_guard = BudgetGuard(scan_run, session, provider, lock=session_lock)
 
             graph = build_graph(
@@ -88,7 +87,7 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
                 credential_sets=credential_sets,
                 business_rules=business_rules,
                 budget_guard=budget_guard,
-                ai_model=get_settings().ai_model,
+                ai_model=ai_model,
             )
             await graph.ainvoke({})
 

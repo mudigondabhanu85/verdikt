@@ -37,6 +37,18 @@ def _handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text="Hello, 49!")
         return httpx.Response(200, text=f"Hello, {value}!")
 
+    if parsed.path == "/api/greet":
+        # Same template-injection-vulnerable behavior as /greet, but as a
+        # JSON API response — §10 smart scan should skip SSTI probing
+        # here based on Content-Type alone, saving the probe entirely.
+        # Deliberately does NOT echo arbitrary input back (same reasoning
+        # as /product above) — only the exact SSTI trigger strings get a
+        # distinguishable response, so no other probe type can misfire.
+        value = query.get("name", [""])[0]
+        if value in ("{{7*7}}", "${7*7}"):
+            return httpx.Response(200, json={"greeting": "Hello, 49!"})
+        return httpx.Response(200, json={"greeting": "Hello, there!"})
+
     if parsed.path == "/ping" and request.method == "POST":
         body = request.content.decode()
         params = parse_qs(body)
@@ -104,6 +116,30 @@ async def test_injection_agent_confirms_real_vulnerabilities(db_adapter):
 
         result = await session.execute(select(Finding))
         assert len(result.scalars().all()) == len(findings)
+
+        await client.aclose()
+
+
+async def test_ssti_probe_skipped_on_json_api_response(db_adapter):
+    """§10 smart scan: /api/greet is just as template-injection-vulnerable
+    as /greet (same reflected-49 behavior), but responds as
+    application/json — the SSTI probe must not fire there at all, even
+    though the LLM would happily confirm it if triage were ever reached.
+    """
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "looks vulnerable"}'
+        )
+        agent, client, _scan_run = await _make_agent(session, provider)
+
+        parameters = [
+            DiscoveredParameter(url="http://site.test/api/greet?name=x", method="GET", name="name"),
+        ]
+
+        findings = await agent.run(parameters, [])
+
+        assert findings == []
+        assert provider.calls == []  # never even reached LLM triage
 
         await client.aclose()
 

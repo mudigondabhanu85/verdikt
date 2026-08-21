@@ -29,3 +29,20 @@ def decrypt_credential(encrypted_secret: bytes) -> tuple[str, str]:
     payload = get_kms_adapter().decrypt(encrypted_secret)
     username, secret = payload.decode().split("\0", 1)
     return username, secret
+
+
+def mask_secret(secret: str) -> str:
+    """Safe-to-display reference for a single secret value (no username),
+    e.g. an AI provider API key: "****abcd"."""
+    tail = secret[-4:] if len(secret) >= 4 else "*" * len(secret)
+    return f"****{tail}"
+
+
+def encrypt_secret(secret: str) -> bytes:
+    """Single-value counterpart to encrypt_credential — for secrets that
+    aren't a username/password pair (e.g. an AI provider API key)."""
+    return get_kms_adapter().encrypt(secret.encode())
+
+
+def decrypt_secret(encrypted_secret: bytes) -> str:
+    return get_kms_adapter().decrypt(encrypted_secret).decode()

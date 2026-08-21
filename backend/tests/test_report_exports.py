@@ -2,12 +2,20 @@ import io
 import uuid
 
 from docx import Document
+from PIL import Image as PILImage
 from pypdf import PdfReader
 
 from app.models.finding import Evidence, Finding
 from app.reporting.docx_report import render_docx_report
+from app.reporting.html_report import render_html_report
 from app.reporting.pdf_report import render_pdf_report
 from app.schemas.scan import ScanRunDetail
+
+
+def _sample_png() -> bytes:
+    buf = io.BytesIO()
+    PILImage.new("RGB", (200, 100), color="red").save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def _detail(**overrides) -> ScanRunDetail:
@@ -27,6 +35,7 @@ def _detail(**overrides) -> ScanRunDetail:
 
 def _finding_with_evidence() -> Finding:
     finding = Finding(
+        id=uuid.uuid4(),  # not auto-populated until flush; these tests never hit the DB
         scan_run_id=uuid.uuid4(),
         agent_job_id=uuid.uuid4(),
         check_id="xss-reflected",
@@ -72,6 +81,39 @@ def test_pdf_report_contains_expected_content():
     assert "Encode all user-controllable output" in text
 
 
+def test_pdf_report_embeds_screenshot():
+    finding = _finding_with_evidence()
+    png_bytes = _sample_png()
+    pdf_bytes = render_pdf_report(
+        scan_run=_detail(),
+        findings=[finding],
+        executive_summary="summary",
+        screenshots_by_finding_id={finding.id: [png_bytes]},
+    )
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = "\n".join(page.extract_text() for page in reader.pages)
+    assert "Evidence — screenshot" in text
+    # The embedded image object must actually be present in the PDF.
+    images_found = 0
+    for page in reader.pages:
+        images_found += len(page.images)
+    assert images_found == 1
+
+
+def test_pdf_report_skips_corrupt_screenshot_without_crashing():
+    finding = _finding_with_evidence()
+    pdf_bytes = render_pdf_report(
+        scan_run=_detail(),
+        findings=[finding],
+        executive_summary="summary",
+        screenshots_by_finding_id={finding.id: [b"not a real png"]},
+    )
+    assert pdf_bytes[:5] == b"%PDF-"
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = "\n".join(page.extract_text() for page in reader.pages)
+    assert "Evidence — screenshot" not in text
+
+
 def test_pdf_report_handles_zero_findings():
     pdf_bytes = render_pdf_report(
         scan_run=_detail(finding_counts_by_severity={"Critical": 0, "High": 0, "Medium": 0, "Low": 0}),
@@ -107,6 +149,35 @@ def test_docx_report_contains_expected_content():
     assert "Encode all user-controllable output" in full_text
 
 
+def test_docx_report_embeds_screenshot():
+    finding = _finding_with_evidence()
+    png_bytes = _sample_png()
+    docx_bytes = render_docx_report(
+        scan_run=_detail(),
+        findings=[finding],
+        executive_summary="summary",
+        screenshots_by_finding_id={finding.id: [png_bytes]},
+    )
+    document = Document(io.BytesIO(docx_bytes))
+    full_text = "\n".join(p.text for p in document.paragraphs)
+    assert "Evidence — screenshot" in full_text
+    assert len(document.inline_shapes) == 1
+
+
+def test_docx_report_skips_corrupt_screenshot_without_crashing():
+    finding = _finding_with_evidence()
+    docx_bytes = render_docx_report(
+        scan_run=_detail(),
+        findings=[finding],
+        executive_summary="summary",
+        screenshots_by_finding_id={finding.id: [b"not a real png"]},
+    )
+    document = Document(io.BytesIO(docx_bytes))
+    full_text = "\n".join(p.text for p in document.paragraphs)
+    assert "screenshot could not be embedded" in full_text
+    assert len(document.inline_shapes) == 0
+
+
 def test_docx_report_handles_zero_findings():
     docx_bytes = render_docx_report(
         scan_run=_detail(finding_counts_by_severity={"Critical": 0, "High": 0, "Medium": 0, "Low": 0}),
@@ -116,3 +187,25 @@ def test_docx_report_handles_zero_findings():
     document = Document(io.BytesIO(docx_bytes))
     full_text = "\n".join(p.text for p in document.paragraphs)
     assert "No confirmed findings for this scan run" in full_text
+
+
+def test_html_report_embeds_screenshot_as_base64_img():
+    import base64
+
+    finding = _finding_with_evidence()
+    png_bytes = _sample_png()
+    html = render_html_report(
+        scan_run=_detail(),
+        findings=[finding],
+        executive_summary="summary",
+        screenshots_by_finding_id={finding.id: [png_bytes]},
+    )
+    assert "Evidence — screenshot" in html
+    expected_b64 = base64.b64encode(png_bytes).decode("ascii")
+    assert f'src="data:image/png;base64,{expected_b64}"' in html
+
+
+def test_html_report_without_screenshots_omits_screenshot_section():
+    finding = _finding_with_evidence()
+    html = render_html_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
+    assert "Evidence — screenshot" not in html

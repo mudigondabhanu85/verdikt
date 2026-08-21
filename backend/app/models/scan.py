@@ -28,6 +28,15 @@ class ScanRun(Base):
     # repeated report.json/html/pdf/docx requests don't re-spend LLM
     # budget regenerating the same text — see app.reporting.executive_summary.
     executive_summary: Mapped[str | None] = mapped_column(Text)
+    # Which LLM provider+model this run's agents used (multi-agent §0/§10).
+    # NULL means "fall back to the deployment's global ai_provider setting"
+    # (app.config.Settings.ai_provider) — see app.ai.provider.resolve_provider.
+    ai_provider_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ai_provider_configs.id")
+    )
+    # Deterministic tech-stack fingerprint captured during recon (§10 smart
+    # scan) — see app.agents.fingerprint. JSON dict, empty until recon runs.
+    tech_stack_fingerprint: Mapped[dict | None] = mapped_column(JSON)
 
 
 class AgentJob(Base):

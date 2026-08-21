@@ -1,5 +1,7 @@
 import uuid
+from decimal import Decimal
 
+from app.ai.adapters.null import NullAIProviderAdapter
 from app.ai.budget import BudgetGuard
 from app.models.finding import Finding
 from app.models.scan import ScanRun
@@ -7,13 +9,6 @@ from app.reporting.executive_summary import generate_executive_summary
 from app.schemas.scan import ScanRunDetail
 from tests.conftest import session_scope
 from tests.fakes import ScriptedAIProviderAdapter
-
-
-class _FakeSettings:
-    def __init__(self, ai_provider: str, max_llm_cost_usd_per_scan=None):
-        self.ai_provider = ai_provider
-        if max_llm_cost_usd_per_scan is not None:
-            self.max_llm_cost_usd_per_scan = max_llm_cost_usd_per_scan
 
 
 def _detail(*, status="completed", counts=None) -> ScanRunDetail:
@@ -52,18 +47,20 @@ def _finding(**overrides) -> Finding:
     return Finding(**defaults)
 
 
-async def test_fallback_used_when_no_real_provider_configured(db_adapter, monkeypatch):
-    monkeypatch.setattr(
-        "app.reporting.executive_summary.get_settings", lambda: _FakeSettings("fake")
-    )
-    async with session_scope(db_adapter) as session:
-        scan_run = ScanRun(version_id=uuid.uuid4(), status="completed", requested_by=uuid.uuid4())
-        session.add(scan_run)
-        await session.commit()
-        await session.refresh(scan_run)
+async def _make_scan_run(session, **overrides) -> ScanRun:
+    defaults = dict(version_id=uuid.uuid4(), status="completed", requested_by=uuid.uuid4())
+    defaults.update(overrides)
+    scan_run = ScanRun(**defaults)
+    session.add(scan_run)
+    await session.commit()
+    await session.refresh(scan_run)
+    return scan_run
 
-        provider = ScriptedAIProviderAdapter.from_responses("should never be called")
-        guard = BudgetGuard(scan_run, session, provider)
+
+async def test_fallback_used_when_no_real_provider_configured(db_adapter):
+    async with session_scope(db_adapter) as session:
+        scan_run = await _make_scan_run(session)
+        guard = BudgetGuard(scan_run, session, NullAIProviderAdapter())
 
         findings = [_finding()]
         summary = await generate_executive_summary(
@@ -73,23 +70,14 @@ async def test_fallback_used_when_no_real_provider_configured(db_adapter, monkey
             ai_model="fake-model",
         )
 
-        assert provider.calls == []
         assert "1 finding" in summary
         assert "Reflected XSS" in summary
 
 
-async def test_fallback_no_findings_message(db_adapter, monkeypatch):
-    monkeypatch.setattr(
-        "app.reporting.executive_summary.get_settings", lambda: _FakeSettings("fake")
-    )
+async def test_fallback_no_findings_message(db_adapter):
     async with session_scope(db_adapter) as session:
-        scan_run = ScanRun(version_id=uuid.uuid4(), status="completed", requested_by=uuid.uuid4())
-        session.add(scan_run)
-        await session.commit()
-        await session.refresh(scan_run)
-
-        provider = ScriptedAIProviderAdapter.from_responses("should never be called")
-        guard = BudgetGuard(scan_run, session, provider)
+        scan_run = await _make_scan_run(session)
+        guard = BudgetGuard(scan_run, session, NullAIProviderAdapter())
 
         summary = await generate_executive_summary(
             scan_run=_detail(), findings=[], budget_guard=guard, ai_model="fake-model"
@@ -97,19 +85,9 @@ async def test_fallback_no_findings_message(db_adapter, monkeypatch):
         assert "No confirmed findings" in summary
 
 
-async def test_llm_narrative_used_when_real_provider_configured(db_adapter, monkeypatch):
-    from decimal import Decimal
-
-    monkeypatch.setattr(
-        "app.reporting.executive_summary.get_settings",
-        lambda: _FakeSettings("claude", max_llm_cost_usd_per_scan=Decimal("2.00")),
-    )
+async def test_llm_narrative_used_when_real_provider_configured(db_adapter):
     async with session_scope(db_adapter) as session:
-        scan_run = ScanRun(version_id=uuid.uuid4(), status="completed", requested_by=uuid.uuid4())
-        session.add(scan_run)
-        await session.commit()
-        await session.refresh(scan_run)
-
+        scan_run = await _make_scan_run(session)
         provider = ScriptedAIProviderAdapter.from_responses(
             "Overall risk is moderate; one high-severity XSS issue needs prompt remediation."
         )
@@ -127,31 +105,16 @@ async def test_llm_narrative_used_when_real_provider_configured(db_adapter, monk
 
 
 async def test_falls_back_when_budget_already_exhausted(db_adapter, monkeypatch):
-    from decimal import Decimal
+    class _ZeroCapSettings:
+        max_llm_cost_usd_per_scan = Decimal("0.00")
 
-    monkeypatch.setattr(
-        "app.reporting.executive_summary.get_settings",
-        lambda: _FakeSettings("claude", max_llm_cost_usd_per_scan=Decimal("0.00")),
-    )
-    # BudgetGuard reads the cap via its own imported get_settings
-    # (app.ai.budget), independent of executive_summary's — patch both so
-    # the guard actually starts out already at its (zero) cap.
-    monkeypatch.setattr(
-        "app.ai.budget.get_settings",
-        lambda: _FakeSettings("claude", max_llm_cost_usd_per_scan=Decimal("0.00")),
-    )
+    # BudgetGuard reads its cap via app.ai.budget's own imported
+    # get_settings() at construction time.
+    monkeypatch.setattr("app.ai.budget.get_settings", lambda: _ZeroCapSettings())
+
     async with session_scope(db_adapter) as session:
-        scan_run = ScanRun(
-            version_id=uuid.uuid4(),
-            status="completed",
-            requested_by=uuid.uuid4(),
-            llm_cost_usd=Decimal("0.00"),
-        )
-        session.add(scan_run)
-        await session.commit()
-        await session.refresh(scan_run)
-
-        provider = ScriptedAIProviderAdapter.from_responses("should not be reachable either")
+        scan_run = await _make_scan_run(session, llm_cost_usd=Decimal("0.00"))
+        provider = ScriptedAIProviderAdapter.from_responses("should not be reachable")
         guard = BudgetGuard(scan_run, session, provider)
 
         summary = await generate_executive_summary(

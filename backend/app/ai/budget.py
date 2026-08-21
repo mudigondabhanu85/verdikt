@@ -47,6 +47,10 @@ class BudgetGuard:
     def spent(self) -> Decimal:
         return self._scan_run.llm_cost_usd or Decimal(0)
 
+    @property
+    def provider(self) -> AIProviderAdapter:
+        return self._provider
+
     async def guarded_complete(
         self, messages: list[Message], *, model: str, max_tokens: int = 1024
     ) -> AgentResponse:

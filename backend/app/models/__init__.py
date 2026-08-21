@@ -2,6 +2,7 @@
 required for create_all() in tests and for Alembic autogenerate.
 """
 
+from app.models.ai_provider_config import AIProviderConfig
 from app.models.audit import AuditLogEntry
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
@@ -16,6 +17,7 @@ from app.models.target import Target
 from app.models.traffic import TrafficInteraction
 
 __all__ = [
+    "AIProviderConfig",
     "AuditLogEntry",
     "BusinessRule",
     "CredentialSet",
