@@ -93,6 +93,47 @@ export interface BusinessRuleOut {
   config: Record<string, unknown>
 }
 
+// Mirrors app/schemas/business_rule.py's per-rule-type config shapes
+// exactly — one bespoke form per type in pages/version/business-rules/
+// builds these directly instead of asking the analyst to hand-write JSON.
+export interface HttpCallConfig {
+  method: string
+  url: string
+  body?: string | null
+  content_type?: string | null
+}
+
+export interface ResourceIsolationConfig {
+  url: string
+  method: string
+}
+
+export interface WorkflowOrderConfig {
+  precondition: HttpCallConfig
+  guarded_action: HttpCallConfig
+  credential_set_id?: string | null
+}
+
+export interface PriceOrQuantityTamperingConfig {
+  method: string
+  url: string
+  body_template: string
+  content_type: string
+  baseline_value: string
+  tamper_values?: string[] | null
+  credential_set_id?: string | null
+}
+
+export interface RaceConditionConfig {
+  method: string
+  url: string
+  body?: string | null
+  content_type: string
+  concurrency: number
+  max_allowed_successes: number
+  credential_set_id?: string | null
+}
+
 export type ScanRunStatus = 'running' | 'completed' | 'failed'
 
 export interface ScanRunOut {
