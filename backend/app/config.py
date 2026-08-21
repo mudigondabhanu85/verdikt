@@ -50,6 +50,15 @@ class Settings(BaseSettings):
     # (recorded on their AgentJob), not silently truncated.
     max_llm_cost_usd_per_scan: Decimal = Decimal("2.00")
 
+    # §3 SSRF detection (app/agents/ssrf.py) needs a hostname/IP the
+    # *target* can route back to for its out-of-band callback proof —
+    # this only works when the scanner is reachable from the target
+    # (same Docker network, same LAN, or a scanner with a public
+    # hostname). None means "best-effort auto-detect the local machine's
+    # own address", which is enough for same-network targets like a
+    # local Juice Shop instance but not for an internet-hosted target.
+    ssrf_callback_host: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

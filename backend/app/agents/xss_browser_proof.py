@@ -42,6 +42,21 @@ def _payload_for(marker: str) -> str:
     return f'<script>window["{marker}"]=true;</script>'
 
 
+# DOM-based XSS payloads, tried via the URL *fragment* (app.agents.dom_xss)
+# — the fragment is never sent to the server (only client-side JS ever
+# sees it via location.hash), so execution here is definitive proof of a
+# purely client-side sink (e.g. `el.innerHTML = location.hash`), distinct
+# from the server-reflection case attempt_browser_proof above covers. Two
+# variants since a <script> tag inserted via innerHTML does NOT execute
+# per the HTML spec, but an event-handler-bearing element (onerror) does
+# — different sinks call for different proof payloads.
+def _dom_xss_payloads(marker: str) -> list[str]:
+    return [
+        f'<script>window["{marker}"]=true;</script>',
+        f'<img src=x onerror=window["{marker}"]=true>',
+    ]
+
+
 async def attempt_browser_proof(
     target: ProbeTarget, *, headless: bool = True
 ) -> BrowserProofResult:
@@ -72,5 +87,43 @@ async def attempt_browser_proof(
             screenshot = None
         finally:
             await browser.close()
+
+    return BrowserProofResult(executed=executed, screenshot_png=screenshot)
+
+
+async def attempt_dom_xss_fragment_proof(url: str, *, headless: bool = True) -> BrowserProofResult:
+    """Loads `url` with an XSS payload appended as the URL fragment
+    (`#...`), which never reaches the server — real execution here proves
+    a client-side JS sink reads location.hash/location.href and writes it
+    somewhere unsafe (innerHTML, document.write, eval, ...), independent
+    of anything the server itself does.
+    """
+    marker = _proof_marker()
+    executed = False
+    screenshot = None
+
+    try:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=headless)
+            page = await browser.new_page()
+            for payload in _dom_xss_payloads(marker):
+                # A navigation that changes only the fragment is treated
+                # by the browser as same-document (fires "hashchange",
+                # no reload) — the page's own <script> block, which is
+                # what actually reads location.hash, would never re-run
+                # for a second payload attempt without forcing a real
+                # fresh navigation first.
+                await page.goto("about:blank")
+                await page.goto(f"{url}#{payload}", wait_until="networkidle")
+                executed = bool(await page.evaluate(f'window["{marker}"] === true'))
+                if executed:
+                    break
+            screenshot = await page.screenshot(full_page=True) if executed else None
+            await browser.close()
+    except PlaywrightError:
+        # Same reasoning as attempt_browser_proof above: unreachable
+        # target or any other navigation failure means "proof not
+        # obtained", not a vulnerability claim and not a crash.
+        return BrowserProofResult(executed=False, screenshot_png=None)
 
     return BrowserProofResult(executed=executed, screenshot_png=screenshot)

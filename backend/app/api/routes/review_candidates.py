@@ -16,12 +16,11 @@ from app.schemas.review_candidate import ReviewCandidateOut
 
 router = APIRouter(tags=["review-candidates"])
 
-# Finding metadata for promoting a candidate (§2 step 5). check_type ==
-# "xss-reflected" is the only producer today (app/agents/xss.py) — a new
-# XSS-adjacent check type needs an entry here before it can be promoted.
-# Shares its taxonomy entry (OWASP/CWE/CVSS/remediation) with the
-# browser-proof auto-confirmation path in app.agents.xss — same
-# vulnerability class either way.
+# Finding metadata for promoting a candidate (§2 step 5) — one entry per
+# check_type a producer agent can queue. Shares its taxonomy entry
+# (OWASP/CWE/CVSS/remediation) with the corresponding auto-confirmation
+# path where one exists (app.agents.xss) — same vulnerability class
+# either way.
 _PROMOTION_METADATA = {
     "xss-reflected": {
         **XSS_FINDING_METADATA,
@@ -30,7 +29,25 @@ _PROMOTION_METADATA = {
             "It was flagged by the automated scanner but required human/browser "
             "verification before being promoted to a confirmed finding."
         ),
-    }
+    },
+    "potential-insecure-deserialization": {
+        "owasp_2025_category": "A08 Software or Data Integrity Failures",
+        "cwe_id": "CWE-502",
+        "cvss_vector": "AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
+        "cvss_score": 4.4,
+        "portswigger_reference_url": "https://portswigger.net/web-security/deserialization",
+        "plain_language_summary": (
+            "An analyst manually reviewed a passively-observed serialized-object value "
+            "(app.agents.deserialization only flags the signature — it never attempts active "
+            "exploitation) and confirmed it represents a real insecure deserialization risk."
+        ),
+        "remediation": (
+            "Avoid deserializing untrusted input in a format that permits arbitrary object "
+            "construction. Prefer data-only formats (JSON) for anything attacker-controllable, "
+            "or use deserialization allow-lists / integrity-checked (signed) serialized data if "
+            "a binary/native format is unavoidable."
+        ),
+    },
 }
 
 

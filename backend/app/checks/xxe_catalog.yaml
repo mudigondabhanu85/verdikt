@@ -1,0 +1,32 @@
+# XXE agent's catalog (§3). No LLM needed — deterministic in-band file
+# disclosure signature match, same "root:...:0:0:" marker technique as
+# the path-traversal probe in app.agents.injection.
+
+- id: xxe-file-disclosure
+  title: "XML External Entity (XXE) Injection"
+  owasp_2025_category: "A05 Injection"
+  cwe_id: "CWE-611"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+  cvss_score: 7.5
+  portswigger_reference_url: "https://portswigger.net/web-security/xxe"
+  plain_language_summary: >
+    This endpoint parses XML request bodies and resolves external entity
+    references, which lets an attacker read arbitrary files from the
+    server's filesystem (such as configuration files, credentials, or
+    SSH keys) just by sending a specially-crafted XML document.
+  technical_description: >
+    A POST request to {url} with an XML body containing a DOCTYPE that
+    declares an external entity pointing at "file:///etc/passwd"
+    resulted in the contents of that file (a "root:...:0:0:" entry)
+    appearing in the response, while an equivalent request with a benign
+    XML body did not. The XML parser used by this endpoint resolves
+    external entities instead of disabling them.
+  remediation: >
+    Disable DTD processing and external entity resolution in the XML
+    parser configuration (e.g. disallow-doctype-decl, or the parser's
+    equivalent secure-processing flag) — virtually every modern XML
+    library supports this and it should be the default for any parser
+    handling untrusted input.
+  references:
+    - "https://cwe.mitre.org/data/definitions/611.html"

@@ -1,0 +1,34 @@
+# SSRF agent's catalog (§3). No LLM needed — confirmation is a real
+# out-of-band callback hit, see app.agents.ssrf_callback.
+
+- id: ssrf-confirmed
+  title: "Server-Side Request Forgery (SSRF)"
+  owasp_2025_category: "A05 Injection"
+  cwe_id: "CWE-918"
+  severity: "Critical"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:N"
+  cvss_score: 9.6
+  portswigger_reference_url: "https://portswigger.net/web-security/ssrf"
+  plain_language_summary: >
+    This part of the application makes its own outbound HTTP request to
+    a URL supplied by the user, and it will fetch a URL pointing
+    anywhere an attacker chooses — including internal systems that
+    aren't normally reachable from the internet (internal admin panels,
+    cloud metadata services that can leak credentials, or other
+    backend services). This was confirmed by having the application
+    make a real request back to a listener under our control.
+  technical_description: >
+    The parameter {parameter} on {url} was set to a URL pointing at a
+    listener this scan started for itself, and that listener received a
+    real, independently-verifiable HTTP request from the target
+    application shortly afterward — direct proof the server itself
+    fetched an attacker-supplied URL rather than the URL just being
+    reflected or validated client-side.
+  remediation: >
+    Validate and strictly allow-list destination hosts/URLs for any
+    server-side outbound request built from user input; never allow it
+    to reach private/internal IP ranges (RFC 1918, link-local, cloud
+    metadata addresses) or arbitrary schemes. Prefer a fixed set of
+    known-safe destinations over blocklisting.
+  references:
+    - "https://cwe.mitre.org/data/definitions/918.html"

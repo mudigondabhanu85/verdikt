@@ -1,0 +1,28 @@
+# GraphQL agent's catalog (§3). No LLM needed — a single deterministic
+# check: does a probed GraphQL endpoint answer an introspection query?
+
+- id: graphql-introspection-enabled
+  title: "GraphQL Introspection Enabled"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-200"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+  cvss_score: 5.3
+  portswigger_reference_url: "https://portswigger.net/web-security/graphql"
+  plain_language_summary: >
+    This application's GraphQL API allows anyone to request its full
+    schema (every available query, mutation, type, and field) via a
+    standard introspection query. This makes it far easier for an
+    attacker to discover hidden or undocumented functionality — including
+    fields and mutations never exposed in the application's own UI — to
+    target.
+  technical_description: >
+    A standard GraphQL introspection query sent to {url} returned schema
+    information ({schema_summary}), confirming introspection is enabled
+    on this endpoint.
+  remediation: >
+    Disable introspection in production (most GraphQL server frameworks
+    offer a single configuration flag for this), or at minimum restrict
+    it to authenticated internal/developer use only.
+  references:
+    - "https://cwe.mitre.org/data/definitions/200.html"

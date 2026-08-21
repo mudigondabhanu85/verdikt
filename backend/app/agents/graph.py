@@ -6,20 +6,27 @@ from typing import Annotated, TypedDict
 from langgraph.graph import END, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import httpx
+
 from app.agents.access_control import AccessControlAgent
 from app.agents.auth_agent import AuthAgent
 from app.agents.business_logic import BusinessLogicAgent
 from app.agents.clickjacking import ClickjackingAgent
 from app.agents.cors import CorsAgent
 from app.agents.csrf import CsrfAgent
+from app.agents.deserialization import DeserializationAgent
+from app.agents.dom_xss import DomXssAgent
 from app.agents.fingerprint import FingerprintAgent
+from app.agents.graphql import GraphQLAgent
 from app.agents.header_config import HeaderConfigAgent
 from app.agents.host_header import HostHeaderAgent
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
 from app.agents.injection import InjectionAgent
 from app.agents.login import SessionManager
 from app.agents.recon import DiscoveredParameter, FormInfo, ReconAgent
+from app.agents.ssrf import SsrfAgent
 from app.agents.xss import XSSAgent
+from app.agents.xxe import XxeAgent
 from app.ai.budget import BudgetGuard
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
@@ -33,6 +40,7 @@ class ScanState(TypedDict, total=False):
     discovered_endpoints: list[str]
     discovered_parameters: list[DiscoveredParameter]
     discovered_forms: list[FormInfo]
+    discovered_responses: dict[str, httpx.Response]
     tech_stack_fingerprint: dict
     sessions: dict[uuid.UUID, AuthenticatedSession]
     findings: Annotated[list[Finding], operator.add]
@@ -50,16 +58,15 @@ def build_graph(
     budget_guard: BudgetGuard,
     ai_model: str,
 ):
-    """Wires the agent graph: recon fans out to [header_config, host_header,
-    cors, clickjacking, login] in parallel; once login has sessions
-    established, it fans out to [injection, xss, auth, access_control,
-    business_logic, csrf] in parallel too (§10.2's "single biggest lever"
-    — real parallel fan-out, not Phase 1's sequential loop). The
-    endpoint-only checks (header_config/host_header/cors/clickjacking)
-    only depend on recon's endpoint list, so they run fully concurrently
-    with the whole second wave, not just the first; csrf needs both
-    discovered forms and established sessions, so it waits on login like
-    the other identity-aware agents.
+    """Wires the agent graph: recon fans out to every check that only
+    needs its output — [header_config, host_header, cors, clickjacking,
+    xxe, graphql, deserialization, dom_xss, ssrf, login] — in parallel;
+    once login has sessions established, it fans out to [injection, xss,
+    auth, access_control, business_logic, csrf] in parallel too (§10.2's
+    "single biggest lever" — real parallel fan-out, not Phase 1's
+    sequential loop). csrf needs both discovered forms and established
+    sessions, so unlike the other post-recon-only checks it waits on
+    login like the other identity-aware agents.
 
     Each node still creates/updates its own AgentJob row — orchestration
     engine changed, the audit trail shape didn't.
@@ -118,6 +125,7 @@ def build_graph(
             "discovered_endpoints": endpoints,
             "discovered_parameters": agent.discovered_parameters,
             "discovered_forms": agent.discovered_forms,
+            "discovered_responses": agent.discovered_responses,
             "tech_stack_fingerprint": fingerprint,
         }
 
@@ -170,6 +178,65 @@ def build_graph(
         agent = CsrfAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
         try:
             findings = await agent.run(state.get("discovered_forms", []), state.get("sessions", {}))
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def xxe_node(state: ScanState) -> dict:
+        job = await _start_job("xxe")
+        agent = XxeAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
+        try:
+            findings = await agent.run(state.get("discovered_forms", []))
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def graphql_node(state: ScanState) -> dict:
+        job = await _start_job("graphql")
+        agent = GraphQLAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
+        try:
+            findings = await agent.run(state.get("discovered_endpoints", []))
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def deserialization_node(state: ScanState) -> dict:
+        job = await _start_job("deserialization")
+        agent = DeserializationAgent(
+            client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session
+        )
+        try:
+            candidates = await agent.run(
+                state.get("discovered_responses", {}), state.get("discovered_forms", [])
+            )
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"candidates_queued": len(candidates)})
+        return {"review_candidates": candidates}
+
+    async def dom_xss_node(state: ScanState) -> dict:
+        job = await _start_job("dom_xss")
+        agent = DomXssAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
+        try:
+            findings = await agent.run(state.get("discovered_endpoints", []))
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def ssrf_node(state: ScanState) -> dict:
+        job = await _start_job("ssrf")
+        agent = SsrfAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
+        try:
+            findings = await agent.run(state.get("discovered_parameters", []), state.get("discovered_forms", []))
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
@@ -309,6 +376,11 @@ def build_graph(
     graph.add_node("host_header", host_header_node)
     graph.add_node("cors", cors_node)
     graph.add_node("clickjacking", clickjacking_node)
+    graph.add_node("xxe", xxe_node)
+    graph.add_node("graphql", graphql_node)
+    graph.add_node("deserialization", deserialization_node)
+    graph.add_node("dom_xss", dom_xss_node)
+    graph.add_node("ssrf", ssrf_node)
     graph.add_node("login", login_node)
     graph.add_node("injection", injection_node)
     graph.add_node("xss", xss_node)
@@ -322,6 +394,11 @@ def build_graph(
     graph.add_edge("recon", "host_header")
     graph.add_edge("recon", "cors")
     graph.add_edge("recon", "clickjacking")
+    graph.add_edge("recon", "xxe")
+    graph.add_edge("recon", "graphql")
+    graph.add_edge("recon", "deserialization")
+    graph.add_edge("recon", "dom_xss")
+    graph.add_edge("recon", "ssrf")
     graph.add_edge("recon", "login")
     graph.add_edge("login", "injection")
     graph.add_edge("login", "xss")
@@ -333,6 +410,11 @@ def build_graph(
     graph.add_edge("host_header", END)
     graph.add_edge("cors", END)
     graph.add_edge("clickjacking", END)
+    graph.add_edge("xxe", END)
+    graph.add_edge("graphql", END)
+    graph.add_edge("deserialization", END)
+    graph.add_edge("dom_xss", END)
+    graph.add_edge("ssrf", END)
     graph.add_edge("injection", END)
     graph.add_edge("xss", END)
     graph.add_edge("auth", END)
