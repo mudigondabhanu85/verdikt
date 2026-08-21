@@ -88,6 +88,7 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
                 business_rules=business_rules,
                 budget_guard=budget_guard,
                 ai_model=ai_model,
+                scope_entries=scope_entries,
             )
             await graph.ainvoke({})
 

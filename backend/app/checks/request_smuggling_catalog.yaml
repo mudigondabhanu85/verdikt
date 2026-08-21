@@ -1,0 +1,46 @@
+# HTTP request smuggling (§3) — timing-based desync signal only. No LLM
+# needed, but also never auto-confirmed as a Finding: see
+# app.agents.request_smuggling's module docstring for why a timing
+# delta alone always routes to ReviewCandidate under §2's
+# Confirmed-Only Findings Policy.
+
+- id: potential-http-request-smuggling
+  title: "Potential HTTP Request Smuggling (Timing-Based Signal)"
+  owasp_2025_category: "A05 Injection"
+  cwe_id: "CWE-444"
+  severity: "High"
+  cvss_vector: "AV:N/AC:H/PR:N/UI:N/S:C/C:H/I:H/A:N"
+  cvss_score: 8.7
+  portswigger_reference_url: "https://portswigger.net/web-security/request-smuggling"
+  plain_language_summary: >
+    This server's response timing changed in a way consistent with it
+    disagreeing with a front-end proxy or CDN about where one HTTP
+    request ends and the next begins, when both a Content-Length and a
+    Transfer-Encoding header are present on the same request. If this
+    server sits behind a reverse proxy that resolves that ambiguity
+    differently, an attacker could "smuggle" a hidden second request
+    that gets processed as if it came from a different, legitimate
+    user — potentially hijacking sessions or poisoning responses seen
+    by other visitors.
+  technical_description: >
+    A probe request to {url} with conflicting Content-Length and
+    Transfer-Encoding framing ({variant}) produced a response
+    {delta_seconds} seconds slower than a baseline request with
+    unambiguous framing, consistent with this server blocking while
+    waiting for bytes implied by one framing header that a client
+    following the other framing header would never send. This is a
+    timing signal, not a proven smuggling primitive — confirming
+    exploitability requires observing the actual front-end/back-end
+    pairing in production, which this scan does not have visibility
+    into and will not attempt to trigger live (deliberately smuggling a
+    second request risks corrupting or intercepting another real
+    user's traffic).
+  remediation: >
+    Reject any request that specifies both Content-Length and
+    Transfer-Encoding (RFC 7230 §3.3.3 requires the request to be
+    treated as invalid). Ensure every component in the request path —
+    load balancer, CDN, reverse proxy, and origin server — agrees on
+    this behavior, and prefer HTTP/2 end-to-end where possible (it has
+    no equivalent ambiguity).
+  references:
+    - "https://cwe.mitre.org/data/definitions/444.html"

@@ -1,0 +1,36 @@
+# OAuth authorization flow agent's deterministic check catalog (§3). No
+# LLM needed — a single differential check: does the authorization
+# server validate redirect_uri against a registered allow-list?
+
+- id: oauth-redirect-uri-validation-bypass
+  title: "OAuth redirect_uri Validation Bypass"
+  owasp_2025_category: "A01 Broken Access Control"
+  cwe_id: "CWE-601"
+  severity: "Critical"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:L/A:N"
+  cvss_score: 8.1
+  portswigger_reference_url: "https://portswigger.net/web-security/oauth"
+  plain_language_summary: >
+    This application's OAuth authorization endpoint accepts an
+    arbitrary, attacker-supplied redirect_uri instead of validating it
+    against a pre-registered allow-list for the client application. An
+    attacker can craft an authorization link that redirects the victim's
+    authorization code (or access token) to a server the attacker
+    controls, letting them complete the OAuth flow as the victim and
+    take over their account or access their data on the victim's
+    behalf.
+  technical_description: >
+    A request to {url} with its redirect_uri parameter replaced with an
+    attacker-controlled value ("{attacker_redirect}") was accepted by
+    the authorization server, which redirected there carrying the
+    authorization grant — instead of rejecting the request or requiring
+    redirect_uri to exactly match one registered for this client_id.
+  remediation: >
+    Validate redirect_uri on every authorization request against an
+    exact, pre-registered allow-list per client_id (not a prefix or
+    substring match, and not merely checking the host). Reject the
+    request outright — do not redirect anywhere, including to a
+    "safe" default — if redirect_uri doesn't match.
+  references:
+    - "https://cwe.mitre.org/data/definitions/601.html"
+    - "https://datatracker.ietf.org/doc/html/rfc6819#section-4.4.1.7"

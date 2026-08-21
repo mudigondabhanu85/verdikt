@@ -87,6 +87,7 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             business_rules=[],
             budget_guard=guard,
             ai_model="fake-model",
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
         )
         final_state = await graph.ainvoke({})
         await client.aclose()
@@ -106,6 +107,9 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             "dom_xss",
             "ssrf",
             "prototype_pollution",
+            "request_smuggling",
+            "oauth",
+            "cache_poisoning",
             "login",
             "injection",
             "xss",
@@ -115,6 +119,7 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             "csrf",
             "stored_xss",
             "file_upload",
+            "websocket",
         }
         assert all(j.status == "completed" for j in jobs), jobs
 

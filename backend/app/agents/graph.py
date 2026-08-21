@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.access_control import AccessControlAgent
 from app.agents.auth_agent import AuthAgent
 from app.agents.business_logic import BusinessLogicAgent
+from app.agents.cache_poisoning import CachePoisoningAgent
 from app.agents.clickjacking import ClickjackingAgent
 from app.agents.cors import CorsAgent
 from app.agents.csrf import CsrfAgent
@@ -23,16 +24,20 @@ from app.agents.host_header import HostHeaderAgent
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
 from app.agents.injection import InjectionAgent
 from app.agents.login import SessionManager
+from app.agents.oauth import OAuthAgent
 from app.agents.prototype_pollution import PrototypePollutionAgent
 from app.agents.recon import DiscoveredParameter, FormInfo, ReconAgent
+from app.agents.request_smuggling import RequestSmugglingAgent
 from app.agents.ssrf import SsrfAgent
 from app.agents.stored_xss import StoredXssAgent
+from app.agents.websocket_security import WebSocketAgent
 from app.agents.xss import XSSAgent
 from app.agents.xxe import XxeAgent
 from app.ai.budget import BudgetGuard
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
 from app.models.finding import Finding
+from app.models.project import ScopeEntry
 from app.models.review_candidate import ReviewCandidate
 from app.models.scan import AgentJob, ScanRun
 from app.models.target import Target
@@ -43,6 +48,7 @@ class ScanState(TypedDict, total=False):
     discovered_parameters: list[DiscoveredParameter]
     discovered_forms: list[FormInfo]
     discovered_responses: dict[str, httpx.Response]
+    discovered_websocket_endpoints: list[str]
     tech_stack_fingerprint: dict
     sessions: dict[uuid.UUID, AuthenticatedSession]
     findings: Annotated[list[Finding], operator.add]
@@ -59,16 +65,19 @@ def build_graph(
     business_rules: list[BusinessRule],
     budget_guard: BudgetGuard,
     ai_model: str,
+    scope_entries: list[ScopeEntry],
 ):
     """Wires the agent graph: recon fans out to every check that only
     needs its output — [header_config, host_header, cors, clickjacking,
-    xxe, graphql, deserialization, dom_xss, ssrf, login] — in parallel;
+    xxe, graphql, deserialization, dom_xss, ssrf, prototype_pollution,
+    request_smuggling, oauth, cache_poisoning, login] — in parallel;
     once login has sessions established, it fans out to [injection, xss,
-    auth, access_control, business_logic, csrf] in parallel too (§10.2's
-    "single biggest lever" — real parallel fan-out, not Phase 1's
-    sequential loop). csrf needs both discovered forms and established
-    sessions, so unlike the other post-recon-only checks it waits on
-    login like the other identity-aware agents.
+    auth, access_control, business_logic, csrf, stored_xss, file_upload,
+    websocket] in parallel too (§10.2's "single biggest lever" — real
+    parallel fan-out, not Phase 1's sequential loop). csrf/stored_xss/
+    file_upload/websocket need both discovered forms/endpoints and
+    established sessions, so unlike the other post-recon-only checks
+    they wait on login like the other identity-aware agents.
 
     Each node still creates/updates its own AgentJob row — orchestration
     engine changed, the audit trail shape didn't.
@@ -138,6 +147,7 @@ def build_graph(
             "discovered_parameters": agent.discovered_parameters,
             "discovered_forms": agent.discovered_forms,
             "discovered_responses": agent.discovered_responses,
+            "discovered_websocket_endpoints": agent.discovered_websocket_endpoints,
             "tech_stack_fingerprint": fingerprint,
         }
 
@@ -218,6 +228,25 @@ def build_graph(
         await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
         return {"findings": findings}
 
+    async def websocket_node(state: ScanState) -> dict:
+        job = await _start_job("websocket")
+        agent = WebSocketAgent(
+            client,
+            scan_run_id=scan_run_id,
+            agent_job_id=job.id,
+            db_session=session,
+            scope_entries=scope_entries,
+        )
+        try:
+            findings = await agent.run(
+                state.get("discovered_websocket_endpoints", []), state.get("sessions", {})
+            )
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
     async def xxe_node(state: ScanState) -> dict:
         job = await _start_job("xxe")
         agent = XxeAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
@@ -280,6 +309,43 @@ def build_graph(
     async def prototype_pollution_node(state: ScanState) -> dict:
         job = await _start_job("prototype_pollution")
         agent = PrototypePollutionAgent(
+            client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session
+        )
+        try:
+            findings = await agent.run(state.get("discovered_endpoints", []))
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def request_smuggling_node(state: ScanState) -> dict:
+        job = await _start_job("request_smuggling")
+        agent = RequestSmugglingAgent(
+            client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session
+        )
+        try:
+            candidates = await agent.run(state.get("discovered_endpoints", []))
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"candidates_queued": len(candidates)})
+        return {"review_candidates": candidates}
+
+    async def oauth_node(state: ScanState) -> dict:
+        job = await _start_job("oauth")
+        agent = OAuthAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
+        try:
+            findings = await agent.run(state.get("discovered_endpoints", []))
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def cache_poisoning_node(state: ScanState) -> dict:
+        job = await _start_job("cache_poisoning")
+        agent = CachePoisoningAgent(
             client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session
         )
         try:
@@ -429,6 +495,9 @@ def build_graph(
     graph.add_node("dom_xss", dom_xss_node)
     graph.add_node("ssrf", ssrf_node)
     graph.add_node("prototype_pollution", prototype_pollution_node)
+    graph.add_node("request_smuggling", request_smuggling_node)
+    graph.add_node("oauth", oauth_node)
+    graph.add_node("cache_poisoning", cache_poisoning_node)
     graph.add_node("login", login_node)
     graph.add_node("injection", injection_node)
     graph.add_node("xss", xss_node)
@@ -438,6 +507,7 @@ def build_graph(
     graph.add_node("csrf", csrf_node)
     graph.add_node("stored_xss", stored_xss_node)
     graph.add_node("file_upload", file_upload_node)
+    graph.add_node("websocket", websocket_node)
 
     graph.set_entry_point("recon")
     graph.add_edge("recon", "header_config")
@@ -450,6 +520,9 @@ def build_graph(
     graph.add_edge("recon", "dom_xss")
     graph.add_edge("recon", "ssrf")
     graph.add_edge("recon", "prototype_pollution")
+    graph.add_edge("recon", "request_smuggling")
+    graph.add_edge("recon", "oauth")
+    graph.add_edge("recon", "cache_poisoning")
     graph.add_edge("recon", "login")
     graph.add_edge("login", "injection")
     graph.add_edge("login", "xss")
@@ -459,6 +532,7 @@ def build_graph(
     graph.add_edge("login", "csrf")
     graph.add_edge("login", "stored_xss")
     graph.add_edge("login", "file_upload")
+    graph.add_edge("login", "websocket")
     graph.add_edge("header_config", END)
     graph.add_edge("host_header", END)
     graph.add_edge("cors", END)
@@ -469,6 +543,10 @@ def build_graph(
     graph.add_edge("dom_xss", END)
     graph.add_edge("ssrf", END)
     graph.add_edge("prototype_pollution", END)
+    graph.add_edge("request_smuggling", END)
+    graph.add_edge("oauth", END)
+    graph.add_edge("cache_poisoning", END)
+    graph.add_edge("websocket", END)
     graph.add_edge("injection", END)
     graph.add_edge("xss", END)
     graph.add_edge("auth", END)

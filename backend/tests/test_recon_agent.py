@@ -20,7 +20,6 @@ PAGES = {
         '<html><body><a href="/deep/page">Deep</a></body></html>',
     ),
     "http://site.test/contact": ("text/html", "<html><body>Contact us</body></html>"),
-    "http://site.test/deep/page": ("text/html", "<html><body>Deep page</body></html>"),
     "http://site.test/search?q=widgets": ("text/html", "<html><body>Results for widgets</body></html>"),
     "http://site.test/login": (
         "text/html",
@@ -37,6 +36,11 @@ PAGES = {
         "<urlset><url><loc>http://site.test/from-sitemap</loc></url></urlset>",
     ),
     "http://site.test/from-sitemap": ("text/html", "<html><body>From sitemap</body></html>"),
+    "http://site.test/deep/page": (
+        "text/html",
+        '<html><body>Deep page<script>var s = new WebSocket("wss://site.test/live-feed");'
+        "</script></body></html>",
+    ),
 }
 
 
@@ -125,5 +129,7 @@ async def test_recon_agent_discovers_query_params_and_forms(db_adapter):
         assert field_names == {"username", "password", "csrf"}
         password_field = next(f for f in form.fields if f.name == "password")
         assert password_field.type == "password"
+
+        assert agent.discovered_websocket_endpoints == ["wss://site.test/live-feed"]
 
         await client.aclose()

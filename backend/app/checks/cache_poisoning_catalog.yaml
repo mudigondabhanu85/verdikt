@@ -1,0 +1,65 @@
+# Web cache poisoning/deception agent's deterministic check catalog
+# (§3). No LLM needed — both checks are differential, re-execution-
+# confirmable response inspections.
+
+- id: web-cache-poisoning-unkeyed-input
+  title: "Web Cache Poisoning via Unkeyed Input"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-441"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:C/C:N/I:H/A:N"
+  cvss_score: 8.6
+  portswigger_reference_url: "https://portswigger.net/web-security/web-cache-poisoning"
+  plain_language_summary: >
+    This application reflects an HTTP header (such as
+    X-Forwarded-Host) into its response, and a shared/CDN cache in
+    front of it caches that response without varying the cache entry
+    by that header's value. An attacker can send one request with a
+    malicious header value to "poison" the cached response, which the
+    cache then serves — unchanged — to every other visitor of that
+    page until the entry expires.
+  technical_description: >
+    A request to {url} with the header "{header_name}: {marker}" caused
+    "{marker}" to be reflected in the response. A subsequent, entirely
+    plain request to the same URL (with no special headers at all) also
+    returned "{marker}" in its response — proving the poisoned response
+    was cached and served back to a request that never sent that
+    header, i.e. a different "visitor."
+  remediation: >
+    Configure the cache to vary its cache key on any request header
+    the origin server's response actually depends on (or, preferably,
+    stop deriving response content from unkeyed headers like
+    X-Forwarded-Host/X-Forwarded-Scheme entirely — use a fixed,
+    server-side configured value instead).
+  references:
+    - "https://cwe.mitre.org/data/definitions/441.html"
+
+- id: web-cache-deception
+  title: "Web Cache Deception"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-524"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:L/UI:R/S:U/C:H/I:N/A:N"
+  cvss_score: 7.1
+  portswigger_reference_url: "https://portswigger.net/web-security/web-cache-deception"
+  plain_language_summary: >
+    This application served the same (potentially user-specific)
+    content for a URL with a fake static-file extension appended (e.g.
+    "/account/profile.js") as it does for the real, dynamic URL — and
+    marked that response as publicly cacheable. An attacker can trick a
+    victim into visiting the fake-extension URL, causing a shared/CDN
+    cache to store a copy of the victim's own page content, which the
+    attacker can then simply request themselves to read it.
+  technical_description: >
+    A request to {deceptive_url} (the discovered URL {url} with a fake
+    static extension appended) returned the same substantive content as
+    the original URL, with response headers indicating the response is
+    publicly cacheable (no "Cache-Control: private/no-store" present).
+  remediation: >
+    Ensure the application's routing doesn't treat an arbitrary
+    trailing path segment as ignorable — return a genuine 404 for
+    unmapped paths — and explicitly mark any response containing
+    per-user or otherwise sensitive content as
+    "Cache-Control: private, no-store".
+  references:
+    - "https://cwe.mitre.org/data/definitions/524.html"

@@ -48,6 +48,25 @@ _PROMOTION_METADATA = {
             "a binary/native format is unavoidable."
         ),
     },
+    "potential-http-request-smuggling": {
+        "owasp_2025_category": "A05 Injection",
+        "cwe_id": "CWE-444",
+        "cvss_vector": "AV:N/AC:H/PR:N/UI:N/S:C/C:H/I:H/A:N",
+        "cvss_score": 8.7,
+        "portswigger_reference_url": "https://portswigger.net/web-security/request-smuggling",
+        "plain_language_summary": (
+            "An analyst manually reviewed a timing-based request-smuggling signal "
+            "(app.agents.request_smuggling only measures response-time deltas from ambiguous "
+            "Content-Length/Transfer-Encoding framing — it never actually smuggles a request, "
+            "which could corrupt or intercept another real user's traffic) and confirmed it "
+            "represents a real desync risk."
+        ),
+        "remediation": (
+            "Reject any request that specifies both Content-Length and Transfer-Encoding (RFC "
+            "7230 §3.3.3 requires the request to be treated as invalid). Ensure every component "
+            "in the request path agrees on this behavior."
+        ),
+    },
 }
 
 

@@ -11,6 +11,11 @@ from app.models.target import Target
 
 _ROBOTS_DISALLOW_RE = re.compile(r"^\s*Disallow:\s*(\S+)", re.IGNORECASE | re.MULTILINE)
 _SITEMAP_LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.IGNORECASE)
+# Looks for ws(s):// literals in any fetched page or script body (e.g.
+# inside a `new WebSocket("wss://...")` call) — good enough to surface
+# an endpoint for app.agents.websocket_security without needing to
+# actually execute the page's JS.
+_WEBSOCKET_URL_RE = re.compile(r"wss?://[^\s\"'<>\\]+")
 
 
 @dataclass
@@ -70,6 +75,10 @@ def extract_forms(base_url: str, soup: BeautifulSoup) -> list[FormInfo]:
     return forms
 
 
+def _extract_websocket_urls(text: str) -> list[str]:
+    return list(dict.fromkeys(_WEBSOCKET_URL_RE.findall(text)))
+
+
 def _extract_query_params(url: str) -> list[DiscoveredParameter]:
     query = urlsplit(url).query
     if not query:
@@ -114,6 +123,7 @@ class ReconAgent:
         # URL — reused by FingerprintAgent (§10 smart scan) so tech-stack
         # detection costs zero extra requests instead of re-fetching.
         self.discovered_responses: dict[str, httpx.Response] = {}
+        self.discovered_websocket_endpoints: list[str] = []
 
     async def _fetch(self, url: str) -> httpx.Response | None:
         async with self._semaphore:
@@ -147,6 +157,9 @@ class ReconAgent:
                 if response.status_code < 400:
                     discovered[url] = response
                     self.discovered_parameters.extend(_extract_query_params(url))
+                    for ws_url in _extract_websocket_urls(response.text):
+                        if ws_url not in self.discovered_websocket_endpoints:
+                            self.discovered_websocket_endpoints.append(ws_url)
                 next_frontier.extend(self._follow_up_links(url, response))
 
             frontier = next_frontier

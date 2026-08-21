@@ -1,0 +1,36 @@
+# WebSocket agent's deterministic check catalog (§3) — a single binary
+# check: does the WebSocket handshake endpoint validate the Origin
+# header before completing the upgrade?
+
+- id: websocket-missing-origin-validation
+  title: "Cross-Site WebSocket Hijacking (Missing Origin Validation)"
+  owasp_2025_category: "A01 Broken Access Control"
+  cwe_id: "CWE-346"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:N"
+  cvss_score: 8.0
+  portswigger_reference_url: "https://portswigger.net/web-security/websockets/cross-site-websocket-hijacking"
+  plain_language_summary: >
+    This application's WebSocket endpoint completes the connection
+    handshake regardless of which website initiated it (the Origin
+    header), relying only on ambient session cookies for
+    authentication. A malicious website visited by a logged-in user can
+    silently open a live, authenticated WebSocket connection to this
+    endpoint from the victim's browser and send/receive data over it —
+    the WebSocket-era equivalent of CSRF, often with a bigger blast
+    radius since the connection stays open and bidirectional.
+  technical_description: >
+    A WebSocket handshake request to {url} with the header
+    "Origin: {forged_origin}" (and no other origin validation) received
+    a "101 Switching Protocols" response, completing the upgrade
+    despite the request originating from an unrelated,
+    attacker-controlled site.
+  remediation: >
+    Validate the Origin header on every WebSocket handshake against a
+    strict, server-side allow-list of trusted origins, and reject the
+    upgrade (do not respond 101) for anything else. Do not rely on
+    Origin alone if the endpoint is reachable without a browser (e.g.
+    also require a per-connection CSRF-style token issued to the
+    authenticated page).
+  references:
+    - "https://cwe.mitre.org/data/definitions/346.html"
