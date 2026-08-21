@@ -7,6 +7,7 @@ import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { OidcCallbackPage } from './pages/OidcCallbackPage'
 import { ProjectsPage } from './pages/ProjectsPage'
+import { DashboardPage } from './pages/DashboardPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
 import { VersionDetailPage } from './pages/VersionDetailPage'
 import { ScanRunDetailPage } from './pages/ScanRunDetailPage'
@@ -28,6 +29,7 @@ export default function App() {
             <Route element={<ProtectedRoute />}>
               <Route element={<Layout />}>
                 <Route path="/" element={<ProjectsPage />} />
+                <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
                 <Route path="/versions/:versionId" element={<VersionDetailPage />} />
                 <Route path="/scan-runs/:scanRunId" element={<ScanRunDetailPage />} />

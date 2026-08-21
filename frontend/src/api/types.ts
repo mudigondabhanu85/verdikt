@@ -156,6 +156,33 @@ export interface AgentJobOut {
   stats: Record<string, unknown> | null
 }
 
+export interface ScanRunDiffOut {
+  earlier_scan_run_id: string
+  later_scan_run_id: string
+  new_findings: FindingOut[]
+  fixed_findings: FindingOut[]
+  still_open_findings: FindingOut[]
+}
+
+export interface DashboardScanRunSummary {
+  id: string
+  version_id: string
+  project_name: string
+  version_name: string
+  status: string
+  started_at: string | null
+  completed_at: string | null
+  finding_counts_by_severity: Record<string, number>
+}
+
+export interface DashboardOut {
+  total_projects: number
+  total_versions: number
+  total_scan_runs: number
+  open_findings_by_severity: Record<string, number>
+  recent_scan_runs: DashboardScanRunSummary[]
+}
+
 export interface ScanRunDetail extends ScanRunOut {
   agent_jobs: AgentJobOut[]
   finding_counts_by_severity: Record<string, number>

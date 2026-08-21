@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { downloadReport } from '../../api/client'
 
-const FORMATS = ['json', 'html', 'pdf', 'docx'] as const
+const FORMATS = ['json', 'html', 'pdf', 'docx', 'csv'] as const
 
 export function ReportsTab({ scanRunId }: { scanRunId: string }) {
   const [downloading, setDownloading] = useState<string | null>(null)

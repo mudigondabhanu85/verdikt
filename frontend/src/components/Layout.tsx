@@ -18,6 +18,9 @@ export function Layout() {
             Verdikt
           </Link>
           <nav className="flex items-center gap-6 text-sm">
+            <Link to="/dashboard" className="text-gray-600 hover:text-gray-900">
+              Dashboard
+            </Link>
             <Link to="/" className="text-gray-600 hover:text-gray-900">
               Projects
             </Link>

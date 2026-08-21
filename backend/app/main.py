@@ -8,6 +8,7 @@ from app.api.routes import (
     burp,
     business_rules,
     credentials,
+    dashboard,
     objects,
     oidc,
     organizations,
@@ -47,6 +48,7 @@ app.include_router(business_rules.router)
 app.include_router(burp.router)
 app.include_router(objects.router)
 app.include_router(retest_jobs.router)
+app.include_router(dashboard.router)
 
 
 @app.get("/health")

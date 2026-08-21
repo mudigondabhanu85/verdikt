@@ -8,6 +8,7 @@ import type {
   BurpScanCreated,
   BusinessRuleOut,
   CredentialSetOut,
+  DashboardOut,
   LoginMacroOut,
   FindingOut,
   HttpRequest,
@@ -18,6 +19,7 @@ import type {
   RetestJobOut,
   ReviewCandidateOut,
   ScanRunDetail,
+  ScanRunDiffOut,
   ScanRunOut,
   ScopeEntryOut,
   TargetOut,
@@ -108,7 +110,10 @@ async function request<T>(
 // Blob download for the four report formats — needs the bearer token
 // on the request, so a plain <a href> won't work (no way to attach an
 // Authorization header to a browser-navigated download).
-export async function downloadReport(scanRunId: string, format: 'json' | 'html' | 'pdf' | 'docx'): Promise<void> {
+export async function downloadReport(
+  scanRunId: string,
+  format: 'json' | 'html' | 'pdf' | 'docx' | 'csv',
+): Promise<void> {
   const token = getToken()
   const response = await fetch(`${BASE_URL}/scan-runs/${scanRunId}/report.${format}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -140,6 +145,7 @@ export const api = {
 
   organizations: {
     me: () => request<OrganizationOut>('/organizations/me'),
+    dashboard: () => request<DashboardOut>('/organizations/me/dashboard'),
   },
 
   projects: {
@@ -234,6 +240,8 @@ export const api = {
     retest: (versionId: string, priorScanRunId: string) =>
       request<ScanRunOut>(`/versions/${versionId}/scan-runs/${priorScanRunId}/retest`, { method: 'POST' }),
     findings: (scanRunId: string) => request<FindingOut[]>(`/scan-runs/${scanRunId}/findings`),
+    diff: (laterScanRunId: string, earlierScanRunId: string) =>
+      request<ScanRunDiffOut>(`/scan-runs/${laterScanRunId}/diff/${earlierScanRunId}`),
   },
 
   retestJobs: {

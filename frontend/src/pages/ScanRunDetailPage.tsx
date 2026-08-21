@@ -7,6 +7,7 @@ import { AgentJobsTab } from './scanrun/AgentJobsTab'
 import { FindingsTab } from './scanrun/FindingsTab'
 import { ReviewCandidatesTab } from './scanrun/ReviewCandidatesTab'
 import { ReportsTab } from './scanrun/ReportsTab'
+import { DiffTab } from './scanrun/DiffTab'
 
 export function ScanRunDetailPage() {
   const { scanRunId } = useParams<{ scanRunId: string }>()
@@ -38,6 +39,7 @@ export function ScanRunDetailPage() {
           { key: 'findings', label: 'Findings', content: <FindingsTab scanRunId={scanRunId} /> },
           { key: 'review-candidates', label: 'Review Candidates', content: <ReviewCandidatesTab scanRunId={scanRunId} /> },
           { key: 'reports', label: 'Reports', content: <ReportsTab scanRunId={scanRunId} /> },
+          { key: 'diff', label: 'Diff', content: <DiffTab scanRunId={scanRunId} versionId={scanRun.version_id} /> },
         ]}
       />
     </div>

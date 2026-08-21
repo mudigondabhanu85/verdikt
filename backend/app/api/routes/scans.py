@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.agents.retest import execute_retest
+from app.agents.retest import _match_key, execute_retest
 from app.agents.runner import execute_scan_run
 from app.ai.budget import BudgetGuard
 from app.ai.provider import resolve_provider_and_model
@@ -20,13 +20,14 @@ from app.models.finding import Finding
 from app.models.organization import User
 from app.models.project import Version
 from app.models.scan import AgentJob, ScanRun
+from app.reporting.csv_report import render_csv_report
 from app.reporting.docx_report import render_docx_report
 from app.reporting.executive_summary import generate_executive_summary
 from app.reporting.html_report import render_html_report
 from app.reporting.pdf_report import render_pdf_report
 from app.reporting.screenshots import load_screenshots_by_finding
 from app.schemas.finding import FindingOut
-from app.schemas.scan import AgentJobOut, ScanRunCreate, ScanRunDetail, ScanRunOut
+from app.schemas.scan import AgentJobOut, ScanRunCreate, ScanRunDetail, ScanRunDiffOut, ScanRunOut
 
 router = APIRouter(tags=["scans"])
 
@@ -306,4 +307,57 @@ async def get_report_docx(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="verdikt-report-{scan_run_id}.docx"'},
+    )
+
+
+@router.get("/scan-runs/{scan_run_id}/report.csv")
+async def get_report_csv(
+    scan_run_id: uuid.UUID,
+    user: User = Depends(require_permission("scan", "read")),
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    findings = await _list_findings(session, scan_run_id)
+    csv_text = render_csv_report(findings)
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="verdikt-report-{scan_run_id}.csv"'},
+    )
+
+
+@router.get("/scan-runs/{later_scan_run_id}/diff/{earlier_scan_run_id}", response_model=ScanRunDiffOut)
+async def get_scan_run_diff(
+    later_scan_run_id: uuid.UUID,
+    earlier_scan_run_id: uuid.UUID,
+    user: User = Depends(require_permission("scan", "read")),
+    session: AsyncSession = Depends(get_db_session),
+) -> ScanRunDiffOut:
+    """§8 diff report — what changed between two scan runs against the
+    same Version. Matches findings the same way app.agents.retest's
+    scan-level diff already does (check_id + affected_endpoints), so
+    "fixed" here means exactly what flips a Finding.retest_status to
+    "fixed" during a rescan — this endpoint doesn't introduce a second,
+    subtly different notion of "fixed".
+    """
+    later = await get_scan_run_or_404(session, later_scan_run_id, user.org_id)
+    earlier = await get_scan_run_or_404(session, earlier_scan_run_id, user.org_id)
+    if later.version_id != earlier.version_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Both scan runs must belong to the same Version")
+
+    earlier_findings = await _list_findings(session, earlier_scan_run_id)
+    later_findings = await _list_findings(session, later_scan_run_id)
+    earlier_keys = {_match_key(f) for f in earlier_findings}
+    later_keys = {_match_key(f) for f in later_findings}
+
+    new_findings = [f for f in later_findings if _match_key(f) not in earlier_keys]
+    fixed_findings = [f for f in earlier_findings if _match_key(f) not in later_keys]
+    still_open_findings = [f for f in later_findings if _match_key(f) in earlier_keys]
+
+    return ScanRunDiffOut(
+        earlier_scan_run_id=earlier_scan_run_id,
+        later_scan_run_id=later_scan_run_id,
+        new_findings=[FindingOut.model_validate(f) for f in new_findings],
+        fixed_findings=[FindingOut.model_validate(f) for f in fixed_findings],
+        still_open_findings=[FindingOut.model_validate(f) for f in still_open_findings],
     )
