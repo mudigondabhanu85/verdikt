@@ -1,7 +1,8 @@
 # Verdikt
 
-AI multi-agent web application & API security testing platform. See the build prompt
-for full product scope. The backend implements the full agent/scanning/reporting
+AI multi-agent web application & API security testing platform. See
+[`docs/BUILD_SPEC.md`](docs/BUILD_SPEC.md) for the full governing product spec. The backend
+implements the full agent/scanning/reporting
 pipeline (recon through a broad §3 vulnerability taxonomy, retest, enterprise
 hardening); the frontend (§7) is a first-pass web UI covering the core engagement
 workflow end to end.
