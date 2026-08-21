@@ -24,11 +24,30 @@ services:
       DATABASE_URL: postgresql+psycopg://verdikt:verdikt@db:5432/verdikt
       JWT_SECRET: dev-only-change-me-to-something-random-and-32-bytes-plus
       VAULT_MASTER_KEY: dev-only-insecure-fernet-key-000000000000=
+      # Must match the frontend service's browser-visible origin below
+      # (CORS checks the Origin header the browser actually sends, not
+      # any container-internal address) — see app/config.py.
+      FRONTEND_ORIGIN: http://localhost:5173
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
     command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    environment:
+      # Browser-visible backend address — the frontend container's own
+      # network namespace is irrelevant here, this runs in the user's
+      # browser on the host.
+      VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
 
 volumes:
   verdikt_pgdata:

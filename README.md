@@ -38,6 +38,24 @@ http://localhost:8000 (see `frontend/.env`'s `VITE_API_BASE_URL`). The backend's
 `frontend_origin` setting (`app/config.py`) must match the frontend's own origin for
 CORS — both default to `http://localhost:5173`.
 
+### Or: everything via Docker Compose
+
+```bash
+cp .env.example backend/.env   # adjust as needed
+docker compose up --build
+```
+
+Starts Postgres, the backend (with `--reload`), and the frontend dev server
+together — `backend/Dockerfile` and `frontend/Dockerfile` build real images (the
+backend image also installs Playwright's Chromium, which several agents launch a
+real browser through). Migrations aren't run automatically by the compose file;
+run `docker compose exec backend uv run alembic upgrade head` once the `db`
+service is healthy. **Not exercised against a real Docker installation in this
+build environment** (no `docker` binary available here) — the Dockerfiles and
+compose config are reviewed for correctness and the compose YAML parses cleanly,
+but this is the one piece of local-dev setup that couldn't be run end to end
+before being committed.
+
 ## Tests
 
 The DB layer is intentionally dialect-agnostic (SQLAlchemy ORM only, no Postgres-only
