@@ -339,6 +339,41 @@ export interface BurpImportResult {
   finding_ids: string[]
 }
 
+export const NOTIFICATION_PROVIDER_TYPES = ['slack'] as const
+export type NotificationProviderType = (typeof NOTIFICATION_PROVIDER_TYPES)[number]
+
+export interface NotificationConfigOut {
+  id: string
+  org_id: string
+  label: string
+  provider: NotificationProviderType
+  masked_reference: string
+  notify_on_scan_completed: boolean
+}
+
+export const TICKETING_PROVIDER_TYPES = ['jira'] as const
+export type TicketingProviderType = (typeof TICKETING_PROVIDER_TYPES)[number]
+
+export interface TicketingConfigOut {
+  id: string
+  org_id: string
+  label: string
+  provider: TicketingProviderType
+  base_url: string
+  email: string
+  masked_reference: string
+  project_key: string
+  issue_type: string
+}
+
+export interface FindingTicketOut {
+  id: string
+  finding_id: string
+  ticketing_config_id: string
+  external_key: string
+  external_url: string
+}
+
 export interface OidcProviderConfigOut {
   id: string
   org_id: string

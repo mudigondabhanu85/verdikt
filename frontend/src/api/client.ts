@@ -9,7 +9,9 @@ import type {
   BusinessRuleOut,
   CredentialSetOut,
   DashboardOut,
+  FindingTicketOut,
   LoginMacroOut,
+  NotificationConfigOut,
   FindingOut,
   HttpRequest,
   HttpResponse,
@@ -23,6 +25,7 @@ import type {
   ScanRunOut,
   ScopeEntryOut,
   TargetOut,
+  TicketingConfigOut,
   TokenResponse,
   TrafficImportResult,
   TrafficInteractionOut,
@@ -316,6 +319,37 @@ export const api = {
         timeout?: number
       },
     ) => request<BurpImportResult>(`/versions/${versionId}/burp/scans/${taskId}/import`, { method: 'POST', body }),
+  },
+
+  notificationConfigs: {
+    list: () => request<NotificationConfigOut[]>('/notification-configs'),
+    create: (body: { label: string; provider: string; webhook_url: string; notify_on_scan_completed?: boolean }) =>
+      request<NotificationConfigOut>('/notification-configs', { method: 'POST', body }),
+    delete: (id: string) => request<void>(`/notification-configs/${id}`, { method: 'DELETE' }),
+    test: (id: string) => request<void>(`/notification-configs/${id}/test`, { method: 'POST' }),
+  },
+
+  ticketingConfigs: {
+    list: () => request<TicketingConfigOut[]>('/ticketing-configs'),
+    create: (body: {
+      label: string
+      provider: string
+      base_url: string
+      email: string
+      api_token: string
+      project_key: string
+      issue_type?: string
+    }) => request<TicketingConfigOut>('/ticketing-configs', { method: 'POST', body }),
+    delete: (id: string) => request<void>(`/ticketing-configs/${id}`, { method: 'DELETE' }),
+  },
+
+  findingTickets: {
+    list: (findingId: string) => request<FindingTicketOut[]>(`/findings/${findingId}/tickets`),
+    create: (findingId: string, ticketingConfigId: string) =>
+      request<FindingTicketOut>(`/findings/${findingId}/tickets`, {
+        method: 'POST',
+        body: { ticketing_config_id: ticketingConfigId },
+      }),
   },
 
   oidcProviderConfigs: {

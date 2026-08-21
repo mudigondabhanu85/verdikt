@@ -14,6 +14,7 @@ from app.models.credential import CredentialSet
 from app.models.project import ScopeEntry
 from app.models.scan import ScanRun
 from app.models.target import Target
+from app.notifications.scan_notifications import notify_scan_completed
 
 
 async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
@@ -101,3 +102,4 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
                 await client.aclose()
             scan_run.completed_at = datetime.now(timezone.utc)
             await session.commit()
+            await notify_scan_completed(session, scan_run)

@@ -16,6 +16,8 @@ RESOURCES = (
     "business_rule",
     "ai_provider_config",
     "oidc_provider_config",
+    "notification_config",
+    "ticketing_config",
 )
 ACTIONS = ("create", "read", "update", "delete")
 
@@ -42,6 +44,8 @@ def baseline_grants() -> list[tuple[str, str, str]]:
         "business_rule",
         "ai_provider_config",
         "oidc_provider_config",
+        "notification_config",
+        "ticketing_config",
     ):
         for action in ACTIONS:
             grants.append(("project_lead", resource, action))
@@ -98,3 +102,17 @@ def oidc_provider_config_resource_grants() -> list[tuple[str, str, str]]:
     incremental migration adding this resource, same reasoning as
     scan_resource_grants() above."""
     return _grants_for_resource("oidc_provider_config")
+
+
+def notification_config_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "notification_config" resource rows — used by the
+    incremental migration adding this resource, same reasoning as
+    scan_resource_grants() above."""
+    return _grants_for_resource("notification_config")
+
+
+def ticketing_config_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "ticketing_config" resource rows — used by the
+    incremental migration adding this resource, same reasoning as
+    scan_resource_grants() above."""
+    return _grants_for_resource("ticketing_config")

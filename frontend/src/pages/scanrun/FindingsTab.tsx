@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError, BASE_URL } from '../../api/client'
 import { SeverityBadge, StatusBadge } from '../../components/Badges'
+import { TicketSection } from './TicketSection'
 import type { FindingOut } from '../../api/types'
 
 const RETEST_RESULT_LABELS: Record<string, string> = {
@@ -105,6 +106,7 @@ function FindingDetail({ scanRunId, finding }: { scanRunId: string; finding: Fin
       </div>
 
       <RetestSection scanRunId={scanRunId} finding={finding} />
+      <TicketSection findingId={finding.id} />
 
       {finding.evidence && (
         <div>

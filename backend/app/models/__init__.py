@@ -8,7 +8,9 @@ from app.models.audit import AuditLogEntry
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
 from app.models.finding import Evidence, Finding
+from app.models.finding_ticket import FindingTicket
 from app.models.login_macro import LoginMacro
+from app.models.notification_config import NotificationConfig
 from app.models.oidc_provider_config import OidcProviderConfig
 from app.models.organization import Organization, User
 from app.models.project import AuthorizationRecord, Project, ScopeEntry, Version
@@ -17,6 +19,7 @@ from app.models.retest_job import RetestJob
 from app.models.review_candidate import ReviewCandidate
 from app.models.scan import AgentJob, ScanRun
 from app.models.target import Target
+from app.models.ticketing_config import TicketingConfig
 from app.models.traffic import TrafficInteraction
 
 __all__ = [
@@ -27,7 +30,9 @@ __all__ = [
     "CredentialSet",
     "Evidence",
     "Finding",
+    "FindingTicket",
     "LoginMacro",
+    "NotificationConfig",
     "OidcProviderConfig",
     "Organization",
     "User",
@@ -41,5 +46,6 @@ __all__ = [
     "AgentJob",
     "ScanRun",
     "Target",
+    "TicketingConfig",
     "TrafficInteraction",
 ]

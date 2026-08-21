@@ -9,6 +9,8 @@ from app.api.routes import (
     business_rules,
     credentials,
     dashboard,
+    finding_tickets,
+    notification_configs,
     objects,
     oidc,
     organizations,
@@ -17,6 +19,7 @@ from app.api.routes import (
     review_candidates,
     scans,
     targets,
+    ticketing_configs,
     traffic_import,
     versions,
 )
@@ -49,6 +52,9 @@ app.include_router(burp.router)
 app.include_router(objects.router)
 app.include_router(retest_jobs.router)
 app.include_router(dashboard.router)
+app.include_router(notification_configs.router)
+app.include_router(ticketing_configs.router)
+app.include_router(finding_tickets.router)
 
 
 @app.get("/health")
