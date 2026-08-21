@@ -105,6 +105,7 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             "deserialization",
             "dom_xss",
             "ssrf",
+            "prototype_pollution",
             "login",
             "injection",
             "xss",
@@ -112,6 +113,8 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             "access_control",
             "business_logic",
             "csrf",
+            "stored_xss",
+            "file_upload",
         }
         assert all(j.status == "completed" for j in jobs), jobs
 

@@ -128,6 +128,46 @@ class ScopedHttpClient:
             method, url, body=body, content_type=content_type, session=session, extra_headers=extra_headers
         )
 
+    async def post_multipart(
+        self,
+        url: str,
+        *,
+        files: dict[str, tuple[str, bytes, str]],
+        fields: dict[str, str] | None = None,
+        session: AuthenticatedSession | None = None,
+    ) -> httpx.Response:
+        """Multipart/form-data POST — for file upload testing
+        (app.agents.file_upload). Bypasses _request()'s body/content_type
+        params (those assume a pre-built raw string body, which
+        multipart isn't) — httpx builds the multipart body and its
+        Content-Type boundary itself from files=/data=.
+
+        files maps field_name -> (filename, content_bytes, content_type).
+        """
+        if not is_in_scope(url, self._scope_entries):
+            raise ScopeViolationError(f"URL outside Version scope: {url}")
+
+        headers: dict[str, str] = {}
+        if session is not None:
+            if session.bearer_token:
+                headers["Authorization"] = f"Bearer {session.bearer_token}"
+            if session.cookies:
+                headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in session.cookies.items())
+
+        start = time.monotonic()
+        response = await self._client.request(
+            "POST", url, headers=headers, data=fields or {}, files=files
+        )
+        elapsed_ms = (time.monotonic() - start) * 1000
+
+        credential_set_id = session.credential_set_id if session else None
+        body_summary = f"(multipart/form-data body — files: {list(files.keys())})"
+        async with self.session_lock:
+            await self._record_traffic(
+                url, "POST", body_summary, response, elapsed_ms, credential_set_id
+            )
+        return response
+
     async def _request(
         self,
         method: str,

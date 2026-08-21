@@ -342,6 +342,7 @@ async def test_full_scan_flow_completes_and_produces_report(client, fixture_site
         "deserialization",
         "dom_xss",
         "ssrf",
+        "prototype_pollution",
         "login",
         "injection",
         "xss",
@@ -349,6 +350,8 @@ async def test_full_scan_flow_completes_and_produces_report(client, fixture_site
         "access_control",
         "business_logic",
         "csrf",
+        "stored_xss",
+        "file_upload",
     }
     assert all(job["status"] == "completed" for job in body["agent_jobs"]), body["agent_jobs"]
     assert sum(body["finding_counts_by_severity"].values()) > 0

@@ -3,10 +3,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, TypedDict
 
+import httpx
 from langgraph.graph import END, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
-
-import httpx
 
 from app.agents.access_control import AccessControlAgent
 from app.agents.auth_agent import AuthAgent
@@ -16,6 +15,7 @@ from app.agents.cors import CorsAgent
 from app.agents.csrf import CsrfAgent
 from app.agents.deserialization import DeserializationAgent
 from app.agents.dom_xss import DomXssAgent
+from app.agents.file_upload import FileUploadAgent
 from app.agents.fingerprint import FingerprintAgent
 from app.agents.graphql import GraphQLAgent
 from app.agents.header_config import HeaderConfigAgent
@@ -23,8 +23,10 @@ from app.agents.host_header import HostHeaderAgent
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
 from app.agents.injection import InjectionAgent
 from app.agents.login import SessionManager
+from app.agents.prototype_pollution import PrototypePollutionAgent
 from app.agents.recon import DiscoveredParameter, FormInfo, ReconAgent
 from app.agents.ssrf import SsrfAgent
+from app.agents.stored_xss import StoredXssAgent
 from app.agents.xss import XSSAgent
 from app.agents.xxe import XxeAgent
 from app.ai.budget import BudgetGuard
@@ -90,11 +92,21 @@ def build_graph(
     async def _finish_job(
         job: AgentJob, *, status: str, stats: dict | None = None, error: str | None = None
     ) -> None:
-        job.status = status
-        job.completed_at = datetime.now(timezone.utc)
-        job.stats = stats
-        job.error = error
+        # The attribute mutations below must be inside the lock too, not
+        # just the commit — `job` is already attached to the shared
+        # AsyncSession (via _start_job's session.add()), so setting its
+        # attributes touches the session's unit-of-work/dirty-tracking
+        # state exactly like a write does. With enough concurrent nodes
+        # under LangGraph's true parallel fan-out, mutating outside the
+        # lock raced with another node's commit badly enough to silently
+        # lose a status update entirely (a real, observed bug — a job
+        # stuck at "running" forever with a SQLAlchemy warning about
+        # discarded attribute history from a concurrent inner flush).
         async with client.session_lock:
+            job.status = status
+            job.completed_at = datetime.now(timezone.utc)
+            job.stats = stats
+            job.error = error
             await session.commit()
 
     async def recon_node(_state: ScanState) -> dict:
@@ -184,6 +196,28 @@ def build_graph(
         await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
         return {"findings": findings}
 
+    async def stored_xss_node(state: ScanState) -> dict:
+        job = await _start_job("stored_xss")
+        agent = StoredXssAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
+        try:
+            findings = await agent.run(state.get("discovered_forms", []), state.get("discovered_endpoints", []))
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def file_upload_node(state: ScanState) -> dict:
+        job = await _start_job("file_upload")
+        agent = FileUploadAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
+        try:
+            findings = await agent.run(state.get("discovered_forms", []))
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
     async def xxe_node(state: ScanState) -> dict:
         job = await _start_job("xxe")
         agent = XxeAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
@@ -237,6 +271,19 @@ def build_graph(
         agent = SsrfAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
         try:
             findings = await agent.run(state.get("discovered_parameters", []), state.get("discovered_forms", []))
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def prototype_pollution_node(state: ScanState) -> dict:
+        job = await _start_job("prototype_pollution")
+        agent = PrototypePollutionAgent(
+            client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session
+        )
+        try:
+            findings = await agent.run(state.get("discovered_endpoints", []))
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
@@ -381,6 +428,7 @@ def build_graph(
     graph.add_node("deserialization", deserialization_node)
     graph.add_node("dom_xss", dom_xss_node)
     graph.add_node("ssrf", ssrf_node)
+    graph.add_node("prototype_pollution", prototype_pollution_node)
     graph.add_node("login", login_node)
     graph.add_node("injection", injection_node)
     graph.add_node("xss", xss_node)
@@ -388,6 +436,8 @@ def build_graph(
     graph.add_node("access_control", access_control_node)
     graph.add_node("business_logic", business_logic_node)
     graph.add_node("csrf", csrf_node)
+    graph.add_node("stored_xss", stored_xss_node)
+    graph.add_node("file_upload", file_upload_node)
 
     graph.set_entry_point("recon")
     graph.add_edge("recon", "header_config")
@@ -399,6 +449,7 @@ def build_graph(
     graph.add_edge("recon", "deserialization")
     graph.add_edge("recon", "dom_xss")
     graph.add_edge("recon", "ssrf")
+    graph.add_edge("recon", "prototype_pollution")
     graph.add_edge("recon", "login")
     graph.add_edge("login", "injection")
     graph.add_edge("login", "xss")
@@ -406,6 +457,8 @@ def build_graph(
     graph.add_edge("login", "access_control")
     graph.add_edge("login", "business_logic")
     graph.add_edge("login", "csrf")
+    graph.add_edge("login", "stored_xss")
+    graph.add_edge("login", "file_upload")
     graph.add_edge("header_config", END)
     graph.add_edge("host_header", END)
     graph.add_edge("cors", END)
@@ -415,11 +468,14 @@ def build_graph(
     graph.add_edge("deserialization", END)
     graph.add_edge("dom_xss", END)
     graph.add_edge("ssrf", END)
+    graph.add_edge("prototype_pollution", END)
     graph.add_edge("injection", END)
     graph.add_edge("xss", END)
     graph.add_edge("auth", END)
     graph.add_edge("access_control", END)
     graph.add_edge("business_logic", END)
+    graph.add_edge("stored_xss", END)
+    graph.add_edge("file_upload", END)
     graph.add_edge("csrf", END)
 
     return graph.compile()

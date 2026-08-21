@@ -1,0 +1,40 @@
+# File upload agent's catalog (§3). No LLM needed — a single
+# deterministic acceptance check: does the endpoint accept an upload
+# with a dangerous, potentially-executable extension?
+#
+# Scoped honestly: this confirms the endpoint accepts the file (a real,
+# fully-provable fact), not that the uploaded file is later executable —
+# that depends on where/how the application serves uploads, which isn't
+# something recon can discover generically. See remediation for the
+# analyst's next step.
+
+- id: file-upload-insufficient-validation
+  title: "File Upload Accepts Potentially Executable File Type"
+  owasp_2025_category: "A05 Injection"
+  cwe_id: "CWE-434"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+  cvss_score: 7.2
+  portswigger_reference_url: "https://portswigger.net/web-security/file-upload"
+  plain_language_summary: >
+    This file upload feature accepted a file with an extension commonly
+    associated with server-executable code ({extension}), with no
+    apparent validation rejecting it. If uploaded files are later served
+    from a location where the server would execute them, this could let
+    an attacker run arbitrary code — the severity here reflects that
+    risk; confirming actual code execution requires knowing where this
+    application serves uploaded files from.
+  technical_description: >
+    Submitting {url} with a file named "verdikt-upload-test{extension}"
+    (Content-Type: {content_type}) was accepted (HTTP {status_code})
+    rather than rejected, with no validation error indicating the
+    extension or content type was checked.
+  remediation: >
+    Validate uploaded file types against a strict allow-list (not a
+    block-list) of extensions and verify actual file content (magic
+    bytes), not just the claimed Content-Type or filename extension.
+    Store uploads outside the webroot, or in a location configured to
+    never execute server-side code, and serve them with a
+    Content-Disposition: attachment header and a randomized filename.
+  references:
+    - "https://cwe.mitre.org/data/definitions/434.html"
