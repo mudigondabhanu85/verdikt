@@ -26,6 +26,7 @@ dependencies = [
     "zstandard>=0.23.0",
     "python-docx>=1.2.0",
     "reportlab>=5.0.1",
+    "boto3>=1.43.76",
 ]
 
 [dependency-groups]
@@ -34,6 +35,7 @@ dev = [
     "pytest-asyncio>=0.24.0",
     "aiosqlite>=0.20.0",
     "pypdf>=6.16.1",
+    "moto>=5.2.2",
 ]
 
 [tool.pytest.ini_options]

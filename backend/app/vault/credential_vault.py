@@ -6,7 +6,14 @@ from app.vault.kms_adapter import KMSAdapter, LocalKMSAdapter
 
 @lru_cache
 def get_kms_adapter() -> KMSAdapter:
-    return LocalKMSAdapter(get_settings().vault_master_key)
+    settings = get_settings()
+    if settings.kms_provider == "aws":
+        if not settings.aws_kms_key_id:
+            raise RuntimeError("kms_provider=aws requires AWS_KMS_KEY_ID to be set")
+        from app.vault.aws_kms_adapter import AwsKmsAdapter
+
+        return AwsKmsAdapter(settings.aws_kms_key_id, region_name=settings.aws_region)
+    return LocalKMSAdapter(settings.vault_master_key)
 
 
 def mask_reference(username: str, secret: str) -> str:

@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from app.config import get_settings
 from app.storage.adapter import ObjectStorageAdapter
 
 
@@ -32,6 +33,11 @@ class LocalDiskObjectStorage(ObjectStorageAdapter):
 
 @lru_cache
 def get_object_storage() -> ObjectStorageAdapter:
-    from app.config import get_settings
+    settings = get_settings()
+    if settings.object_storage_provider == "s3":
+        if not settings.aws_s3_bucket:
+            raise RuntimeError("object_storage_provider=s3 requires AWS_S3_BUCKET to be set")
+        from app.storage.s3_storage import S3ObjectStorage
 
-    return LocalDiskObjectStorage(get_settings().object_storage_root)
+        return S3ObjectStorage(settings.aws_s3_bucket, region_name=settings.aws_region)
+    return LocalDiskObjectStorage(settings.object_storage_root)

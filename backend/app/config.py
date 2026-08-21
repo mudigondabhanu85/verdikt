@@ -20,7 +20,20 @@ class Settings(BaseSettings):
     # real KMSAdapter (AWS KMS / Azure Key Vault) — see app/vault/kms_adapter.py.
     vault_master_key: str = "dev-only-insecure-fernet-key-000000000000="
 
+    # §9 enterprise hardening: swap in AwsKmsAdapter for real key custody.
+    # "local" (LocalKMSAdapter, Fernet) remains the default so a fresh
+    # checkout with no AWS credentials still runs.
+    kms_provider: Literal["local", "aws"] = "local"
+    aws_kms_key_id: str | None = None
+
     object_storage_root: str = "./data/objects"
+
+    # §9 enterprise hardening: swap in S3ObjectStorage for a real,
+    # multi-instance-safe object store. "local" (LocalDiskObjectStorage)
+    # remains the default for a fresh checkout with no AWS credentials.
+    object_storage_provider: Literal["local", "s3"] = "local"
+    aws_s3_bucket: str | None = None
+    aws_region: str = "us-east-1"
 
     # AI provider selection (§0/§10). Defaults to "fake" — a fresh checkout
     # with no API keys runs LLM-dependent agents (injection/xss/access-control

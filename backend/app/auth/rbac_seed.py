@@ -15,6 +15,7 @@ RESOURCES = (
     "review_candidate",
     "business_rule",
     "ai_provider_config",
+    "oidc_provider_config",
 )
 ACTIONS = ("create", "read", "update", "delete")
 
@@ -40,6 +41,7 @@ def baseline_grants() -> list[tuple[str, str, str]]:
         "review_candidate",
         "business_rule",
         "ai_provider_config",
+        "oidc_provider_config",
     ):
         for action in ACTIONS:
             grants.append(("project_lead", resource, action))
@@ -89,3 +91,10 @@ def ai_provider_config_resource_grants() -> list[tuple[str, str, str]]:
     incremental migration adding this resource, same reasoning as
     scan_resource_grants() above."""
     return _grants_for_resource("ai_provider_config")
+
+
+def oidc_provider_config_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "oidc_provider_config" resource rows — used by the
+    incremental migration adding this resource, same reasoning as
+    scan_resource_grants() above."""
+    return _grants_for_resource("oidc_provider_config")

@@ -2,10 +2,12 @@ from fastapi import FastAPI
 
 from app.api.routes import (
     ai_provider_configs,
+    api_keys,
     auth,
     burp,
     business_rules,
     credentials,
+    oidc,
     organizations,
     projects,
     review_candidates,
@@ -20,6 +22,8 @@ app = FastAPI(title="Verdikt API", version="0.1.0")
 app.include_router(auth.router)
 app.include_router(organizations.router)
 app.include_router(ai_provider_configs.router)
+app.include_router(oidc.router)
+app.include_router(api_keys.router)
 app.include_router(projects.router)
 app.include_router(versions.router)
 app.include_router(targets.router)
