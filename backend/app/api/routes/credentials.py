@@ -144,3 +144,31 @@ async def record_login_macro(
         step_count=len(macro.steps),
         created_at=macro.created_at,
     )
+
+
+@router.get("/{credential_id}/macros", response_model=list[LoginMacroOut])
+async def list_login_macros(
+    version_id: uuid.UUID,
+    credential_id: uuid.UUID,
+    user: User = Depends(require_permission("credential", "read")),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[LoginMacroOut]:
+    """§7 frontend — lets the UI show whether a credential already has a
+    recorded macro (and how many steps) without re-deriving that from
+    record_login_macro's one-shot response, which nothing previously
+    persisted client-side."""
+    await get_version_or_404(session, version_id, user.org_id)
+    await _get_credential_or_404(session, version_id, credential_id)
+    result = await session.execute(
+        select(LoginMacro).where(LoginMacro.credential_set_id == credential_id)
+    )
+    return [
+        LoginMacroOut(
+            id=macro.id,
+            version_id=macro.version_id,
+            credential_set_id=macro.credential_set_id,
+            step_count=len(macro.steps),
+            created_at=macro.created_at,
+        )
+        for macro in result.scalars().all()
+    ]

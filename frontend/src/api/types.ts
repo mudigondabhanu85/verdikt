@@ -278,6 +278,26 @@ export interface TrafficImportResult {
   interaction_ids: string[]
 }
 
+export interface LoginMacroOut {
+  id: string
+  version_id: string
+  credential_set_id: string
+  step_count: number
+  created_at: string
+}
+
+export interface BurpScanCreated {
+  scan_run_id: string
+  agent_job_id: string
+  task_id: string
+}
+
+export interface BurpImportResult {
+  scan_status: string
+  imported_count: number
+  finding_ids: string[]
+}
+
 export interface OidcProviderConfigOut {
   id: string
   org_id: string

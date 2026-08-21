@@ -9,6 +9,7 @@ import { AuthorizationTab } from './version/AuthorizationTab'
 import { BusinessRulesTab } from './version/BusinessRulesTab'
 import { ScanRunsTab } from './version/ScanRunsTab'
 import { TrafficTab } from './version/TrafficTab'
+import { BurpTab } from './version/BurpTab'
 
 export function VersionDetailPage() {
   const { versionId } = useParams<{ versionId: string }>()
@@ -39,6 +40,7 @@ export function VersionDetailPage() {
           { key: 'authorization', label: 'Authorization', content: <AuthorizationTab versionId={versionId} /> },
           { key: 'business-rules', label: 'Business Rules', content: <BusinessRulesTab versionId={versionId} /> },
           { key: 'traffic', label: 'Traffic', content: <TrafficTab versionId={versionId} /> },
+          { key: 'burp', label: 'Burp', content: <BurpTab versionId={versionId} isAuthorized={!!version?.is_authorized} /> },
         ]}
       />
     </div>

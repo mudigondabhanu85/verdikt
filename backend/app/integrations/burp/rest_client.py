@@ -54,8 +54,17 @@ class BurpRestClient:
                 {"name": name, "type": "NamedConfiguration"} for name in scan_configurations
             ]
 
-        async with httpx.AsyncClient(transport=self._transport, timeout=self._timeout) as client:
-            response = await client.post(self._url("/v0.1/scan"), json=body)
+        try:
+            async with httpx.AsyncClient(transport=self._transport, timeout=self._timeout) as client:
+                response = await client.post(self._url("/v0.1/scan"), json=body)
+        except httpx.RequestError as exc:
+            # A connection-level failure (refused, DNS, timeout) here
+            # previously propagated uncaught past this class entirely —
+            # the route above only excepts BurpScanError, so callers got
+            # an unhandled 500 instead of the documented, clean 502
+            # "Could not start Burp scan: ..." response. Found via a
+            # real E2E run against a genuinely unreachable Burp URL.
+            raise BurpScanError(f"Could not reach Burp at {self._base_url}: {exc}") from exc
 
         if response.status_code not in (201, 202):
             raise BurpScanError(
@@ -70,8 +79,11 @@ class BurpRestClient:
         """GET /v0.1/scan/{task_id}. Returns the raw documented body:
         {"scan_status": ..., "scan_metrics": {...}, "issue_events": [...]}.
         """
-        async with httpx.AsyncClient(transport=self._transport, timeout=self._timeout) as client:
-            response = await client.get(self._url(f"/v0.1/scan/{task_id}"))
+        try:
+            async with httpx.AsyncClient(transport=self._transport, timeout=self._timeout) as client:
+                response = await client.get(self._url(f"/v0.1/scan/{task_id}"))
+        except httpx.RequestError as exc:
+            raise BurpScanError(f"Could not reach Burp at {self._base_url}: {exc}") from exc
 
         if response.status_code != 200:
             raise BurpScanError(

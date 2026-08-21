@@ -4,8 +4,11 @@ import type {
   ApiKeyCreated,
   ApiKeyOut,
   AuthorizationRecordOut,
+  BurpImportResult,
+  BurpScanCreated,
   BusinessRuleOut,
   CredentialSetOut,
+  LoginMacroOut,
   FindingOut,
   HttpRequest,
   HttpResponse,
@@ -199,6 +202,19 @@ export const api = {
     ) => request<CredentialSetOut>(`/versions/${versionId}/credentials`, { method: 'POST', body }),
     delete: (versionId: string, credentialId: string) =>
       request<void>(`/versions/${versionId}/credentials/${credentialId}`, { method: 'DELETE' }),
+    // Blocks server-side until the analyst closes a real, local headed
+    // browser window on whatever machine is running the API — only
+    // meaningful for a self-hosted, single-analyst deployment where
+    // that's the analyst's own machine. See CredentialsTab's warning
+    // copy and app/api/routes/credentials.py's record_login_macro
+    // docstring for the full explanation.
+    recordMacro: (versionId: string, credentialId: string, body: { start_url: string }) =>
+      request<LoginMacroOut>(`/versions/${versionId}/credentials/${credentialId}/record-macro`, {
+        method: 'POST',
+        body,
+      }),
+    listMacros: (versionId: string, credentialId: string) =>
+      request<LoginMacroOut[]>(`/versions/${versionId}/credentials/${credentialId}/macros`),
   },
 
   businessRules: {
@@ -256,6 +272,32 @@ export const api = {
         timestamp?: string | null
       },
     ) => request<TrafficInteractionOut>(`/versions/${versionId}/traffic/manual`, { method: 'POST', body }),
+  },
+
+  burp: {
+    // startScan returns fast (just triggers the scan on Burp's side).
+    // importResults does NOT — app/api/routes/burp.py's import route
+    // blocks the whole HTTP request until Burp's scan reaches a
+    // terminal state (poll_interval/timeout are passed straight
+    // through to that server-side polling loop). There's no separate
+    // status-check endpoint to poll instead — see BurpTab's warning
+    // copy for why the UI just shows a spinner for however long that
+    // takes.
+    startScan: (
+      versionId: string,
+      body: { burp_base_url: string; burp_api_key?: string; urls: string[]; scan_configurations?: string[] },
+    ) => request<BurpScanCreated>(`/versions/${versionId}/burp/scans`, { method: 'POST', body }),
+    importResults: (
+      versionId: string,
+      taskId: string,
+      body: {
+        burp_base_url: string
+        burp_api_key?: string
+        scan_run_id: string
+        poll_interval?: number
+        timeout?: number
+      },
+    ) => request<BurpImportResult>(`/versions/${versionId}/burp/scans/${taskId}/import`, { method: 'POST', body }),
   },
 
   oidcProviderConfigs: {

@@ -112,6 +112,23 @@ async def test_scan_creation_failure_raises_burp_scan_error():
         await client.start_scan(["https://example.test/"])
 
 
+async def test_unreachable_burp_instance_raises_burp_scan_error_not_uncaught():
+    """A real E2E run against a genuinely unreachable Burp URL found that
+    a connection-level failure (refused, DNS, timeout) previously
+    propagated straight past this client as a raw httpx.RequestError —
+    the API route only excepts BurpScanError, so callers got an
+    unhandled 500 instead of the documented, clean 502 response."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Connection refused", request=request)
+
+    client = BurpRestClient("https://burp.local:1337", transport=httpx.MockTransport(handler))
+    with pytest.raises(BurpScanError, match="Could not reach Burp"):
+        await client.start_scan(["https://example.test/"])
+    with pytest.raises(BurpScanError, match="Could not reach Burp"):
+        await client.get_scan_status("7")
+
+
 def test_map_issue_to_finding_extracts_severity_cwe_and_evidence():
     import uuid
 

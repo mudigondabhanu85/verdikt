@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../api/client'
 import { useAuth, canWrite } from '../../auth/AuthContext'
+import { MacroSection } from './MacroSection'
 
 export function CredentialsTab({ versionId }: { versionId: string }) {
   const { user } = useAuth()
@@ -104,20 +105,23 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
       {isLoading && <p className="text-gray-500">Loading…</p>}
       <ul className="divide-y divide-gray-200 rounded border border-gray-200 bg-white">
         {credentials?.map((cred) => (
-          <li key={cred.id} className="flex items-center justify-between px-4 py-3">
-            <span>
-              <span className="font-medium">{cred.label}</span>
-              <span className="ml-2 text-gray-500">{cred.masked_reference}</span>
-              <span className="ml-2 text-xs text-gray-400">{cred.credential_type}</span>
-            </span>
-            {canWrite(user?.role) && (
-              <button
-                onClick={() => deleteMutation.mutate(cred.id)}
-                className="text-xs text-red-600 hover:underline"
-              >
-                Delete
-              </button>
-            )}
+          <li key={cred.id} className="px-4 py-3">
+            <div className="flex items-center justify-between">
+              <span>
+                <span className="font-medium">{cred.label}</span>
+                <span className="ml-2 text-gray-500">{cred.masked_reference}</span>
+                <span className="ml-2 text-xs text-gray-400">{cred.credential_type}</span>
+              </span>
+              {canWrite(user?.role) && (
+                <button
+                  onClick={() => deleteMutation.mutate(cred.id)}
+                  className="text-xs text-red-600 hover:underline"
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+            {canWrite(user?.role) && <MacroSection versionId={versionId} credentialId={cred.id} />}
           </li>
         ))}
       </ul>
