@@ -8,6 +8,7 @@ import { CredentialsTab } from './version/CredentialsTab'
 import { AuthorizationTab } from './version/AuthorizationTab'
 import { BusinessRulesTab } from './version/BusinessRulesTab'
 import { ScanRunsTab } from './version/ScanRunsTab'
+import { TrafficTab } from './version/TrafficTab'
 
 export function VersionDetailPage() {
   const { versionId } = useParams<{ versionId: string }>()
@@ -37,6 +38,7 @@ export function VersionDetailPage() {
           { key: 'credentials', label: 'Credentials', content: <CredentialsTab versionId={versionId} /> },
           { key: 'authorization', label: 'Authorization', content: <AuthorizationTab versionId={versionId} /> },
           { key: 'business-rules', label: 'Business Rules', content: <BusinessRulesTab versionId={versionId} /> },
+          { key: 'traffic', label: 'Traffic', content: <TrafficTab versionId={versionId} /> },
         ]}
       />
     </div>

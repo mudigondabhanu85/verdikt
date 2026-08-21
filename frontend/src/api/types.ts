@@ -237,6 +237,47 @@ export interface AIProviderConfigOut {
   masked_reference: string
 }
 
+export const TRAFFIC_SOURCES = [
+  'manual',
+  'burp_live',
+  'har',
+  'burp_file',
+  'zst_traffic',
+  'webinspect_macro',
+  'agent',
+] as const
+export type TrafficSource = (typeof TRAFFIC_SOURCES)[number]
+
+export interface HttpRequest {
+  method: string
+  url: string
+  headers: Record<string, string>
+  query_params: Record<string, string>
+  body: string | null
+}
+
+export interface HttpResponse {
+  status: number | null
+  headers: Record<string, string> | null
+  body: string | null
+  timing_ms: number | null
+}
+
+export interface TrafficInteractionOut {
+  id: string
+  version_id: string
+  source: TrafficSource
+  timestamp: string
+  request: HttpRequest
+  response: HttpResponse
+  credential_set_id: string | null
+}
+
+export interface TrafficImportResult {
+  imported_count: number
+  interaction_ids: string[]
+}
+
 export interface OidcProviderConfigOut {
   id: string
   org_id: string

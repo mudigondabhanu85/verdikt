@@ -7,6 +7,8 @@ import type {
   BusinessRuleOut,
   CredentialSetOut,
   FindingOut,
+  HttpRequest,
+  HttpResponse,
   OidcProviderConfigOut,
   OrganizationOut,
   ProjectOut,
@@ -16,6 +18,8 @@ import type {
   ScopeEntryOut,
   TargetOut,
   TokenResponse,
+  TrafficImportResult,
+  TrafficInteractionOut,
   UserOut,
   VersionOut,
 } from './types'
@@ -234,6 +238,24 @@ export const api = {
     create: (body: { label: string; provider: string; model: string; api_key: string; base_url?: string }) =>
       request<AIProviderConfigOut>('/ai-provider-configs', { method: 'POST', body }),
     delete: (id: string) => request<void>(`/ai-provider-configs/${id}`, { method: 'DELETE' }),
+  },
+
+  traffic: {
+    list: (versionId: string) => request<TrafficInteractionOut[]>(`/versions/${versionId}/traffic`),
+    importFile: (versionId: string, file: File) => {
+      const formData = new FormData()
+      formData.set('file', file)
+      return request<TrafficImportResult>(`/versions/${versionId}/traffic/import`, { method: 'POST', formData })
+    },
+    addManual: (
+      versionId: string,
+      body: {
+        request: HttpRequest
+        response: HttpResponse
+        credential_set_id?: string | null
+        timestamp?: string | null
+      },
+    ) => request<TrafficInteractionOut>(`/versions/${versionId}/traffic/manual`, { method: 'POST', body }),
   },
 
   oidcProviderConfigs: {
