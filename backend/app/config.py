@@ -12,6 +12,13 @@ class Settings(BaseSettings):
     # SQLite since the DB layer stays ORM/dialect-agnostic (see app/db).
     database_url: str = "postgresql+psycopg://verdikt:verdikt@localhost:5432/verdikt"
 
+    # §7 frontend — the Vite dev server (and, in production, wherever the
+    # built frontend is actually served from) runs on a different origin
+    # than the API, so the browser needs an explicit CORS allow-list.
+    # Bearer-token auth (never cookies) means allow_credentials=False is
+    # correct in app/main.py — no credentialed-CORS complexity needed.
+    frontend_origin: str = "http://localhost:5173"
+
     jwt_secret: str = "dev-only-change-me-to-something-random-and-32-bytes-plus"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 12

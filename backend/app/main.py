@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
     ai_provider_configs,
@@ -7,6 +8,7 @@ from app.api.routes import (
     burp,
     business_rules,
     credentials,
+    objects,
     oidc,
     organizations,
     projects,
@@ -16,8 +18,17 @@ from app.api.routes import (
     traffic_import,
     versions,
 )
+from app.config import get_settings
 
 app = FastAPI(title="Verdikt API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[get_settings().frontend_origin],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(auth.router)
 app.include_router(organizations.router)
@@ -33,6 +44,7 @@ app.include_router(scans.router)
 app.include_router(review_candidates.router)
 app.include_router(business_rules.router)
 app.include_router(burp.router)
+app.include_router(objects.router)
 
 
 @app.get("/health")

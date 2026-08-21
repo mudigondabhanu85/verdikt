@@ -1,13 +1,15 @@
 # Verdikt
 
 AI multi-agent web application & API security testing platform. See the build prompt
-for full product scope; this repo currently implements **Phase 0 — Foundations**:
-data model, `DatabaseAdapter`, auth/RBAC skeleton, project/version CRUD, credential
-vault, canonical `HttpInteraction` schema, and a HAR importer.
+for full product scope. The backend implements the full agent/scanning/reporting
+pipeline (recon through a broad §3 vulnerability taxonomy, retest, enterprise
+hardening); the frontend (§7) is a first-pass web UI covering the core engagement
+workflow end to end.
 
 ## Stack
 
 - Backend: Python 3.11+, FastAPI, SQLAlchemy 2.0, Alembic, Postgres (default) via `uv`.
+- Frontend: Vite + React + TypeScript + TanStack Query + React Router + Tailwind CSS.
 - Local dev DB: Docker Compose Postgres.
 
 ## Local development
@@ -22,6 +24,19 @@ uv run uvicorn app.main:app --reload
 ```
 
 API docs at http://localhost:8000/docs once running.
+
+In a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The frontend runs at http://localhost:5173 and talks to the API at
+http://localhost:8000 (see `frontend/.env`'s `VITE_API_BASE_URL`). The backend's
+`frontend_origin` setting (`app/config.py`) must match the frontend's own origin for
+CORS — both default to `http://localhost:5173`.
 
 ## Tests
 
@@ -53,6 +68,14 @@ backend/
     api/         FastAPI routes
   alembic/       Migrations (schema + seeded role_permissions matrix)
   tests/         pytest suite
+frontend/
+  src/
+    api/         Hand-written typed fetch client + TS types mirroring app/schemas
+    auth/        AuthContext (JWT bearer token, current user, RBAC-aware canWrite/canReview)
+    components/  Layout, ProtectedRoute, Tabs, badges
+    pages/       Projects -> Version workspace (scope/targets/credentials/authorization/
+                 business rules/scan runs) -> Scan Run detail (agent jobs/findings/
+                 review candidates/reports)
 ```
 
 ## Security notes (Phase 0 scope)
