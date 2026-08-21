@@ -7,6 +7,7 @@ interface AuthContextValue {
   loading: boolean
   login: (email: string, password: string) => Promise<void>
   register: (orgName: string, email: string, password: string) => Promise<void>
+  loginWithToken: (token: string) => Promise<void>
   logout: () => void
 }
 
@@ -50,13 +51,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await loadCurrentUser()
   }
 
+  // Used by OidcCallbackPage — the token was already issued by the
+  // backend's OIDC callback redirect, so this just stores it and loads
+  // the current user, without another POST /auth/login round-trip.
+  async function loginWithToken(token: string) {
+    setToken(token)
+    await loadCurrentUser()
+  }
+
   function logout() {
     clearToken()
     setUser(null)
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider value={{ user, loading, login, register, loginWithToken, logout }}>
+      {children}
+    </AuthContext.Provider>
   )
 }
 

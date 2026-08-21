@@ -2,7 +2,8 @@
 // with the Pydantic response models so the API client needs no mapping
 // layer.
 
-export type Role = 'org_admin' | 'project_lead' | 'analyst' | 'viewer'
+export const BASELINE_ROLES = ['org_admin', 'project_lead', 'analyst', 'viewer'] as const
+export type Role = (typeof BASELINE_ROLES)[number]
 
 export interface UserOut {
   id: string
@@ -193,4 +194,14 @@ export interface AIProviderConfigOut {
   model: string
   base_url: string | null
   masked_reference: string
+}
+
+export interface OidcProviderConfigOut {
+  id: string
+  org_id: string
+  label: string
+  issuer: string
+  client_id: string
+  redirect_uri: string
+  default_role: Role
 }

@@ -7,6 +7,7 @@ import type {
   BusinessRuleOut,
   CredentialSetOut,
   FindingOut,
+  OidcProviderConfigOut,
   OrganizationOut,
   ProjectOut,
   ReviewCandidateOut,
@@ -19,7 +20,7 @@ import type {
   VersionOut,
 } from './types'
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 const TOKEN_KEY = 'verdikt_token'
 
 export function getToken(): string | null {
@@ -234,6 +235,33 @@ export const api = {
       request<AIProviderConfigOut>('/ai-provider-configs', { method: 'POST', body }),
     delete: (id: string) => request<void>(`/ai-provider-configs/${id}`, { method: 'DELETE' }),
   },
+
+  oidcProviderConfigs: {
+    // Authenticated, org-scoped (see app/api/routes/oidc.py) — an
+    // org_admin manages these from AccountPage. There's no public
+    // "list SSO providers for org X" endpoint, so the login page can't
+    // discover configs on its own; an admin shares each config's
+    // sign-in link (built client-side as /login?sso={id}) with their
+    // users instead. See LoginPage.tsx.
+    list: () => request<OidcProviderConfigOut[]>('/oidc-provider-configs'),
+    create: (body: {
+      label: string
+      issuer: string
+      client_id: string
+      client_secret: string
+      redirect_uri: string
+      default_role?: string
+    }) => request<OidcProviderConfigOut>('/oidc-provider-configs', { method: 'POST', body }),
+    delete: (id: string) => request<void>(`/oidc-provider-configs/${id}`, { method: 'DELETE' }),
+  },
+}
+
+// The OIDC login redirect is a full top-level browser navigation, not
+// a fetch — the browser has to actually leave the SPA to visit the
+// IdP. See OidcCallbackPage for the other half of this flow (reading
+// the token back out of the redirect fragment).
+export function oidcLoginUrl(configId: string): string {
+  return `${BASE_URL}/auth/oidc/${configId}/login`
 }
 
 export type { AgentJobOut }

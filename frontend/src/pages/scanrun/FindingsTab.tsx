@@ -1,10 +1,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { api } from '../../api/client'
+import { api, BASE_URL } from '../../api/client'
 import { SeverityBadge, StatusBadge } from '../../components/Badges'
 import type { FindingOut } from '../../api/types'
-
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
 function FindingDetail({ finding }: { finding: FindingOut }) {
   return (

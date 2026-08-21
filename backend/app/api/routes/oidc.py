@@ -18,10 +18,10 @@ from app.auth.oidc import (
 )
 from app.auth.rbac import require_permission
 from app.auth.security import create_access_token
+from app.config import get_settings
 from app.db.session import get_db_session
 from app.models.oidc_provider_config import OidcProviderConfig
 from app.models.organization import User
-from app.schemas.auth import TokenResponse
 from app.schemas.oidc import OidcProviderConfigCreate, OidcProviderConfigOut
 from app.vault.credential_vault import encrypt_secret
 
@@ -148,15 +148,19 @@ async def _find_or_provision_user(
     return user
 
 
-@router.get("/auth/oidc/callback", response_model=TokenResponse)
+@router.get("/auth/oidc/callback")
 async def oidc_callback(
     code: str, state: str, session: AsyncSession = Depends(get_db_session)
-) -> TokenResponse:
-    """Returns our own JWT as JSON (same shape as POST /auth/login) rather
-    than redirecting to a frontend page — there's no frontend in this
-    build yet. A browser-based deployment would instead point
-    redirect_uri at a frontend page that receives this and stores the
-    token; documented simplification, not a protocol requirement.
+) -> RedirectResponse:
+    """§7 frontend: redirects the browser back to the frontend's
+    /oidc-callback page with the token in a URL *fragment*
+    (#access_token=...), never a query string — a fragment is never
+    sent to any server (this one or the frontend's), so the token
+    never hits a server access log or Referer header. The frontend
+    page reads location.hash client-side, stores the token, and
+    replaces the URL. Error cases (bad state, identity conflicts)
+    stay plain HTTPException JSON below — those are config-debugging
+    situations for an admin, not the end-user browser flow.
     """
     try:
         config_id = decode_state(state)
@@ -175,4 +179,9 @@ async def oidc_callback(
     except OidcError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
 
-    return TokenResponse(access_token=create_access_token(user.id))
+    token = create_access_token(user.id)
+    frontend_origin = get_settings().frontend_origin
+    return RedirectResponse(
+        f"{frontend_origin}/oidc-callback#access_token={token}&token_type=bearer",
+        status_code=status.HTTP_302_FOUND,
+    )

@@ -15,6 +15,16 @@ def idp():
     fixture.shutdown()
 
 
+def _extract_token_from_callback_redirect(location: str) -> str:
+    """The callback redirects to the frontend with the token in a URL
+    *fragment* (#access_token=...&token_type=bearer) — fragments are
+    never sent over HTTP, so this parses the Location header string
+    directly, exactly like the frontend's own location.hash handling
+    does client-side."""
+    fragment = urlsplit(location).fragment
+    return parse_qs(fragment)["access_token"][0]
+
+
 async def _register_oidc_config(client, headers, idp: FixtureIdp, **overrides) -> dict:
     body = {
         "label": "Test IdP",
@@ -77,9 +87,11 @@ async def test_oidc_callback_provisions_new_user_and_issues_working_token(client
         }
     )
 
-    callback = await client.get("/auth/oidc/callback", params={"code": code, "state": state})
-    assert callback.status_code == 200, callback.text
-    token = callback.json()["access_token"]
+    callback = await client.get(
+        "/auth/oidc/callback", params={"code": code, "state": state}, follow_redirects=False
+    )
+    assert callback.status_code == 302, callback.text
+    token = _extract_token_from_callback_redirect(callback.headers["location"])
 
     # The issued token must actually work against a real authenticated endpoint.
     me = await client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
@@ -109,15 +121,17 @@ async def test_oidc_callback_second_login_reuses_same_user(client, idp):
                 "exp": now + 300,
             }
         )
-        resp = await client.get("/auth/oidc/callback", params={"code": code, "state": state})
-        assert resp.status_code == 200, resp.text
-        return resp.json()
+        resp = await client.get(
+            "/auth/oidc/callback", params={"code": code, "state": state}, follow_redirects=False
+        )
+        assert resp.status_code == 302, resp.text
+        return _extract_token_from_callback_redirect(resp.headers["location"])
 
     first = await _do_login()
     second = await _do_login()
 
-    first_user_id = decode_access_token(first["access_token"])
-    second_user_id = decode_access_token(second["access_token"])
+    first_user_id = decode_access_token(first)
+    second_user_id = decode_access_token(second)
     assert first_user_id == second_user_id
 
 

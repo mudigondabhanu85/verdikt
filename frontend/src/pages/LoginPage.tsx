@@ -1,11 +1,13 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
-import { ApiError } from '../api/client'
+import { ApiError, oidcLoginUrl } from '../api/client'
 
 export function LoginPage() {
   const { login } = useAuth()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const ssoConfigId = searchParams.get('sso')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -30,6 +32,23 @@ export function LoginPage() {
       <form onSubmit={handleSubmit} className="w-full max-w-sm rounded-lg border border-gray-200 bg-white p-8 shadow-sm">
         <h1 className="mb-6 text-xl font-semibold text-purple-700">Sign in to Verdikt</h1>
         {error && <p className="mb-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+
+        {ssoConfigId && (
+          <>
+            <a
+              href={oidcLoginUrl(ssoConfigId)}
+              className="mb-4 block w-full rounded border border-gray-300 bg-white px-3 py-2 text-center text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Continue with SSO
+            </a>
+            <div className="mb-4 flex items-center gap-3 text-xs text-gray-400">
+              <div className="h-px flex-1 bg-gray-200" />
+              or sign in with a password
+              <div className="h-px flex-1 bg-gray-200" />
+            </div>
+          </>
+        )}
+
         <label className="mb-3 block text-sm">
           <span className="mb-1 block text-gray-600">Email</span>
           <input
