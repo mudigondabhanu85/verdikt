@@ -13,6 +13,7 @@ from app.models.oidc_provider_config import OidcProviderConfig
 from app.models.organization import Organization, User
 from app.models.project import AuthorizationRecord, Project, ScopeEntry, Version
 from app.models.rbac import RolePermission
+from app.models.retest_job import RetestJob
 from app.models.review_candidate import ReviewCandidate
 from app.models.scan import AgentJob, ScanRun
 from app.models.target import Target
@@ -35,6 +36,7 @@ __all__ = [
     "ScopeEntry",
     "Version",
     "RolePermission",
+    "RetestJob",
     "ReviewCandidate",
     "AgentJob",
     "ScanRun",

@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit import AuditLogEntry
+from app.models.finding import Finding
 from app.models.organization import User
 from app.models.project import Project, Version
 from app.models.review_candidate import ReviewCandidate
@@ -41,6 +42,20 @@ async def get_scan_run_or_404(session: AsyncSession, scan_run_id: uuid.UUID, org
     if scan_run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Scan run not found")
     return scan_run
+
+
+async def get_finding_or_404(session: AsyncSession, finding_id: uuid.UUID, org_id: uuid.UUID) -> Finding:
+    result = await session.execute(
+        select(Finding)
+        .join(ScanRun, Finding.scan_run_id == ScanRun.id)
+        .join(Version, ScanRun.version_id == Version.id)
+        .join(Project, Version.project_id == Project.id)
+        .where(Finding.id == finding_id, Project.org_id == org_id)
+    )
+    finding = result.scalar_one_or_none()
+    if finding is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Finding not found")
+    return finding
 
 
 async def get_review_candidate_or_404(

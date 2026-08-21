@@ -278,6 +278,20 @@ export interface TrafficImportResult {
   interaction_ids: string[]
 }
 
+export type RetestResult = 'still_vulnerable' | 'fixed' | 'not_supported' | 'error'
+
+export interface RetestJobOut {
+  id: string
+  finding_id: string
+  status: string
+  result: RetestResult | null
+  created_at: string
+  completed_at: string | null
+  request_raw: string | null
+  response_raw: string | null
+  error: string | null
+}
+
 export interface LoginMacroOut {
   id: string
   version_id: string

@@ -1,10 +1,75 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { api, BASE_URL } from '../../api/client'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api, ApiError, BASE_URL } from '../../api/client'
 import { SeverityBadge, StatusBadge } from '../../components/Badges'
 import type { FindingOut } from '../../api/types'
 
-function FindingDetail({ finding }: { finding: FindingOut }) {
+const RETEST_RESULT_LABELS: Record<string, string> = {
+  still_vulnerable: 'Still vulnerable',
+  fixed: 'Fixed',
+  not_supported: 'Not supported',
+  error: 'Error',
+}
+
+function RetestSection({ scanRunId, finding }: { scanRunId: string; finding: FindingOut }) {
+  const queryClient = useQueryClient()
+
+  const { data: jobs } = useQuery({
+    queryKey: ['findings', finding.id, 'retest-jobs'],
+    queryFn: () => api.retestJobs.list(finding.id),
+  })
+
+  const retestMutation = useMutation({
+    mutationFn: () => api.retestJobs.trigger(finding.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['findings', finding.id, 'retest-jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['scan-runs', scanRunId, 'findings'] })
+    },
+  })
+
+  const latest = jobs && jobs.length > 0 ? jobs[jobs.length - 1] : null
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-2">
+        <h4 className="font-medium text-gray-700">Retest</h4>
+        <button
+          onClick={() => retestMutation.mutate()}
+          disabled={retestMutation.isPending}
+          className="rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          {retestMutation.isPending ? 'Retesting…' : 'Retest this finding'}
+        </button>
+      </div>
+      {retestMutation.isError && (
+        <p className="text-xs text-red-600">
+          {retestMutation.error instanceof ApiError ? retestMutation.error.message : 'Retest failed'}
+        </p>
+      )}
+      {latest && (
+        <p className="text-xs text-gray-500">
+          Last checked {new Date(latest.created_at).toLocaleString()} —{' '}
+          <span className="font-medium">{RETEST_RESULT_LABELS[latest.result ?? ''] ?? latest.result}</span>
+          {latest.error && <span className="ml-1 text-gray-400">({latest.error})</span>}
+        </p>
+      )}
+      {jobs && jobs.length > 1 && (
+        <details className="mt-1 text-xs text-gray-400">
+          <summary className="cursor-pointer">{jobs.length} retest attempts</summary>
+          <ul className="mt-1 space-y-0.5">
+            {jobs.map((job) => (
+              <li key={job.id}>
+                {new Date(job.created_at).toLocaleString()} — {RETEST_RESULT_LABELS[job.result ?? ''] ?? job.result}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  )
+}
+
+function FindingDetail({ scanRunId, finding }: { scanRunId: string; finding: FindingOut }) {
   return (
     <div className="space-y-3 border-t border-gray-100 bg-gray-50 px-4 py-4 text-sm">
       <p className="text-gray-700">{finding.plain_language_summary}</p>
@@ -38,6 +103,8 @@ function FindingDetail({ finding }: { finding: FindingOut }) {
         <span>CVSS: {finding.cvss_score} ({finding.cvss_vector})</span>
         <span>{finding.owasp_2025_category}</span>
       </div>
+
+      <RetestSection scanRunId={scanRunId} finding={finding} />
 
       {finding.evidence && (
         <div>
@@ -103,7 +170,7 @@ export function FindingsTab({ scanRunId }: { scanRunId: string }) {
                 <StatusBadge status={finding.retest_status} />
               </span>
             </button>
-            {expanded === finding.id && <FindingDetail finding={finding} />}
+            {expanded === finding.id && <FindingDetail scanRunId={scanRunId} finding={finding} />}
           </li>
         ))}
       </ul>

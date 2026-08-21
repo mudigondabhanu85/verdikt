@@ -15,6 +15,7 @@ import type {
   OidcProviderConfigOut,
   OrganizationOut,
   ProjectOut,
+  RetestJobOut,
   ReviewCandidateOut,
   ScanRunDetail,
   ScanRunOut,
@@ -233,6 +234,15 @@ export const api = {
     retest: (versionId: string, priorScanRunId: string) =>
       request<ScanRunOut>(`/versions/${versionId}/scan-runs/${priorScanRunId}/retest`, { method: 'POST' }),
     findings: (scanRunId: string) => request<FindingOut[]>(`/scan-runs/${scanRunId}/findings`),
+  },
+
+  retestJobs: {
+    // Synchronous — the response IS the completed (or failed/
+    // not_supported) job, not a "started" placeholder to poll. See
+    // app/api/routes/retest_jobs.py: every registered check is one
+    // HTTP request or one real-browser page load, not a full scan.
+    trigger: (findingId: string) => request<RetestJobOut>(`/findings/${findingId}/retest`, { method: 'POST' }),
+    list: (findingId: string) => request<RetestJobOut[]>(`/findings/${findingId}/retest-jobs`),
   },
 
   reviewCandidates: {

@@ -12,6 +12,7 @@ from app.api.routes import (
     oidc,
     organizations,
     projects,
+    retest_jobs,
     review_candidates,
     scans,
     targets,
@@ -45,6 +46,7 @@ app.include_router(review_candidates.router)
 app.include_router(business_rules.router)
 app.include_router(burp.router)
 app.include_router(objects.router)
+app.include_router(retest_jobs.router)
 
 
 @app.get("/health")
