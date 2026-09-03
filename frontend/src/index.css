@@ -1,7 +1,12 @@
 @import "tailwindcss";
 
 :root {
-  color-scheme: light dark;
+  /* The app has no dark-mode styling anywhere (no `dark:` Tailwind
+     classes) — declaring "light dark" support here made browsers
+     apply native dark-mode form-control rendering (white input text)
+     whenever the OS/browser prefers dark, landing on the app's
+     always-white input backgrounds and making typed text invisible. */
+  color-scheme: light;
 }
 
 body {
