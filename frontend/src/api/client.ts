@@ -3,10 +3,12 @@ import type {
   AIProviderConfigOut,
   ApiKeyCreated,
   ApiKeyOut,
+  AssetMetadataOut,
   AuthorizationRecordOut,
   BurpImportResult,
   BurpScanCreated,
   BusinessRuleOut,
+  CMDBConfigOut,
   CredentialSetOut,
   DashboardOut,
   FindingTicketOut,
@@ -31,6 +33,7 @@ import type {
   TrafficInteractionOut,
   UserOut,
   VersionOut,
+  VGSConfigOut,
 } from './types'
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
@@ -350,6 +353,30 @@ export const api = {
         method: 'POST',
         body: { ticketing_config_id: ticketingConfigId },
       }),
+  },
+
+  cmdbConfigs: {
+    list: () => request<CMDBConfigOut[]>('/cmdb-configs'),
+    create: (body: {
+      label: string
+      provider: string
+      lookup_url_template: string
+      auth_header_name?: string
+      auth_header_value: string
+      owner_json_path: string
+      criticality_json_path: string
+    }) => request<CMDBConfigOut>('/cmdb-configs', { method: 'POST', body }),
+    delete: (id: string) => request<void>(`/cmdb-configs/${id}`, { method: 'DELETE' }),
+    lookup: (id: string, identifier: string) =>
+      request<AssetMetadataOut>(`/cmdb-configs/${id}/lookup`, { method: 'POST', body: { identifier } }),
+  },
+
+  vgsConfigs: {
+    list: () => request<VGSConfigOut[]>('/vgs-configs'),
+    create: (body: { label: string; webhook_url: string; push_on_scan_completed?: boolean }) =>
+      request<VGSConfigOut>('/vgs-configs', { method: 'POST', body }),
+    delete: (id: string) => request<void>(`/vgs-configs/${id}`, { method: 'DELETE' }),
+    test: (id: string) => request<void>(`/vgs-configs/${id}/test`, { method: 'POST' }),
   },
 
   oidcProviderConfigs: {

@@ -3,8 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, BASE_URL } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { AI_PROVIDER_TYPES, type AiProviderType, BASELINE_ROLES, type Role } from '../api/types'
+import { CMDBConfigsSection } from './account/CMDBConfigsSection'
 import { NotificationConfigsSection } from './account/NotificationConfigsSection'
 import { TicketingConfigsSection } from './account/TicketingConfigsSection'
+import { VGSConfigsSection } from './account/VGSConfigsSection'
 
 function ApiKeysSection() {
   const queryClient = useQueryClient()
@@ -357,6 +359,8 @@ export function AccountPage() {
           <OidcProvidersSection />
           <NotificationConfigsSection />
           <TicketingConfigsSection />
+          <CMDBConfigsSection />
+          <VGSConfigsSection />
         </>
       )}
       {user?.role !== 'org_admin' && (

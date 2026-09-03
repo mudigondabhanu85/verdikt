@@ -374,6 +374,36 @@ export interface FindingTicketOut {
   external_url: string
 }
 
+export const CMDB_PROVIDER_TYPES = ['generic_rest'] as const
+export type CMDBProviderType = (typeof CMDB_PROVIDER_TYPES)[number]
+
+export interface CMDBConfigOut {
+  id: string
+  org_id: string
+  label: string
+  provider: CMDBProviderType
+  lookup_url_template: string
+  auth_header_name: string
+  masked_reference: string
+  owner_json_path: string
+  criticality_json_path: string
+}
+
+export interface AssetMetadataOut {
+  identifier: string
+  owner: string | null
+  criticality: string | null
+  raw: Record<string, unknown>
+}
+
+export interface VGSConfigOut {
+  id: string
+  org_id: string
+  label: string
+  masked_reference: string
+  push_on_scan_completed: boolean
+}
+
 export interface OidcProviderConfigOut {
   id: string
   org_id: string

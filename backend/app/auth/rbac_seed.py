@@ -18,6 +18,8 @@ RESOURCES = (
     "oidc_provider_config",
     "notification_config",
     "ticketing_config",
+    "cmdb_config",
+    "vgs_config",
 )
 ACTIONS = ("create", "read", "update", "delete")
 
@@ -46,6 +48,8 @@ def baseline_grants() -> list[tuple[str, str, str]]:
         "oidc_provider_config",
         "notification_config",
         "ticketing_config",
+        "cmdb_config",
+        "vgs_config",
     ):
         for action in ACTIONS:
             grants.append(("project_lead", resource, action))
@@ -116,3 +120,17 @@ def ticketing_config_resource_grants() -> list[tuple[str, str, str]]:
     incremental migration adding this resource, same reasoning as
     scan_resource_grants() above."""
     return _grants_for_resource("ticketing_config")
+
+
+def cmdb_config_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "cmdb_config" resource rows — used by the incremental
+    migration adding this resource, same reasoning as
+    scan_resource_grants() above."""
+    return _grants_for_resource("cmdb_config")
+
+
+def vgs_config_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "vgs_config" resource rows — used by the incremental
+    migration adding this resource, same reasoning as
+    scan_resource_grants() above."""
+    return _grants_for_resource("vgs_config")

@@ -11,6 +11,7 @@ from app.api.routes import (
     auth,
     burp,
     business_rules,
+    cmdb_configs,
     credentials,
     dashboard,
     finding_tickets,
@@ -26,6 +27,7 @@ from app.api.routes import (
     ticketing_configs,
     traffic_import,
     versions,
+    vgs_configs,
 )
 from app.config import get_settings
 
@@ -79,6 +81,8 @@ app.include_router(dashboard.router)
 app.include_router(notification_configs.router)
 app.include_router(ticketing_configs.router)
 app.include_router(finding_tickets.router)
+app.include_router(cmdb_configs.router)
+app.include_router(vgs_configs.router)
 
 
 @app.get("/health")

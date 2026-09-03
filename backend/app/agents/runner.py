@@ -15,6 +15,7 @@ from app.models.project import ScopeEntry
 from app.models.scan import ScanRun
 from app.models.target import Target
 from app.notifications.scan_notifications import notify_scan_completed
+from app.notifications.vgs_push import push_findings_to_vgs
 
 
 async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
@@ -104,3 +105,4 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
             scan_run.completed_at = datetime.now(timezone.utc)
             await session.commit()
             await notify_scan_completed(session, scan_run)
+            await push_findings_to_vgs(session, scan_run)
