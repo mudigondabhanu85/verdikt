@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from app.agents.graph import build_graph
-from app.agents.http_client import ScopedHttpClient
+from app.agents.http_client import ScopedHttpClient, install_commit_backstop
 from app.ai import provider as ai_provider
 from app.ai.budget import BudgetGuard
 from app.db import session as db_session
@@ -31,6 +31,7 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
     """
     adapter = db_session.get_adapter()
     async with db_session.session_scope(adapter) as session:
+        install_commit_backstop(session)
         scan_run = await session.get(ScanRun, scan_run_id)
         if scan_run is None:
             return

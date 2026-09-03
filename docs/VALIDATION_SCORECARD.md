@@ -125,51 +125,105 @@ dedicated regression test in the suite.
    every real-headless-browser check (`clickjacking`, `dom_xss`,
    `prototype_pollution`) on **every single scan**, forever, with no
    visible failure short of an `AgentJob` stuck at `"running"`
-   indefinitely. This is the single most significant finding of this
-   validation pass: it would silently disable three real vulnerability
-   classes in any standard deployment. Confirmed by direct comparison —
-   the full 14-agent concurrent graph completed correctly in 11 seconds
-   against a real, reachable local target under plain `asyncio`, but
-   hung indefinitely under uvicorn's default (uvloop) loop; switching to
-   `--loop asyncio` immediately fixed it (verified via a real scan
-   through the actual API completing all 23 agent jobs, including all
-   three real-browser checks). Fixed by pinning `--loop asyncio`
-   explicitly in `backend/Dockerfile`, `docker-compose.yml`, and the
-   README's documented dev command. Because this failure mode is
-   invisible at the application-code level (no exception, no test can
-   exercise "the process hangs forever"), the regression test instead
-   guards the actual startup commands themselves:
-   `tests/test_deployment_config.py`.
+   indefinitely. Confirmed by direct comparison — the full 14-agent
+   concurrent graph completed correctly in 11 seconds against a real,
+   reachable local target under plain `asyncio`, but hung indefinitely
+   under uvicorn's default (uvloop) loop; switching to `--loop asyncio`
+   immediately fixed it in isolation (verified via a real scan through
+   the actual API completing all 23 agent jobs, including all three
+   real-browser checks, against a fast local target). This was a real,
+   independent bug — fixing it was necessary but, as fix #8 below shows,
+   not sufficient to fully resolve live scans against Juice Shop. Fixed
+   by pinning `--loop asyncio` explicitly in `backend/Dockerfile`,
+   `docker-compose.yml`, and the README's documented dev command.
+   Because this failure mode is invisible at the application-code level
+   (no exception, no test can exercise "the process hangs forever"),
+   the regression test instead guards the actual startup commands
+   themselves: `tests/test_deployment_config.py`.
+
+8. **NUL bytes in real binary responses crashed the shared scan session
+   — the actual root cause of the "intermittent stall."** Even after
+   fix #7, live scans against real Juice Shop kept stalling — always
+   within about a second, always around the same point. Four
+   successive rounds of defensive `asyncio.wait_for` backstops (the
+   HTTP request itself, the traffic-recording commit, and finally every
+   DB-touching method on the shared `AsyncSession` — commit/flush/
+   refresh/get) never once fired, which was the real clue: this was
+   never actually a *hang*. An in-process diagnostic endpoint dumping
+   every live asyncio Task's real stack trace (added temporarily —
+   `py-spy` is blocked by macOS SIP even under `sudo` in this
+   environment, so external debugging wasn't an option) showed the
+   scan's own background task had already **finished** — it wasn't
+   stuck at all. The real cause, found in `uvicorn`'s own error log:
+   fetching a real binary file (Juice Shop's own `/ftp/*` challenge
+   assets — a `.kdbx` password database, in one case) produces a
+   response body whose text decoding contains literal NUL (0x00) bytes,
+   which Postgres text columns reject outright. That failure poisons
+   the *entire shared* `AsyncSession` (SQLAlchemy raises
+   `PendingRollbackError` on every subsequent operation until an
+   explicit `rollback()`), cascading into every other concurrently
+   running agent sharing that same session, and silently crashes the
+   whole scan's background task from inside its own `finally` cleanup
+   block — which is why the `ScanRun` row was left stuck at `"running"`
+   forever with no error ever recorded. This is the *same bug class*
+   already fixed for imported HAR traffic (fix #5) and agent-issued
+   traffic recording, but present via **two more, separate** code
+   paths that fix #5 never touched: `ScopedHttpClient._record_traffic`
+   (agent-issued requests — every live HTTP call an agent makes is
+   itself recorded as a `TrafficInteraction`) and, most centrally,
+   `app.agents.evidence.format_request_raw`/`format_response_raw` — the
+   single shared formatting functions nearly every agent's
+   Finding/Evidence persistence goes through. Fixed by stripping NUL
+   bytes in both places (`app/agents/http_client.py`,
+   `app/agents/evidence.py`). Tests: `tests/test_http_client.py`,
+   `tests/test_evidence.py`.
+
+9. **Defensive hardening, kept even though it wasn't the root cause.**
+   The four backstop layers built while chasing fix #8 are real,
+   independently-valuable robustness improvements — they never fired
+   for *this* bug, but they now guarantee no future single request or
+   DB operation can silently hang an entire scan forever, and (after
+   the last round) that one agent's genuine failure rolls back and
+   recovers the shared session instead of cascading into every other
+   concurrently running agent. Kept in `app/agents/http_client.py`
+   (`_HARD_REQUEST_TIMEOUT_SECONDS`, `install_commit_backstop`) and
+   wired into `app/agents/runner.py`. Tests: `tests/test_http_client.py`.
 
 ## Live scan results
 
-A complete, real scan run against the live Juice Shop instance (before
-finding #7 above) produced:
+The final, complete live scan run against real Juice Shop (after all
+fixes above, including #8) produced:
 
-- **332 findings** across the confirmed-only pipeline, severity
-  breakdown `Critical: 0, High: 80, Medium: 6, Low: 246`, 0 review
-  candidates.
-- Of ~81 total discovered endpoints, only 9 came from `ReconAgent`'s own
-  HTML crawl — 72 came from the traffic-seeding bridge (fix #1), a
-  direct, concrete demonstration of why that fix is necessary for any
-  client-rendered target.
-- Manual verification of a sample of non-header findings against raw
-  evidence: `jwt-missing-expiration` and `cors-wildcard-origin`
-  confirmed as genuine true positives; `web-cache-deception` identified
-  as the false positive described in fix #2 above.
-- Manual verification of the WebSocket handshake directly (raw socket,
-  forged `Origin` header) confirmed Juice Shop's real `socket.io`
-  endpoint **is** genuinely vulnerable to cross-site WebSocket
-  hijacking — the miss that led to fixes #3 and #4.
+- **Status: `completed`**, all 23 agent jobs completed successfully —
+  including `clickjacking`, `dom_xss`, `header_config`, and
+  `prototype_pollution`, the four that had been silently stuck
+  indefinitely before fix #8.
+- **290 findings**, severity breakdown `Critical: 0, High: 71,
+  Medium: 4, Low: 215`, 0 review candidates.
+- `header_config` alone confirmed 288 findings across the real,
+  traffic-seeded endpoint set (missing CSP/Referrer-Policy/
+  Permissions-Policy/X-Frame-Options/X-Content-Type-Options headers,
+  and plaintext-HTTP transport) — a genuine, large real-world result
+  only possible because of fix #1 (traffic-seeding); the recon-only
+  crawl alone found just 9 of the ~72 discovered endpoints.
+- `websocket` confirmed exactly 1 finding —
+  `websocket-missing-origin-validation` against Juice Shop's real
+  `socket.io` endpoint. This is the same real CSWSH vulnerability
+  manually verified earlier in this validation pass via a raw forged-
+  Origin handshake (`101 Switching Protocols` despite the foreign
+  Origin) — confirming fixes #3 and #4 (WebSocket discovery + stale
+  session-ID stripping) work correctly end-to-end in a real, full scan,
+  not just in isolation.
+- `cors` confirmed 1 finding (`cors-wildcard-origin`) — manually
+  verified against raw evidence as a genuine true positive.
+- No `web-cache-deception` false positive (fix #2 holds).
 
-A second full live run, made after fixes #1–#6, surfaced fix #7 (the
-scan's real-browser-check `AgentJob`s never completed). After fixing
-#7 and confirming it via a real scan through the live API against a
-fast local target (all 23 agent jobs, including all three real-browser
-checks, completed correctly), a third live run against real Juice Shop
-intermittently stalled again partway through `header_config` — a
-finding documented honestly in **Known Issues** below rather than
-glossed over.
+An earlier full run (before fix #1) produced 332 findings against a
+richer HAR capture (this pass's capture script hit an Angular Material
+UI-selector issue registering a test user, so this final run's
+identity-aware checks — CSRF, business logic, access control — had no
+authenticated session to exercise; a real, separate, minor gap in the
+capture script, not in any check's detection logic).
 
 ## Challenge reconciliation
 
@@ -188,9 +242,9 @@ missed detection.
 | **Out of scope** (no corresponding check in Verdikt's taxonomy) | 78 | Anti-automation/CAPTCHA bypass, credential-guessing/social-engineering auth flows, app-specific cryptographic puzzles, business-logic enumeration flags, exposed-logs/metrics discovery, dependency/CVE/typosquatting scanning, open-redirect testing (a known, previously-documented taxonomy gap), LLM prompt-injection challenges, steganography/obscurity puzzles |
 
 Of the 13 in-scope-deterministic challenges, `Error Handling` was
-directly confirmed live (28 real `header_config` findings from the
-first successful run, including verbose-error-page detections). The
-remaining 12 require either a working authenticated session (this
+directly confirmed live (288 real `header_config` findings in the final
+successful run — see **Live scan results**). The remaining 12 require
+either a working authenticated session (this
 pass's HAR capture did not include a successful login — a UI-selector
 issue in the capture script, not a detection-logic gap) or specific
 endpoints that weren't exercised in the particular browsing session
@@ -204,40 +258,33 @@ isolation against a real, live local server.
 
 ## Known Issues
 
-**Intermittent stall on real Juice Shop under heavy concurrent scan
-load — not fully root-caused.** After fixing #7 (uvloop), a live scan
-against real Juice Shop still intermittently stalled partway through
-(`header_config`, `clickjacking`, `dom_xss`, `prototype_pollution` all
-stopped making progress simultaneously). Ruled out during
-investigation:
+None outstanding from this pass. The intermittent live-scan stall
+against real Juice Shop (previously documented here as unresolved) was
+fully root-caused and fixed — see fix #8 above — and confirmed resolved
+via a complete, successful live scan (see **Live scan results**).
 
-- Not the code's own concurrency model — the real, unmodified 14-agent
-  `graph.ainvoke()` orchestration completes correctly in ~11 seconds
-  against a real, reachable local target at realistic scale (80
-  endpoints), run directly (not through uvicorn/BackgroundTasks).
-- Not uvloop (fix #7, confirmed independently via a real API-driven
-  scan against a fast local target).
-- Not the target being slow or rate-limiting — a direct `curl`/`httpx`
-  request to Juice Shop, made from outside the stalled process at the
-  exact moment it was stuck, returned instantly.
-- Not a database-level lock — `pg_stat_activity` showed no active or
-  waiting queries from the backend process while it was stalled.
-- Not a single bad URL — the specific URL the scan was stuck on
-  (verified via `TrafficInteraction` audit-trail timestamps) succeeds
-  instantly both via `curl` and via an isolated `httpx.AsyncClient` call
-  with the exact same configuration.
-
-The remaining, unconfirmed hypothesis is a connection-pool or
-resource-exhaustion issue specific to the single shared
-`httpx.AsyncClient` instance accumulating state across many real
-requests from 14 truly-concurrent agents against a real target over the
-lifetime of a long-running process — plausible but not yet proven.
-Follow-up: instrument `ScopedHttpClient`'s underlying connection pool
-directly (pool size, in-flight count) during a live stall, or bisect by
-running fewer concurrent agents at a time against the real target to
-find the actual trigger.
+For posterity: the investigation ruled out several plausible-seeming
+causes before finding the real one — the code's own concurrency model
+(a real, unmodified 14-agent `graph.ainvoke()` completes correctly in
+~11s against a real, reachable local target at realistic scale, run
+directly), uvloop (fixed separately as #7, confirmed independently),
+DNS resolution (100 concurrent real lookups all succeeded instantly),
+thread-pool exhaustion (enlarging the pool to 256 workers didn't help),
+and the target being slow (a direct `curl`/`httpx` request made from
+outside the stalled process, at the exact moment it was "stuck",
+returned instantly). What finally cracked it wasn't another timeout
+layer — the four `asyncio.wait_for` backstops built while chasing those
+hypotheses never fired, because the scan was never actually hung. It
+had already crashed. An in-process endpoint dumping real asyncio Task
+stack traces (the decisive diagnostic — `py-spy` is blocked by macOS
+SIP even under `sudo` in this sandbox) showed zero pending tasks for
+the scan at all, which sent the investigation to `uvicorn`'s own error
+log instead of another `asyncio` layer, and that log had the real
+answer the whole time: a `PostgreSQL text fields cannot contain NUL
+(0x00) bytes` error, identical to a bug already fixed earlier in this
+same pass (#5) but present via two further, separate code paths.
 
 ## Test suite
 
-`uv run pytest -q`: **344 passed** (up from 329 at the start of this
-validation pass — 15 new regression tests across the fixes above).
+`uv run pytest -q`: **357 passed** (up from 329 at the start of this
+validation pass — 28 new regression tests across the fixes above).

@@ -20,6 +20,46 @@ class ScopeViolationError(Exception):
     it means an agent tried to do something §1.1 explicitly forbids."""
 
 
+def _strip_nul_bytes(value: str | None) -> str | None:
+    """This IS the "intermittent stall" bug's real root cause, found via
+    §14 live validation against OWASP Juice Shop — the same NUL-byte-vs-
+    Postgres-text-columns issue already fixed for *imported* HAR traffic
+    (app.api.routes.traffic_import) turns out to have a second, separate
+    code path: every agent-issued request ScopedHttpClient itself makes
+    is ALSO recorded as a TrafficInteraction (the §1.3 audit trail), and
+    that path had no NUL stripping at all. A single real response body
+    containing a NUL byte (confirmed live: an uploaded image asset,
+    decoded as "textual" by _is_textual's content-type check) doesn't
+    just fail its own insert — it poisons the *entire shared
+    AsyncSession* (SQLAlchemy raises PendingRollbackError on every
+    subsequent operation until an explicit rollback()), which cascades
+    into every other concurrent agent sharing that same session and
+    silently crashes the whole background scan task from inside its own
+    cleanup `finally` block. Four increasingly comprehensive
+    asyncio.wait_for backstops never caught this because it isn't a
+    hang at all — it's a fast, cascading exception, not a timeout.
+    """
+    if value is None:
+        return None
+    return value.replace("\x00", "")
+
+
+# A defensive backstop above the httpx client's own `timeout` (10s by
+# default) — found via §14 live validation against OWASP Juice Shop: a
+# real scan intermittently stalled forever on a single request whose
+# exact URL, reproduced in total isolation (curl, a standalone
+# httpx.AsyncClient with identical config), returned instantly every
+# time. httpx's own per-request timeout should already bound this and
+# normally does, but relying on that alone left a real scan able to
+# hang an AgentJob at "running" forever with zero error, zero timeout,
+# and no diagnosable cause. Wrapping every request in an explicit
+# asyncio-level deadline guarantees forward progress regardless of
+# *why* any single request doesn't return — the actual failure mode
+# worth eliminating structurally, independent of ever fully
+# root-causing the specific trigger.
+_HARD_REQUEST_TIMEOUT_SECONDS = 20.0
+
+
 @dataclass
 class AuthenticatedSession:
     """An identity established by app.agents.login.SessionManager, applied
@@ -48,6 +88,67 @@ def probe_tls_version(host: str, port: int, *, timeout: float = 5.0) -> str | No
                 return tls_sock.version()
     except (OSError, ssl.SSLError):
         return None
+
+
+# Every DB-touching AsyncSession method actually awaited anywhere in a
+# scan's hot path — across app.agents.graph (_start_job/_finish_job use
+# commit/refresh/get) and every individual agent's own Finding/Evidence
+# persistence (commit/flush). `add()` is deliberately excluded: it's
+# synchronous (no await, can't hang) everywhere it's used.
+_BACKSTOPPED_SESSION_METHODS = ("commit", "flush", "refresh", "get")
+
+
+def install_commit_backstop(session: AsyncSession) -> None:
+    """Patches this specific AsyncSession *instance*'s DB-touching
+    methods (see _BACKSTOPPED_SESSION_METHODS) with a hard asyncio-level
+    deadline each. §14 live validation against OWASP Juice Shop found a
+    live scan intermittently stalling forever with zero DB activity,
+    zero CPU, and — critically — ScopedHttpClient's own request-level
+    backstop never firing, because the hang wasn't in the HTTP request
+    at all: every one of the ~15 agents (and app.agents.graph's own
+    AgentJob bookkeeping) touches this same shared AsyncSession
+    directly, completely bypassing ScopedHttpClient. No single call
+    site can be trusted to cover all of them — this patches the session
+    itself, once, so every one of its DB-touching methods anywhere in a
+    scan run shares the same guarantee: forward progress, no matter
+    which of the many scattered call sites the next hang turns up in.
+    """
+
+    def _wrap(name: str):
+        original = getattr(session, name)
+
+        async def _with_backstop(*args, **kwargs):
+            try:
+                return await asyncio.wait_for(
+                    original(*args, **kwargs), timeout=_HARD_REQUEST_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    f"DB {name}() exceeded hard backstop timeout ({_HARD_REQUEST_TIMEOUT_SECONDS}s)"
+                ) from exc
+            except Exception:
+                # A confirmed-real failure mode, not hypothetical (§14
+                # live validation against OWASP Juice Shop): one bad
+                # write (a NUL byte Postgres rejects, or anything else)
+                # leaves SQLAlchemy's AsyncSession in a poisoned
+                # "pending rollback" state where *every* subsequent
+                # operation raises PendingRollbackError — cascading the
+                # one agent's failure into every other agent sharing
+                # this same session, silently killing the whole scan.
+                # Rolling back here lets the *one* agent whose write
+                # actually failed fail cleanly (its own exception still
+                # propagates), while every other concurrent agent keeps
+                # making real progress on a healthy session.
+                try:
+                    await session.rollback()
+                except Exception:
+                    pass  # best-effort recovery — the original failure is what matters
+                raise
+
+        return _with_backstop
+
+    for method_name in _BACKSTOPPED_SESSION_METHODS:
+        setattr(session, method_name, _wrap(method_name))
 
 
 class ScopedHttpClient:
@@ -155,17 +256,23 @@ class ScopedHttpClient:
                 headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in session.cookies.items())
 
         start = time.monotonic()
-        response = await self._client.request(
-            "POST", url, headers=headers, data=fields or {}, files=files
-        )
+        try:
+            response = await asyncio.wait_for(
+                self._client.request("POST", url, headers=headers, data=fields or {}, files=files),
+                timeout=_HARD_REQUEST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise httpx.ReadTimeout(
+                f"Hard backstop timeout ({_HARD_REQUEST_TIMEOUT_SECONDS}s) exceeded for POST {url}",
+                request=httpx.Request("POST", url),
+            ) from exc
         elapsed_ms = (time.monotonic() - start) * 1000
 
         credential_set_id = session.credential_set_id if session else None
         body_summary = f"(multipart/form-data body — files: {list(files.keys())})"
-        async with self.session_lock:
-            await self._record_traffic(
-                url, "POST", body_summary, response, elapsed_ms, credential_set_id
-            )
+        await self._record_traffic_locked(
+            url, "POST", body_summary, response, elapsed_ms, credential_set_id
+        )
         return response
 
     async def _request(
@@ -202,13 +309,65 @@ class ScopedHttpClient:
             headers.update(extra_headers)
 
         start = time.monotonic()
-        response = await self._client.request(method, url, headers=headers, content=body)
+        try:
+            response = await asyncio.wait_for(
+                self._client.request(method, url, headers=headers, content=body),
+                timeout=_HARD_REQUEST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise httpx.ReadTimeout(
+                f"Hard backstop timeout ({_HARD_REQUEST_TIMEOUT_SECONDS}s) exceeded for {method} {url}",
+                request=httpx.Request(method, url),
+            ) from exc
         elapsed_ms = (time.monotonic() - start) * 1000
 
         credential_set_id = session.credential_set_id if session else None
+        await self._record_traffic_locked(url, method, body, response, elapsed_ms, credential_set_id)
+        return response
+
+    async def _record_traffic_locked(
+        self,
+        url: str,
+        method: str,
+        body: str | None,
+        response: httpx.Response,
+        elapsed_ms: float,
+        credential_set_id: UUID | None,
+    ) -> None:
+        # Same defensive backstop as the HTTP request itself, and for
+        # the same reason (§14 live validation against OWASP Juice
+        # Shop): _record_traffic's own `await self._session.commit()`
+        # is a real, unprotected await — a single hung DB commit (e.g.
+        # a silently-dropped connection to Postgres) would block
+        # whoever's holding session_lock forever, and every other
+        # concurrent agent right along with it, since every write in
+        # the whole scan funnels through this same lock. Wrapping the
+        # *entire* lock-acquire-and-commit sequence (not just the
+        # commit) means a stuck lock-holder can't wedge the scan
+        # forever either.
+        try:
+            await asyncio.wait_for(
+                self._locked_record_traffic(url, method, body, response, elapsed_ms, credential_set_id),
+                timeout=_HARD_REQUEST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise httpx.ReadTimeout(
+                f"Hard backstop timeout ({_HARD_REQUEST_TIMEOUT_SECONDS}s) exceeded recording "
+                f"traffic for {method} {url}",
+                request=httpx.Request(method, url),
+            ) from exc
+
+    async def _locked_record_traffic(
+        self,
+        url: str,
+        method: str,
+        body: str | None,
+        response: httpx.Response,
+        elapsed_ms: float,
+        credential_set_id: UUID | None,
+    ) -> None:
         async with self.session_lock:
             await self._record_traffic(url, method, body, response, elapsed_ms, credential_set_id)
-        return response
 
     async def probe_tls_version(self, host: str, port: int) -> str | None:
         return await asyncio.to_thread(probe_tls_version, host, port)
@@ -232,10 +391,10 @@ class ScopedHttpClient:
                 request_url=url,
                 request_headers=dict(response.request.headers),
                 request_query_params={},
-                request_body=body,
+                request_body=_strip_nul_bytes(body),
                 response_status=response.status_code,
                 response_headers=dict(response.headers),
-                response_body=response.text if _is_textual(response) else None,
+                response_body=_strip_nul_bytes(response.text) if _is_textual(response) else None,
                 timing_ms=elapsed_ms,
             )
         )

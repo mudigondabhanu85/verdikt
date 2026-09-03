@@ -1,0 +1,259 @@
+import time
+import uuid
+
+import httpx
+import pytest
+from sqlalchemy import select
+
+from app.agents.http_client import ScopedHttpClient, install_commit_backstop
+from app.models.project import ScopeEntry
+from app.models.traffic import TrafficInteraction
+from tests.conftest import session_scope
+
+
+async def test_hard_backstop_timeout_fires_independent_of_client_timeout(db_adapter, monkeypatch):
+    """A real, not-fully-root-caused bug found via §14 live validation
+    against OWASP Juice Shop: a live scan intermittently stalled forever
+    on a single request whose exact URL, reproduced in total isolation
+    (curl, a standalone httpx.AsyncClient with identical config),
+    returned instantly every time — meaning httpx's own configured
+    timeout, which should bound any single request, wasn't reliably
+    doing so in the real scan process. ScopedHttpClient now wraps every
+    request in its own explicit asyncio-level deadline as a defensive
+    backstop, independent of whatever the underlying httpx.AsyncClient's
+    own timeout is configured to. Proven here by configuring the client
+    with an enormous httpx-level timeout (3600s) and a tiny backstop
+    (via monkeypatch) — if the fix only relied on httpx's own timeout,
+    this would hang for the full 3600s instead of returning in well
+    under a second.
+    """
+    monkeypatch.setattr("app.agents.http_client._HARD_REQUEST_TIMEOUT_SECONDS", 0.2)
+
+    import asyncio
+
+    async def _never_responds(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(3600)
+        return httpx.Response(200)  # pragma: no cover — unreachable
+
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+            db_session=session,
+            timeout=3600.0,
+            transport=httpx.MockTransport(_never_responds),
+        )
+        start = time.monotonic()
+        with pytest.raises(httpx.HTTPError):
+            await client.get("http://site.test/")
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 5
+        await client.aclose()
+
+
+async def test_hard_backstop_timeout_fires_for_post_multipart(db_adapter, monkeypatch):
+    monkeypatch.setattr("app.agents.http_client._HARD_REQUEST_TIMEOUT_SECONDS", 0.2)
+
+    import asyncio
+
+    async def _never_responds(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(3600)
+        return httpx.Response(200)  # pragma: no cover — unreachable
+
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+            db_session=session,
+            timeout=3600.0,
+            transport=httpx.MockTransport(_never_responds),
+        )
+        start = time.monotonic()
+        with pytest.raises(httpx.HTTPError):
+            await client.post_multipart(
+                "http://site.test/upload", files={"file": ("a.txt", b"hi", "text/plain")}
+            )
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 5
+        await client.aclose()
+
+
+async def test_hard_backstop_fires_when_db_commit_hangs(db_adapter, monkeypatch):
+    """The backstop originally only wrapped the HTTP request itself —
+    _record_traffic's own `await self._session.commit()`, made on
+    *every* agent request while holding session_lock, was a real,
+    unprotected await. A single hung commit (e.g. a silently-dropped
+    connection to Postgres) would block whoever holds the lock forever,
+    and every other concurrent agent sharing it right along with them —
+    exactly the failure mode observed live against OWASP Juice Shop
+    (zero DB activity visible afterwards, zero CPU, and critically the
+    original HTTP-only backstop never fired, since the request itself
+    had already completed by the time the commit hung). Proven here by
+    forcing the session's own commit() to hang forever."""
+    monkeypatch.setattr("app.agents.http_client._HARD_REQUEST_TIMEOUT_SECONDS", 0.2)
+
+    import asyncio
+
+    async def _hung_commit():
+        await asyncio.sleep(3600)
+
+    async with session_scope(db_adapter) as session:
+        monkeypatch.setattr(session, "commit", _hung_commit)
+
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, text="ok")),
+        )
+        start = time.monotonic()
+        with pytest.raises(httpx.HTTPError):
+            await client.get("http://site.test/")
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 5
+        await client.aclose()
+
+
+@pytest.mark.parametrize("method_name", ["commit", "flush", "refresh", "get"])
+async def test_install_commit_backstop_protects_every_backstopped_method(
+    db_adapter, monkeypatch, method_name
+):
+    """The request-level and traffic-recording backstops above only
+    cover ScopedHttpClient's own two call sites — every one of ~15
+    agents (and app.agents.graph's own AgentJob bookkeeping) also
+    touches the *same shared* AsyncSession directly for commit/flush/
+    refresh/get, completely bypassing ScopedHttpClient. §14 live
+    validation against OWASP Juice Shop found exactly this: a live scan
+    stalled forever with none of the ScopedHttpClient-level backstops
+    ever firing — the hang wasn't in an HTTP request or in
+    traffic-recording at all, and (as later confirmed) wasn't even
+    always a commit specifically; flush() and refresh() are separate,
+    equally real DB-touching calls in the exact same hot paths.
+    install_commit_backstop patches the session itself once, so *any*
+    call to any of these methods anywhere in a scan — regardless of
+    which of the many scattered call sites — shares the same
+    forward-progress guarantee. Parametrized to prove every one of the
+    four backstopped methods is actually covered, not just commit.
+    """
+    monkeypatch.setattr("app.agents.http_client._HARD_REQUEST_TIMEOUT_SECONDS", 0.2)
+
+    import asyncio
+
+    async with session_scope(db_adapter) as session:
+        async def _hung_original(self, *args, **kwargs):
+            await asyncio.sleep(3600)
+
+        # Simulates any of the many direct `await self._session.<method>(...)`
+        # call sites scattered across the agent modules — not going
+        # through ScopedHttpClient at all. Patched on the class *before*
+        # install_commit_backstop runs, so it's what gets captured as
+        # the "original" method to wrap.
+        monkeypatch.setattr(type(session), method_name, _hung_original)
+        install_commit_backstop(session)
+
+        start = time.monotonic()
+        with pytest.raises(TimeoutError):
+            if method_name == "refresh":
+                await session.refresh(object())
+            elif method_name == "get":
+                await session.get(object, 1)
+            else:
+                await getattr(session, method_name)()
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 5
+
+
+async def test_agent_issued_request_with_nul_byte_response_does_not_poison_the_session(
+    db_adapter,
+):
+    """This IS the real root cause of the "intermittent stall" §14 live
+    validation against OWASP Juice Shop kept surfacing — not a hang at
+    all. app.api.routes.traffic_import already strips NUL bytes from
+    *imported* HAR traffic, but ScopedHttpClient records every
+    agent-issued request as its own TrafficInteraction (the §1.3 audit
+    trail) through a completely separate, unpatched path. A single real
+    response body containing a NUL byte (confirmed live against Juice
+    Shop) doesn't just fail its own insert — Postgres text columns
+    reject NUL outright, which poisons the *entire shared AsyncSession*
+    (PendingRollbackError on every subsequent operation), cascading
+    into every other concurrent agent and silently killing the whole
+    scan from inside its own cleanup path. Proven here: a response body
+    containing a literal NUL byte no longer crashes the request, and
+    the persisted TrafficInteraction has no NUL bytes in it, and a
+    second, unrelated request on the same client/session still succeeds
+    afterwards (proving no lingering poisoning).
+    """
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(
+                lambda r: httpx.Response(
+                    200, headers={"content-type": "text/html"}, content=b"before\x00after"
+                )
+            ),
+        )
+        response = await client.get("http://site.test/asset-with-nul")
+        assert response.status_code == 200
+
+        stored = (await session.execute(select(TrafficInteraction))).scalars().all()
+        assert len(stored) == 1
+        assert "\x00" not in stored[0].response_body
+
+        # The session must still be healthy for the next agent's request.
+        second_response = await client.get("http://site.test/asset-with-nul")
+        assert second_response.status_code == 200
+        stored_again = (await session.execute(select(TrafficInteraction))).scalars().all()
+        assert len(stored_again) == 2
+
+        await client.aclose()
+
+
+async def test_install_commit_backstop_recovers_session_after_one_bad_write(
+    db_adapter, monkeypatch
+):
+    """Even with the NUL-byte fix above, any future bad write could
+    poison the shared AsyncSession the same way — this proves the
+    general recovery mechanism itself: install_commit_backstop rolls
+    the session back after any failed commit/flush/refresh/get, so one
+    agent's genuine failure doesn't cascade into every other
+    concurrently-running agent sharing the same session.
+    """
+    async with session_scope(db_adapter) as session:
+        real_commit = type(session).commit
+        calls = {"n": 0}
+
+        async def _fails_once(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("simulated bad write")
+            return await real_commit(self)
+
+        monkeypatch.setattr(type(session), "commit", _fails_once)
+        install_commit_backstop(session)
+
+        with pytest.raises(RuntimeError):
+            await session.commit()
+
+        # A second, unrelated commit must still succeed — the session
+        # was rolled back, not left poisoned.
+        await session.commit()
+
+
+async def test_ordinary_request_still_succeeds_within_backstop(db_adapter):
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, text="ok")),
+        )
+        response = await client.get("http://site.test/")
+        assert response.status_code == 200
+        assert response.text == "ok"
+        await client.aclose()
