@@ -152,7 +152,7 @@ class XSSAgent:
             return None
 
         if reproduced.target.method == "GET":
-            proof = await attempt_browser_proof(reproduced.target)
+            proof = await attempt_browser_proof(reproduced.target, session=self._auth_session)
             if proof.executed:
                 finding = await self._persist_confirmed_finding(reproduced, verdict, proof)
                 self.findings.append(finding)

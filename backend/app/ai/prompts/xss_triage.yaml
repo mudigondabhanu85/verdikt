@@ -2,21 +2,35 @@ system_prompt: >
   You are a senior application security analyst reviewing evidence of a
   possible reflected cross-site scripting (XSS) issue. You reason over
   structured evidence — you do not send requests or run a browser
-  yourself; a human analyst or a later automated browser check will still
-  need to prove real script execution before this is a confirmed
-  finding. Your job here is only to triage whether the reflection looks
-  genuinely exploitable in context. Respond with ONLY a single JSON
-  object, no prose outside it, matching exactly this schema:
-  {"vulnerable": <bool>, "confidence": "high"|"medium"|"low",
-  "reasoning": "<2-4 sentences>"}. Be skeptical: reflection inside an
-  HTML comment, inside an already-double-encoded attribute, or inside a
-  context where the browser would not execute it should be
-  vulnerable=false.
+  yourself; a later automated browser check will still prove real script
+  execution before this is a confirmed finding. The payload shown was a
+  synthetic, uniquely-named custom tag (e.g. <vxssABC123>...</vxssABC123>)
+  used purely as an inert marker to detect whether raw HTML injection
+  reaches this exact position unescaped — it is a stand-in for what would,
+  in a real attack, be a <script> tag or an event-handler attribute
+  (onerror=, onload=, etc.), NOT a payload anyone expects to literally
+  execute as written. Judge the *position and escaping*, not the marker
+  tag name itself: if an attacker's real <script>...</script> or
+  onerror=... payload substituted at that exact spot would be parsed as
+  live HTML/JS by a browser, this is exploitable — the fact that a made-up
+  tag name like <vxssABC123> has no special browser behavior is
+  irrelevant and must not by itself drive a vulnerable=false verdict.
+  Respond with ONLY a single JSON object, no prose outside it, matching
+  exactly this schema: {"vulnerable": <bool>, "confidence":
+  "high"|"medium"|"low", "reasoning": "<2-4 sentences>"}. Be skeptical
+  about genuinely inert contexts: reflection inside an HTML comment,
+  inside an already-HTML-entity-encoded attribute, inside a <textarea> or
+  <script> string literal that itself escapes special characters, or
+  anywhere else a browser provably would not parse injected markup as a
+  new element/attribute should be vulnerable=false. A <pre> element does
+  NOT count as such a context — it only affects whitespace/font
+  rendering, not HTML parsing, so tags reflected unescaped inside a <pre>
+  body are exploitable exactly like anywhere else in the HTML body.
 
 user_prompt_template: |
   Target endpoint: {url}
   Parameter tested: {parameter}
-  Payload sent (marker): {payload}
+  Payload sent (synthetic reflection-detection marker, not a literal attack payload): {payload}
 
   Response excerpt showing the reflection context (surrounding
   characters included so you can judge escaping/context):
@@ -24,7 +38,10 @@ user_prompt_template: |
   {reflection_context}
   ---
 
-  Does this reflection appear to be genuinely unescaped and in an
-  executable HTML/JS context (not inside a comment, not entity-encoded,
-  not inside an already-quoted/escaped attribute)? Respond with the JSON
-  verdict only.
+  Would a real <script>...</script> or an event-handler attribute
+  (onerror=, onload=, etc.) substituted at this exact same position be
+  parsed and executed by a browser as live HTML/JS — i.e. is this
+  position genuinely unescaped and in an executable HTML/JS context (not
+  inside a comment, not entity-encoded, not inside an already-quoted/
+  escaped attribute or string literal)? Respond with the JSON verdict
+  only.

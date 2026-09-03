@@ -163,6 +163,22 @@ class _RealReflectionFixtureHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write(body)
+        elif parsed.path == "/account-search":
+            # A real, live-found bug: a fresh Playwright browser context
+            # carries no cookies at all, so a login-gated page (matching
+            # DVWA's real reflected-XSS page) always hit this redirect
+            # and browser proof could never succeed — see
+            # app.agents.xss_browser_proof.attempt_browser_proof.
+            if self.headers.get("Cookie") != "PHPSESSID=valid-session":
+                self.send_response(302)
+                self.send_header("Location", "/login")
+                self.end_headers()
+                return
+            body = f"<p>Results for: {term}</p>".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
         else:
             self.send_response(404)
             self.end_headers()
@@ -223,6 +239,67 @@ async def test_xss_agent_auto_confirms_finding_with_real_browser_proof(db_adapte
 
             stored_candidates = (await session.execute(select(ReviewCandidate))).scalars().all()
             assert stored_candidates == []
+
+            await client.aclose()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+async def test_browser_proof_reaches_login_gated_page_with_a_session(db_adapter):
+    """The real bug this closes: attempt_browser_proof launched a fresh,
+    cookie-less Playwright context, so a login-gated reflected-XSS page
+    (matching DVWA's real /vulnerabilities/xss_r/ page) always hit the
+    login redirect instead of the real vulnerable page and browser proof
+    could never succeed — every such finding silently fell back to a
+    ReviewCandidate (or nothing, before the AI-triage prompt fix) instead
+    of an auto-confirmed Finding with a screenshot."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _RealReflectionFixtureHandler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        async with session_scope(db_adapter) as session:
+            provider = ScriptedAIProviderAdapter.from_responses(
+                '{"vulnerable": true, "confidence": "high", "reasoning": "unescaped reflection in HTML body"}'
+            )
+            scan_run = ScanRun(version_id=uuid.uuid4(), status="running", requested_by=uuid.uuid4())
+            session.add(scan_run)
+            await session.commit()
+            await session.refresh(scan_run)
+
+            client = ScopedHttpClient(
+                version_id=uuid.uuid4(),
+                scope_entries=[ScopeEntry(host=host, port=port, in_scope=True)],
+                db_session=session,
+            )
+            guard = BudgetGuard(scan_run, session, provider)
+            agent = XSSAgent(
+                client,
+                scan_run_id=scan_run.id,
+                agent_job_id=uuid.uuid4(),
+                db_session=session,
+                budget_guard=guard,
+                ai_model="fake-model",
+            )
+
+            parameters = [
+                DiscoveredParameter(url=f"http://{host}:{port}/account-search?q=x", method="GET", name="q")
+            ]
+            auth_session = AuthenticatedSession(
+                credential_set_id=uuid.uuid4(), cookies={"PHPSESSID": "valid-session"}
+            )
+            sessions = {auth_session.credential_set_id: auth_session}
+            candidates = await agent.run(parameters, [], sessions)
+
+            assert candidates == []
+            assert len(agent.findings) == 1
+            finding = agent.findings[0]
+            assert finding.confirmation_status == "ai_confirmed"
+
+            await session.refresh(finding, attribute_names=["evidence"])
+            assert len(finding.evidence.screenshot_refs) == 1
 
             await client.aclose()
     finally:

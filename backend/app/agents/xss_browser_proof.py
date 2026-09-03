@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
+from app.agents.http_client import AuthenticatedSession
 from app.agents.probing import ProbeTarget, build_request
 
 
@@ -61,10 +62,24 @@ _NAVIGATION_TIMEOUT_MS = 10_000
 
 
 async def attempt_browser_proof(
-    target: ProbeTarget, *, headless: bool = True
+    target: ProbeTarget,
+    *,
+    headless: bool = True,
+    session: AuthenticatedSession | None = None,
 ) -> BrowserProofResult:
     """Only meaningful for target.method == "GET" — see module docstring.
     Callers are responsible for checking that before calling this.
+
+    A fresh Playwright browser context carries no cookies at all, which
+    silently defeated this proof for every login-gated page (a real,
+    live-found gap — DVWA's own reflected-XSS page requires an
+    authenticated session, matching the exact class of bug already fixed
+    for the httpx-level probes in app.agents.probing.fetch_with_value):
+    without the session's cookies, the browser just lands on the login
+    redirect and the marker never gets a chance to execute, so proof
+    always failed and every login-gated finding fell back to a
+    ReviewCandidate instead of an auto-confirmed Finding with a
+    screenshot.
     """
     marker = _proof_marker()
     payload = _payload_for(marker)
@@ -75,7 +90,14 @@ async def attempt_browser_proof(
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=headless)
-        page = await browser.new_page()
+        context = await browser.new_context()
+        if session is not None and session.cookies:
+            await context.add_cookies(
+                [{"name": name, "value": value, "url": url} for name, value in session.cookies.items()]
+            )
+        page = await context.new_page()
+        if session is not None and session.bearer_token:
+            await page.set_extra_http_headers({"Authorization": f"Bearer {session.bearer_token}"})
         try:
             # "networkidle" (the Playwright-recommended default) never
             # fires against a real single-page app that keeps a
