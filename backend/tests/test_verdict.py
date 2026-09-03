@@ -45,6 +45,29 @@ def test_parses_json_with_surrounding_whitespace():
     assert verdict.vulnerable is True
 
 
+def test_uses_the_last_json_block_when_the_model_self_corrects_mid_response():
+    """The real bug this closes: a real Claude response was observed
+    visibly reconsidering mid-answer ("Wait, let me reconsider...")
+    between two separate ```json fenced blocks, with the FIRST saying
+    vulnerable:false and the SECOND (its actual final, settled answer)
+    saying vulnerable:true. The old single-anchored-match parser treated
+    the whole multi-block response as unparseable and returned None,
+    discarding the model's real final verdict."""
+    raw = (
+        "```json\n"
+        '{"vulnerable": false, "confidence": "high", "reasoning": "initial read"}\n'
+        "```\n\n"
+        "Wait, let me reconsider — on closer inspection this is actually exploitable.\n\n"
+        "```json\n"
+        '{"vulnerable": true, "confidence": "high", "reasoning": "corrected final answer"}\n'
+        "```"
+    )
+    verdict = parse_verdict(raw)
+    assert verdict is not None
+    assert verdict.vulnerable is True
+    assert verdict.reasoning == "corrected final answer"
+
+
 def test_returns_none_for_unparseable_content():
     assert parse_verdict("I'm not sure, let me think about this...") is None
 

@@ -36,6 +36,15 @@ class ClaudeAdapter(AIProviderAdapter):
             max_tokens=max_tokens,
             system=system,
             messages=turns,
+            # Every prompt this adapter serves is a structured
+            # vulnerable/not-vulnerable classification, not open-ended
+            # generation — the API's default temperature (1.0) is fully
+            # stochastic and was observed live to flip the verdict for
+            # the exact same evidence across two real calls (a genuine
+            # DVWA reflected-XSS candidate). Deterministic (temperature=0)
+            # output is what "confirmed" should mean for a security
+            # scanner's triage step.
+            temperature=0,
         )
         content = "".join(block.text for block in response.content if block.type == "text")
         return AgentResponse(

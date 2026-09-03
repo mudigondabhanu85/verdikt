@@ -7,13 +7,13 @@ from pydantic import BaseModel, ValidationError
 # Real model output routinely wraps JSON in a markdown code fence (```json
 # ... ``` or plain ``` ... ```) even when the prompt asks for raw JSON —
 # every real (non-scripted-fake) Claude response observed against DVWA did
-# this. Strip one if present before parsing.
-_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL)
-
-
-def _strip_code_fence(raw_content: str) -> str:
-    match = _CODE_FENCE_RE.match(raw_content.strip())
-    return match.group(1).strip() if match else raw_content.strip()
+# this. A real response was also observed containing TWO fenced JSON
+# blocks: the model visibly second-guessed itself mid-response ("Wait,
+# let me reconsider...") before settling on a final answer in a second
+# block — findall (not a single anchored match) plus iterating candidates
+# in reverse means the model's last, settled answer wins over an earlier
+# one it explicitly walked back from.
+_CODE_FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?```", re.DOTALL)
 
 
 class Verdict(BaseModel):
@@ -28,11 +28,14 @@ def parse_verdict(raw_content: str) -> Verdict | None:
     as "couldn't confirm" (None) — fail safe, never guess a Finding into
     existence from unparseable model output.
     """
-    try:
-        data = json.loads(_strip_code_fence(raw_content))
-    except json.JSONDecodeError:
-        return None
-    try:
-        return Verdict(**data)
-    except ValidationError:
-        return None
+    candidates = _CODE_FENCE_RE.findall(raw_content) or [raw_content]
+    for candidate in reversed(candidates):
+        try:
+            data = json.loads(candidate.strip())
+        except json.JSONDecodeError:
+            continue
+        try:
+            return Verdict(**data)
+        except ValidationError:
+            continue
+    return None

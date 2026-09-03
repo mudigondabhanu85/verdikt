@@ -40,6 +40,10 @@ class GenericOpenAIAdapter(AIProviderAdapter):
             model=model,
             max_tokens=max_tokens,
             messages=[{"role": m.role, "content": m.content} for m in messages],
+            # See ClaudeAdapter.complete's identical rationale: every
+            # prompt here is a structured classification, not open-ended
+            # generation, so deterministic output is correct.
+            temperature=0,
         )
         content = response.choices[0].message.content or ""
         usage = response.usage
