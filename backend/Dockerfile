@@ -30,4 +30,14 @@ EXPOSE 8000
 # docker-compose.yml overrides this with --reload for local dev; this
 # default is what runs if the image is ever used standalone (e.g. a
 # real deployment, not just docker compose up).
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+#
+# --loop asyncio is required, not optional: uvicorn[standard] pulls in
+# uvloop, and uvicorn's default `--loop auto` silently selects it
+# whenever it's importable. Playwright's async API is incompatible with
+# uvloop — browser.launch() hangs forever (no timeout, no error, no
+# subprocess ever spawns) instead of raising, which permanently stalls
+# every real-headless-browser check (clickjacking/dom_xss/
+# prototype-pollution) with no visible failure. Found via §14 live
+# validation against OWASP Juice Shop, where those three AgentJobs
+# stayed "running" indefinitely on every real scan until this was set.
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio"]

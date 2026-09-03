@@ -21,8 +21,15 @@ docker compose up -d db
 cd backend
 uv sync
 uv run alembic upgrade head
-uv run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload --loop asyncio
 ```
+
+`--loop asyncio` is required, not optional: uvicorn's default loop
+selection silently picks `uvloop` (pulled in by `uvicorn[standard]`)
+whenever it's importable, and Playwright's async API is incompatible
+with uvloop — `browser.launch()` hangs forever instead of raising,
+which permanently stalls the clickjacking/DOM-XSS/prototype-pollution
+checks (they use real headless-browser proofs) with no visible error.
 
 API docs at http://localhost:8000/docs once running.
 

@@ -32,7 +32,11 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
-    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    # --loop asyncio: uvicorn's default auto-selects uvloop, which is
+    # incompatible with Playwright's async browser launch (hangs
+    # forever instead of erroring) — see backend/Dockerfile for the
+    # full explanation.
+    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--loop", "asyncio"]
 
   frontend:
     build: ./frontend

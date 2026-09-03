@@ -9,3 +9,4 @@ uv.lock.bak
 .DS_Store
 *.db
 *.sqlite3
+.claude/

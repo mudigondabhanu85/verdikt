@@ -30,6 +30,7 @@ from app.agents.recon import DiscoveredParameter, FormInfo, ReconAgent
 from app.agents.request_smuggling import RequestSmugglingAgent
 from app.agents.ssrf import SsrfAgent
 from app.agents.stored_xss import StoredXssAgent
+from app.agents.traffic_seed import seed_from_imported_traffic
 from app.agents.websocket_security import WebSocketAgent
 from app.agents.xss import XSSAgent
 from app.agents.xxe import XxeAgent
@@ -135,19 +136,38 @@ def build_graph(
         async with client.session_lock:
             scan_run = await session.get(ScanRun, scan_run_id)
             scan_run.tech_stack_fingerprint = fingerprint
+            # §14 validation gap fix: previously-imported traffic (HAR/
+            # Burp/manual/Zest) never fed into what a scan actually
+            # tests — this is what makes a client-rendered SPA (whose
+            # real API surface never shows up in a GET / response's
+            # static HTML) testable at all. See app.agents.traffic_seed.
+            seeded_endpoints, seeded_parameters, seeded_websocket_endpoints = (
+                await seed_from_imported_traffic(session, scan_run.version_id)
+            )
             await session.commit()
+
+        all_endpoints = list(dict.fromkeys(endpoints + seeded_endpoints))
+        all_parameters = agent.discovered_parameters + seeded_parameters
+        all_websocket_endpoints = list(
+            dict.fromkeys(agent.discovered_websocket_endpoints + seeded_websocket_endpoints)
+        )
 
         await _finish_job(
             job,
             status="completed",
-            stats={"endpoints_discovered": len(endpoints), "tech_stack_fingerprint": fingerprint},
+            stats={
+                "endpoints_discovered": len(endpoints),
+                "endpoints_seeded_from_traffic": len(seeded_endpoints),
+                "websocket_endpoints_seeded_from_traffic": len(seeded_websocket_endpoints),
+                "tech_stack_fingerprint": fingerprint,
+            },
         )
         return {
-            "discovered_endpoints": endpoints,
-            "discovered_parameters": agent.discovered_parameters,
+            "discovered_endpoints": all_endpoints,
+            "discovered_parameters": all_parameters,
             "discovered_forms": agent.discovered_forms,
             "discovered_responses": agent.discovered_responses,
-            "discovered_websocket_endpoints": agent.discovered_websocket_endpoints,
+            "discovered_websocket_endpoints": all_websocket_endpoints,
             "tech_stack_fingerprint": fingerprint,
         }
 

@@ -36,7 +36,7 @@ from app.agents.host_header import _forged_host_reflected, _FORGED_HOST
 from app.agents.oauth import _accepts_attacker_redirect, _ATTACKER_REDIRECT, _swap_redirect_uri
 from app.agents.prototype_pollution import attempt_prototype_pollution_proof
 from app.agents.raw_http import send_raw
-from app.agents.websocket_security import _build_handshake, _handshake_accepted
+from app.agents.websocket_security import _build_handshake, _handshake_accepted, _strip_stale_session_id
 from app.agents.xss_browser_proof import attempt_dom_xss_fragment_proof
 from app.agents.xxe import _FILE_DISCLOSURE_MARKER_RE, _XXE_PAYLOAD
 from app.models.finding import Finding
@@ -203,6 +203,14 @@ async def _retest_cache_poisoning(finding: Finding, client: ScopedHttpClient) ->
 @register("web-cache-deception")
 async def _retest_cache_deception(finding: Finding, client: ScopedHttpClient) -> RetestOutcome | None:
     url = finding.affected_endpoints[0]
+    # Same root-path guard as app.agents.cache_poisoning._check_deception
+    # (added after §14 validation against OWASP Juice Shop found the
+    # original check flagging a public SPA's own root fallback page) —
+    # no current check ever creates a root-path Finding for this
+    # check_id anymore, but an existing Finding from before that fix
+    # should retest as fixed, not error out or misreport.
+    if urlsplit(url).path in ("", "/"):
+        return RetestOutcome(still_vulnerable=False, request_raw=f"GET {url}", response_raw="(root path — not a valid cache-deception target)")
     try:
         original = await client.get(url)
         if original.status_code >= 400 or not original.text:
@@ -234,6 +242,7 @@ async def _retest_websocket(finding: Finding, client: ScopedHttpClient) -> Retes
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     use_tls = parsed.scheme == "https"
     path = parsed.raw_path.decode() if parsed.raw_path else "/"
+    path = _strip_stale_session_id(path)
     raw_request = _build_handshake(host, path, cookie_header=None)
     try:
         response, _elapsed = await asyncio.to_thread(

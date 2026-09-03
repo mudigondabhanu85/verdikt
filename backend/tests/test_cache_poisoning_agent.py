@@ -11,6 +11,8 @@ from app.models.finding import Finding
 from app.models.project import ScopeEntry
 from tests.conftest import session_scope
 
+_DECEPTION_PATH = "/account/profile"
+
 
 def _make_handler(*, vulnerable: bool):
     # Simulates a shared/CDN cache in front of the app: keyed on the
@@ -43,11 +45,26 @@ def _make_handler(*, vulnerable: bool):
                 self.wfile.write(body)
                 return
 
-            if path == "/nonexistent.css" and vulnerable:  # noqa: SIM102
+            if path == _DECEPTION_PATH:
+                # A page whose content is genuinely session-specific
+                # (unlike "/", this is exactly the class of endpoint the
+                # real cache-deception technique targets).
+                body = b"<html>Account: verdikt-test-user, balance: $42.00</html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Cache-Control", "private, no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if path == _DECEPTION_PATH + "/nonexistent.css" and vulnerable:
                 # Vulnerable routing: an unmapped trailing path is
-                # ignored and the app falls back to serving "/"'s
-                # content (a real Rails/Spring-style prefix-match bug).
-                body = b"<html><link rel=canonical href='https://real.test/'></html>"
+                # ignored and the app falls back to serving the real
+                # (session-specific) page's content, still marked
+                # publicly cacheable — a real Rails/Spring-style
+                # prefix-match bug.
+                body = b"<html>Account: verdikt-test-user, balance: $42.00</html>"
                 self.send_response(200)
                 self.send_header("Content-Type", "text/css")
                 self.send_header("Cache-Control", "public, max-age=300")
@@ -86,10 +103,12 @@ async def test_vulnerable_server_flags_poisoning_and_deception(db_adapter):
             agent = CachePoisoningAgent(
                 client, scan_run_id=uuid.uuid4(), agent_job_id=uuid.uuid4(), db_session=session
             )
-            findings = await agent.run([f"http://{host}:{port}/"])
+            findings = await agent.run([f"http://{host}:{port}/", f"http://{host}:{port}{_DECEPTION_PATH}"])
 
             check_ids = {f.check_id for f in findings}
             assert check_ids == {"web-cache-poisoning-unkeyed-input", "web-cache-deception"}
+            deception_finding = next(f for f in findings if f.check_id == "web-cache-deception")
+            assert deception_finding.affected_endpoints == [f"http://{host}:{port}{_DECEPTION_PATH}"]
 
             stored = (await session.execute(select(Finding))).scalars().all()
             assert len(stored) == 2
@@ -113,8 +132,37 @@ async def test_safe_server_is_not_flagged(db_adapter):
             agent = CachePoisoningAgent(
                 client, scan_run_id=uuid.uuid4(), agent_job_id=uuid.uuid4(), db_session=session
             )
-            findings = await agent.run([f"http://{host}:{port}/"])
+            findings = await agent.run([f"http://{host}:{port}/", f"http://{host}:{port}{_DECEPTION_PATH}"])
             assert findings == []
+            await client.aclose()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+async def test_root_path_is_never_flagged_for_deception_even_if_vulnerable(db_adapter):
+    """A real false positive found via §14 live validation against OWASP
+    Juice Shop: every SPA serves its own public index.html for any
+    unmatched route (standard SPA-fallback routing, not a vulnerability)
+    — "/" is never itself a meaningfully session-specific page, so
+    testing cache deception against it produces a technically-true but
+    meaningless result. Confirms the guard fires even against a fixture
+    that IS genuinely deception-vulnerable at "/" — i.e. this is a
+    deliberate scope decision, not an accidental miss."""
+    server, thread = _server(vulnerable=True)
+    try:
+        host, port = server.server_address
+        async with session_scope(db_adapter) as session:
+            client = ScopedHttpClient(
+                version_id=uuid.uuid4(),
+                scope_entries=[ScopeEntry(host=host, port=port, in_scope=True)],
+                db_session=session,
+            )
+            agent = CachePoisoningAgent(
+                client, scan_run_id=uuid.uuid4(), agent_job_id=uuid.uuid4(), db_session=session
+            )
+            deception = await agent._check_deception(f"http://{host}:{port}/")
+            assert deception is None
             await client.aclose()
     finally:
         server.shutdown()

@@ -18,6 +18,18 @@ from app.storage.local_disk import get_object_storage
 
 
 class DomXssAgent:
+    # A real headless-browser navigation per endpoint (up to two payload
+    # attempts each) is far more expensive than every other deterministic
+    # check — bounding total endpoints tested keeps scan runtime sane
+    # against a real target with a large discovered surface (§14 live
+    # validation against OWASP Juice Shop: traffic-seeded discovery alone
+    # found ~80 endpoints, which at ~10s/navigation would otherwise put a
+    # single scan's runtime for this one check well over ten minutes).
+    # Unlike clickjacking (a site-wide header/CSP behavior, one check per
+    # host is enough), a DOM-XSS sink is often genuinely page-specific, so
+    # this samples the first N endpoints rather than deduping per host.
+    MAX_ENDPOINTS = 40
+
     def __init__(
         self,
         client: ScopedHttpClient,
@@ -33,7 +45,7 @@ class DomXssAgent:
 
     async def run(self, endpoints: list[str]) -> list[Finding]:
         findings: list[Finding] = []
-        for url in endpoints:
+        for url in endpoints[: self.MAX_ENDPOINTS]:
             finding = await self._check_endpoint(url)
             if finding is not None:
                 findings.append(finding)

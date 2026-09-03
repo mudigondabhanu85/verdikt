@@ -19,6 +19,7 @@ import asyncio
 import base64
 import os
 import uuid
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -59,6 +60,28 @@ def _build_handshake(host: str, path: str, *, cookie_header: str | None) -> byte
 def _handshake_accepted(response: bytes) -> bool:
     status_line = response.split(b"\r\n", 1)[0]
     return b"101" in status_line
+
+
+def _strip_stale_session_id(path: str) -> str:
+    """A WebSocket URL discovered from captured traffic (HAR/proxy) may
+    carry an Engine.IO `sid` query param (socket.io and compatible
+    libraries) — that identifies one specific, already-established
+    polling session at capture time, not a stable identifier of the
+    endpoint itself. Replaying it verbatim in a fresh handshake attempt
+    made later always fails ("Session ID unknown" — confirmed via §14
+    live validation against OWASP Juice Shop's real socket.io endpoint),
+    which would misreport a real CSWSH vulnerability as not present.
+    Stripping it makes the probe behave like a fresh client connecting
+    for the first time, which is exactly the scenario CSWSH describes.
+    """
+    split = urlsplit(path)
+    if not split.query:
+        return path
+    query = parse_qsl(split.query, keep_blank_values=True)
+    filtered = [(k, v) for k, v in query if k.lower() != "sid"]
+    if len(filtered) == len(query):
+        return path
+    return urlunsplit(("", "", split.path, urlencode(filtered), ""))
 
 
 class WebSocketAgent:
@@ -114,6 +137,7 @@ class WebSocketAgent:
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         use_tls = parsed.scheme == "https"
         path = parsed.raw_path.decode() if parsed.raw_path else "/"
+        path = _strip_stale_session_id(path)
 
         try:
             response, _ = await self._handshake(host, port, path, use_tls, cookie_header)

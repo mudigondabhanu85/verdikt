@@ -80,18 +80,29 @@ class CachePoisoningAgent:
 
     async def run(self, endpoints: list[str]) -> list[Finding]:
         findings: list[Finding] = []
-        seen_hosts: set[str] = set()
+        poisoning_seen_hosts: set[str] = set()
+        deception_seen_hosts: set[str] = set()
         for url in endpoints:
             host = httpx.URL(url).host
-            if host in seen_hosts:
-                continue
-            seen_hosts.add(host)
-            poisoning = await self._check_poisoning(url)
-            if poisoning is not None:
-                findings.append(poisoning)
-            deception = await self._check_deception(url)
-            if deception is not None:
-                findings.append(deception)
+            if host not in poisoning_seen_hosts:
+                poisoning_seen_hosts.add(host)
+                poisoning = await self._check_poisoning(url)
+                if poisoning is not None:
+                    findings.append(poisoning)
+
+            # Deception gets its own dedup pass (not shared with
+            # poisoning's) that specifically prefers the first *non-root*
+            # URL discovered per host: _check_deception always skips "/"
+            # (never a meaningful deception target — see its docstring),
+            # so reusing poisoning's dedup here would mean a host whose
+            # first-crawled URL happens to be its homepage (almost every
+            # host, since "/" is always the crawl seed) never gets
+            # deception-tested against anything at all.
+            if host not in deception_seen_hosts and urlsplit(url).path not in ("", "/"):
+                deception_seen_hosts.add(host)
+                deception = await self._check_deception(url)
+                if deception is not None:
+                    findings.append(deception)
         return findings
 
     async def _check_poisoning(self, url: str) -> Finding | None:
@@ -164,6 +175,20 @@ class CachePoisoningAgent:
         return marker, poisoned, plain
 
     async def _check_deception(self, url: str) -> Finding | None:
+        # A real, found-via-live-testing false positive (§14 validation
+        # against OWASP Juice Shop): every SPA's own root path serves the
+        # same public index.html for literally any unmatched route (so
+        # the client-side router can take over) — that's completely
+        # standard, intentional SPA-fallback behavior, not cache
+        # deception. The actual PortSwigger technique targets pages that
+        # differ *per session* (e.g. "/my-account"), where the deception
+        # is tricking a shared cache into storing and replaying one
+        # victim's personalized response to someone else. The site's own
+        # homepage is — by definition — never meaningfully session-
+        # specific, so there's nothing to deceive a cache into leaking.
+        if urlsplit(url).path in ("", "/"):
+            return None
+
         try:
             original = await self._client.get(url)
         except (ScopeViolationError, httpx.HTTPError):

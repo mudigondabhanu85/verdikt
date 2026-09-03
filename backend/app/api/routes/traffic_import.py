@@ -27,6 +27,23 @@ from app.schemas.traffic import (
 
 router = APIRouter(prefix="/versions/{version_id}/traffic", tags=["traffic"])
 
+
+def _strip_nul_bytes(value: str | None) -> str | None:
+    """A real bug found via §14 live validation against OWASP Juice
+    Shop: a captured HAR entry for a binary asset (e.g. a PNG) decodes
+    to text containing literal NUL (0x00) bytes — valid Python str
+    content, but Postgres text/varchar columns reject NUL outright
+    ("PostgreSQL text fields cannot contain NUL (0x00) bytes"), which
+    took down the *entire* batch insert, not just that one row. Stripped
+    rather than truncated/rejected — response_body/request_body exist
+    here for human/agent inspection context, not exact binary
+    reconstruction, so a NUL-free approximation is the right tradeoff
+    over failing the whole import.
+    """
+    if value is None:
+        return None
+    return value.replace("\x00", "")
+
 # File-extension -> importer dispatch (§4). BurpFileImporter and
 # WebInspectMacroImporter are real classes with a real interface, but no
 # genuine sample export was obtainable to build their parsing logic
@@ -86,10 +103,10 @@ async def import_traffic(
             request_url=interaction.request.url,
             request_headers=interaction.request.headers,
             request_query_params=interaction.request.query_params,
-            request_body=interaction.request.body,
+            request_body=_strip_nul_bytes(interaction.request.body),
             response_status=interaction.response.status,
             response_headers=interaction.response.headers,
-            response_body=interaction.response.body,
+            response_body=_strip_nul_bytes(interaction.response.body),
             timing_ms=interaction.response.timing_ms,
         )
         for interaction in interactions
@@ -133,10 +150,10 @@ async def add_manual_traffic(
         request_url=payload.request.url,
         request_headers=payload.request.headers,
         request_query_params=payload.request.query_params,
-        request_body=payload.request.body,
+        request_body=_strip_nul_bytes(payload.request.body),
         response_status=payload.response.status,
         response_headers=payload.response.headers,
-        response_body=payload.response.body,
+        response_body=_strip_nul_bytes(payload.response.body),
         timing_ms=payload.response.timing_ms,
     )
     session.add(row)

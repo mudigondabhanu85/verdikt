@@ -57,6 +57,9 @@ def _dom_xss_payloads(marker: str) -> list[str]:
     ]
 
 
+_NAVIGATION_TIMEOUT_MS = 10_000
+
+
 async def attempt_browser_proof(
     target: ProbeTarget, *, headless: bool = True
 ) -> BrowserProofResult:
@@ -74,7 +77,18 @@ async def attempt_browser_proof(
         browser = await playwright.chromium.launch(headless=headless)
         page = await browser.new_page()
         try:
-            await page.goto(url, wait_until="networkidle")
+            # "networkidle" (the Playwright-recommended default) never
+            # fires against a real single-page app that keeps a
+            # persistent WebSocket connection open (socket.io, live
+            # reload, etc.) or polls in the background — confirmed via
+            # §14 live validation against OWASP Juice Shop, where this
+            # combination made every navigation eat the full default
+            # 30s timeout. "load" waits for the page's own resources
+            # (including deferred/module <script> tags) without waiting
+            # for *ongoing* network activity to quiesce, and the
+            # explicit timeout keeps a single slow/unreachable page from
+            # ever stalling the whole scan.
+            await page.goto(url, wait_until="load", timeout=_NAVIGATION_TIMEOUT_MS)
             executed = bool(await page.evaluate(f'window["{marker}"] === true'))
             screenshot = await page.screenshot(full_page=True) if executed else None
         except PlaywrightError:
@@ -114,7 +128,7 @@ async def attempt_dom_xss_fragment_proof(url: str, *, headless: bool = True) -> 
                 # for a second payload attempt without forcing a real
                 # fresh navigation first.
                 await page.goto("about:blank")
-                await page.goto(f"{url}#{payload}", wait_until="networkidle")
+                await page.goto(f"{url}#{payload}", wait_until="load", timeout=_NAVIGATION_TIMEOUT_MS)
                 executed = bool(await page.evaluate(f'window["{marker}"] === true'))
                 if executed:
                     break

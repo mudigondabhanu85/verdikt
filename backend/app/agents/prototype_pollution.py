@@ -34,6 +34,9 @@ def _append_payload(url: str, payload: str) -> str:
     return f"{url}{separator}{payload}"
 
 
+_NAVIGATION_TIMEOUT_MS = 10_000
+
+
 async def attempt_prototype_pollution_proof(
     url: str, *, headless: bool = True
 ) -> tuple[bool, bytes | None]:
@@ -51,7 +54,11 @@ async def attempt_prototype_pollution_proof(
                 # app.agents.xss_browser_proof's DOM-XSS fragment proof
                 # for why a same-path navigation alone isn't sufficient.
                 await page.goto("about:blank")
-                await page.goto(target_url, wait_until="networkidle")
+                # "networkidle" never fires against a real SPA with a
+                # persistent WebSocket connection or background polling
+                # — see app.agents.xss_browser_proof's identical fix,
+                # found via the same §14 live validation run.
+                await page.goto(target_url, wait_until="load", timeout=_NAVIGATION_TIMEOUT_MS)
                 executed = bool(await page.evaluate(f'({{}}).{marker} === "polluted"'))
                 if executed:
                     break
@@ -63,6 +70,11 @@ async def attempt_prototype_pollution_proof(
 
 
 class PrototypePollutionAgent:
+    # See app.agents.dom_xss.DomXssAgent.MAX_ENDPOINTS for why this is
+    # bounded rather than per-host deduped — same real-browser-per-
+    # endpoint cost, same §14 finding.
+    MAX_ENDPOINTS = 40
+
     def __init__(
         self,
         client: ScopedHttpClient,
@@ -78,7 +90,7 @@ class PrototypePollutionAgent:
 
     async def run(self, endpoints: list[str]) -> list[Finding]:
         findings: list[Finding] = []
-        for url in endpoints:
+        for url in endpoints[: self.MAX_ENDPOINTS]:
             finding = await self._check_endpoint(url)
             if finding is not None:
                 findings.append(finding)

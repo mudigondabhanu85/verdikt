@@ -1,8 +1,10 @@
+import base64
 import json
 from pathlib import Path
 
 import zstandard
 
+from app.api.routes.traffic_import import _strip_nul_bytes
 from tests.conftest import create_project_and_version, register_org_admin
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.har"
@@ -62,6 +64,71 @@ async def test_import_har_persists_interactions(client):
 
     post_one = by_method["POST"]
     assert "a@a.com" in post_one["request"]["body"]
+
+
+def test_strip_nul_bytes_removes_embedded_nul():
+    assert _strip_nul_bytes("before\x00after") == "beforeafter"
+
+
+def test_strip_nul_bytes_passes_through_none_and_clean_text():
+    assert _strip_nul_bytes(None) is None
+    assert _strip_nul_bytes("clean text") == "clean text"
+
+
+async def test_import_har_with_binary_asset_strips_nul_bytes_from_body(client):
+    """A real bug found via §14 live validation against OWASP Juice
+    Shop: a captured HAR entry for a binary asset (e.g. a PNG image)
+    decodes to text containing literal NUL bytes, which Postgres text
+    columns reject outright — and took down the *entire* batch insert,
+    not just the one binary row, since HarImporter parses a whole HAR
+    into one bulk TrafficInteraction insert. This uses a synthetic PNG
+    header (which always starts with a NUL byte) as the base64-encoded
+    response content, matching exactly what a real HAR capture of an
+    image asset looks like.
+    """
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+
+    png_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00"
+    har = {
+        "log": {
+            "version": "1.2",
+            "entries": [
+                {
+                    "startedDateTime": "2026-08-21T12:00:00.000Z",
+                    "time": 5,
+                    "request": {
+                        "method": "GET",
+                        "url": "https://example.test/logo.png",
+                        "headers": [],
+                        "queryString": [],
+                    },
+                    "response": {
+                        "status": 200,
+                        "headers": [],
+                        "content": {
+                            "mimeType": "image/png",
+                            "encoding": "base64",
+                            "text": base64.b64encode(png_bytes).decode(),
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    resp = await client.post(
+        f"/versions/{version_id}/traffic/import",
+        files={"file": ("binary.har", json.dumps(har).encode(), "application/json")},
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["imported_count"] == 1
+
+    listed = await client.get(f"/versions/{version_id}/traffic", headers=admin["headers"])
+    interactions = listed.json()
+    assert len(interactions) == 1
+    assert "\x00" not in interactions[0]["response"]["body"]
 
 
 async def test_rejects_non_har_upload(client):
