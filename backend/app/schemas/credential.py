@@ -19,6 +19,11 @@ class CredentialSetCreate(BaseModel):
     login_content_type: str | None = None
     token_response_path: str | None = None
 
+    # Static cookies sent on every authenticated request, merged in
+    # alongside whatever the login response itself sets — see
+    # app.models.credential.CredentialSet.extra_cookies.
+    extra_cookies: dict[str, str] | None = None
+
 
 class CredentialSetOut(BaseModel):
     id: uuid.UUID
@@ -29,5 +34,6 @@ class CredentialSetOut(BaseModel):
     login_endpoint: str | None
     login_method: str | None
     token_response_path: str | None
+    extra_cookies: dict[str, str] | None
 
     model_config = {"from_attributes": True}

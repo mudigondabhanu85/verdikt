@@ -211,6 +211,7 @@ export const api = {
         login_body_template?: string | null
         login_content_type?: string | null
         token_response_path?: string | null
+        extra_cookies?: Record<string, string> | null
       },
     ) => request<CredentialSetOut>(`/versions/${versionId}/credentials`, { method: 'POST', body }),
     delete: (versionId: string, credentialId: string) =>

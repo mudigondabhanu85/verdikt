@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 from sqlalchemy import select
 
-from app.agents.http_client import ScopedHttpClient
+from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
 from app.agents.recon import DiscoveredParameter
 from app.agents.xss import XSSAgent
 from app.ai.budget import BudgetGuard
@@ -34,6 +34,16 @@ def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200, headers={"content-type": "text/html"}, text=f"<p>Results for: {html.escape(term)}</p>"
         )
+
+    if parsed.path == "/account-search":
+        # A real, live-found bug: this endpoint's reflected XSS is only
+        # reachable behind a login-gated cookie, matching a real target
+        # (DVWA) whose vulnerable pages require an authenticated session
+        # — every probe was silently unauthenticated before this fix.
+        if request.headers.get("cookie") != "PHPSESSID=valid-session":
+            return httpx.Response(302, headers={"location": "/login"})
+        term = query.get("q", [""])[0]
+        return httpx.Response(200, headers={"content-type": "text/html"}, text=f"<p>Results for: {term}</p>")
 
     return httpx.Response(404)
 
@@ -83,6 +93,41 @@ async def test_xss_agent_queues_review_candidate_not_finding(db_adapter):
         stored = await session.execute(select(ReviewCandidate))
         assert len(stored.scalars().all()) == 1
 
+        await client.aclose()
+
+
+async def test_login_gated_reflection_is_unreachable_without_a_session(db_adapter):
+    """The real bug this fix closes: without a session, every probe hit
+    the target completely unauthenticated."""
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "unescaped reflection"}'
+        )
+        agent, client = await _make_agent(session, provider)
+
+        parameters = [DiscoveredParameter(url="http://site.test/account-search?q=x", method="GET", name="q")]
+        candidates = await agent.run(parameters, [])
+
+        assert candidates == []
+        await client.aclose()
+
+
+async def test_login_gated_reflection_is_found_with_a_session(db_adapter):
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "unescaped reflection"}'
+        )
+        agent, client = await _make_agent(session, provider)
+
+        parameters = [DiscoveredParameter(url="http://site.test/account-search?q=x", method="GET", name="q")]
+        auth_session = AuthenticatedSession(
+            credential_set_id=uuid.uuid4(), cookies={"PHPSESSID": "valid-session"}
+        )
+        sessions = {auth_session.credential_set_id: auth_session}
+        candidates = await agent.run(parameters, [], sessions)
+
+        assert len(candidates) == 1
+        assert candidates[0].check_type == "xss-reflected"
         await client.aclose()
 
 

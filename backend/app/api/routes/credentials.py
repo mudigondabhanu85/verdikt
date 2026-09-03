@@ -46,6 +46,7 @@ async def add_credential_set(
         login_body_template=payload.login_body_template,
         login_content_type=payload.login_content_type,
         token_response_path=payload.token_response_path,
+        extra_cookies=payload.extra_cookies,
     )
     session.add(credential)
     # Audit the creation event, never the secret material itself (§1.5).

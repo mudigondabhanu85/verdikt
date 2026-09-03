@@ -5,7 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 from sqlalchemy import select
 
-from app.agents.http_client import ScopedHttpClient
+from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
 from app.agents.injection import InjectionAgent
 from app.agents.recon import DiscoveredParameter, FormField, FormInfo
 from app.ai.budget import BudgetGuard
@@ -48,6 +48,20 @@ def _handler(request: httpx.Request) -> httpx.Response:
         if value in ("{{7*7}}", "${7*7}"):
             return httpx.Response(200, json={"greeting": "Hello, 49!"})
         return httpx.Response(200, json={"greeting": "Hello, there!"})
+
+    if parsed.path == "/account":
+        # A real, live-found bug: this endpoint's SQLi is only reachable
+        # at all behind a login-gated cookie, matching a real target
+        # (DVWA) whose vulnerable pages require an authenticated session
+        # — every probe was silently unauthenticated before this fix, so
+        # this class of finding was structurally unreachable regardless
+        # of how vulnerable it actually was.
+        if request.headers.get("cookie") != "PHPSESSID=valid-session":
+            return httpx.Response(302, headers={"location": "/login"})
+        value = query.get("id", [""])[0]
+        if "'" in value:
+            return httpx.Response(200, text="Error: You have an error in your SQL syntax near '''")
+        return httpx.Response(200, text="Account details page")
 
     if parsed.path == "/download":
         filename = query.get("file", [""])[0]
@@ -134,6 +148,44 @@ async def test_injection_agent_confirms_real_vulnerabilities(db_adapter):
         result = await session.execute(select(Finding))
         assert len(result.scalars().all()) == len(findings)
 
+        await client.aclose()
+
+
+async def test_login_gated_sqli_is_unreachable_without_a_session(db_adapter):
+    """The real bug this fix closes: without a session, every probe hit
+    the target completely unauthenticated. Proves the pre-fix behavior
+    is now opt-in-visible rather than silent — no session passed means
+    a login-gated vulnerable endpoint stays genuinely unreachable,
+    matching a real unauthenticated attacker's own view of the app."""
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "looks vulnerable"}'
+        )
+        agent, client, _scan_run = await _make_agent(session, provider)
+
+        parameters = [DiscoveredParameter(url="http://site.test/account?id=1", method="GET", name="id")]
+        findings = await agent.run(parameters, [])
+
+        assert findings == []
+        await client.aclose()
+
+
+async def test_login_gated_sqli_is_confirmed_with_a_session(db_adapter):
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "looks vulnerable"}'
+        )
+        agent, client, _scan_run = await _make_agent(session, provider)
+
+        parameters = [DiscoveredParameter(url="http://site.test/account?id=1", method="GET", name="id")]
+        auth_session = AuthenticatedSession(
+            credential_set_id=uuid.uuid4(), cookies={"PHPSESSID": "valid-session"}
+        )
+        sessions = {auth_session.credential_set_id: auth_session}
+        findings = await agent.run(parameters, [], sessions)
+
+        assert len(findings) == 1
+        assert findings[0].check_id == "sqli-error"
         await client.aclose()
 
 

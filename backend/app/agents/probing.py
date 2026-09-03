@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 import httpx
 
-from app.agents.http_client import ScopedHttpClient
+from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
 from app.agents.recon import DiscoveredParameter, FormInfo
 
 BASELINE_VALUE = "verdikt1"
@@ -55,8 +55,13 @@ def build_request(target: ProbeTarget, value: str) -> tuple[str, str | None, str
     return target.url, urlencode(body_fields), "application/x-www-form-urlencoded"
 
 
-async def fetch_with_value(client: ScopedHttpClient, target: ProbeTarget, value: str) -> httpx.Response:
+async def fetch_with_value(
+    client: ScopedHttpClient,
+    target: ProbeTarget,
+    value: str,
+    session: AuthenticatedSession | None = None,
+) -> httpx.Response:
     url, body, content_type = build_request(target, value)
     if body is None:
-        return await client.get(url)
-    return await client.post(url, body=body, content_type=content_type)
+        return await client.get(url, session=session)
+    return await client.post(url, body=body, content_type=content_type, session=session)

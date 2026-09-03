@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import ForeignKey, LargeBinary, String
+from sqlalchemy import ForeignKey, JSON, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -36,5 +36,15 @@ class CredentialSet(Base):
     # Dotted path to pull a bearer token out of a JSON login response,
     # e.g. "authentication.token".
     token_response_path: Mapped[str | None] = mapped_column(String(200))
+
+    # Static cookies sent on every authenticated request for this
+    # credential, merged in alongside whatever cookies the login response
+    # itself sets. Real, concrete need found live: some targets gate
+    # behavior behind a stateless preference/feature-flag cookie that's
+    # never set by the login response itself (e.g. DVWA's `security`
+    # cookie choosing low/medium/high/impossible difficulty per-request,
+    # independent of session/auth state) — without this, such a target
+    # can only ever be scanned at whatever its cookie-absent default is.
+    extra_cookies: Mapped[dict[str, str] | None] = mapped_column(JSON)
 
     version = relationship("Version")

@@ -75,6 +75,7 @@ export interface CredentialSetOut {
   login_endpoint: string | null
   login_method: string | null
   token_response_path: string | null
+  extra_cookies: Record<string, string> | null
 }
 
 export const BUSINESS_RULE_TYPES = [

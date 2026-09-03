@@ -6,7 +6,7 @@ from typing import Awaitable, Callable
 import httpx
 
 from app.agents.evidence import format_request_raw, format_response_raw
-from app.agents.http_client import ScopedHttpClient, ScopeViolationError
+from app.agents.http_client import AuthenticatedSession, ScopedHttpClient, ScopeViolationError
 from app.agents.probing import (
     BASELINE_VALUE,
     ProbeTarget,
@@ -160,7 +160,9 @@ _INJECTION_METADATA = {
 }
 
 
-ProbeFn = Callable[[ScopedHttpClient, ProbeTarget], Awaitable["InjectionCandidate | None"]]
+ProbeFn = Callable[
+    [ScopedHttpClient, ProbeTarget, "AuthenticatedSession | None"], Awaitable["InjectionCandidate | None"]
+]
 
 
 @dataclass
@@ -178,10 +180,12 @@ def _matches_sqli_error(text: str) -> bool:
     return any(p.search(text) for p in _SQLI_ERROR_PATTERNS)
 
 
-async def _probe_sqli_error(client: ScopedHttpClient, target: ProbeTarget) -> InjectionCandidate | None:
-    baseline = await fetch_with_value(client, target, BASELINE_VALUE)
+async def _probe_sqli_error(
+    client: ScopedHttpClient, target: ProbeTarget, session: AuthenticatedSession | None = None
+) -> InjectionCandidate | None:
+    baseline = await fetch_with_value(client, target, BASELINE_VALUE, session)
     payload = "'"
-    probe = await fetch_with_value(client, target, payload)
+    probe = await fetch_with_value(client, target, payload, session)
     if _matches_sqli_error(probe.text) and not _matches_sqli_error(baseline.text):
         return InjectionCandidate(
             payload_type="sqli-error",
@@ -195,11 +199,13 @@ async def _probe_sqli_error(client: ScopedHttpClient, target: ProbeTarget) -> In
     return None
 
 
-async def _probe_sqli_boolean(client: ScopedHttpClient, target: ProbeTarget) -> InjectionCandidate | None:
+async def _probe_sqli_boolean(
+    client: ScopedHttpClient, target: ProbeTarget, session: AuthenticatedSession | None = None
+) -> InjectionCandidate | None:
     true_payload = "verdikt1' OR '1'='1"
     false_payload = "verdikt1' OR '1'='2"
-    true_resp = await fetch_with_value(client, target, true_payload)
-    false_resp = await fetch_with_value(client, target, false_payload)
+    true_resp = await fetch_with_value(client, target, true_payload, session)
+    false_resp = await fetch_with_value(client, target, false_payload, session)
     if true_resp.status_code != false_resp.status_code:
         return None
     len_true, len_false = len(true_resp.text), len(false_resp.text)
@@ -220,12 +226,14 @@ async def _probe_sqli_boolean(client: ScopedHttpClient, target: ProbeTarget) -> 
     return None
 
 
-async def _probe_command_injection(client: ScopedHttpClient, target: ProbeTarget) -> InjectionCandidate | None:
+async def _probe_command_injection(
+    client: ScopedHttpClient, target: ProbeTarget, session: AuthenticatedSession | None = None
+) -> InjectionCandidate | None:
     marker = f"VERDIKT{uuid.uuid4().hex[:8]}"
-    baseline = await fetch_with_value(client, target, BASELINE_VALUE)
+    baseline = await fetch_with_value(client, target, BASELINE_VALUE, session)
     for template in ("; echo {marker}", "| echo {marker}", "`echo {marker}`"):
         payload = template.format(marker=marker)
-        probe = await fetch_with_value(client, target, payload)
+        probe = await fetch_with_value(client, target, payload, session)
         if marker in probe.text and marker not in baseline.text:
             return InjectionCandidate(
                 payload_type="command-injection",
@@ -256,12 +264,14 @@ def _is_template_renderable(response: httpx.Response) -> bool:
     return "json" not in content_type and "xml" not in content_type
 
 
-async def _probe_ssti(client: ScopedHttpClient, target: ProbeTarget) -> InjectionCandidate | None:
-    baseline = await fetch_with_value(client, target, BASELINE_VALUE)
+async def _probe_ssti(
+    client: ScopedHttpClient, target: ProbeTarget, session: AuthenticatedSession | None = None
+) -> InjectionCandidate | None:
+    baseline = await fetch_with_value(client, target, BASELINE_VALUE, session)
     if not _is_template_renderable(baseline):
         return None
     for payload in ("{{7*7}}", "${7*7}"):
-        probe = await fetch_with_value(client, target, payload)
+        probe = await fetch_with_value(client, target, payload, session)
         if "49" in probe.text and "49" not in baseline.text:
             return InjectionCandidate(
                 payload_type="ssti",
@@ -279,10 +289,12 @@ async def _probe_ssti(client: ScopedHttpClient, target: ProbeTarget) -> Injectio
 _PATH_TRAVERSAL_MARKER_RE = re.compile(r"root:.*:0:0:", re.IGNORECASE)
 
 
-async def _probe_path_traversal(client: ScopedHttpClient, target: ProbeTarget) -> InjectionCandidate | None:
-    baseline = await fetch_with_value(client, target, BASELINE_VALUE)
+async def _probe_path_traversal(
+    client: ScopedHttpClient, target: ProbeTarget, session: AuthenticatedSession | None = None
+) -> InjectionCandidate | None:
+    baseline = await fetch_with_value(client, target, BASELINE_VALUE, session)
     for payload in ("../../../../../../../../etc/passwd", "..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd"):
-        probe = await fetch_with_value(client, target, payload)
+        probe = await fetch_with_value(client, target, payload, session)
         if _PATH_TRAVERSAL_MARKER_RE.search(probe.text) and not _PATH_TRAVERSAL_MARKER_RE.search(
             baseline.text
         ):
@@ -300,7 +312,9 @@ async def _probe_path_traversal(client: ScopedHttpClient, target: ProbeTarget) -
     return None
 
 
-async def _probe_nosqli(client: ScopedHttpClient, target: ProbeTarget) -> InjectionCandidate | None:
+async def _probe_nosqli(
+    client: ScopedHttpClient, target: ProbeTarget, session: AuthenticatedSession | None = None
+) -> InjectionCandidate | None:
     """Boolean-differential NoSQL injection via MongoDB's $where JS
     evaluation context — same length-differential mechanism as
     _probe_sqli_boolean, just with a payload pair meaningful to a
@@ -308,8 +322,8 @@ async def _probe_nosqli(client: ScopedHttpClient, target: ProbeTarget) -> Inject
     """
     true_payload = "';return true;var x='"
     false_payload = "';return false;var x='"
-    true_resp = await fetch_with_value(client, target, true_payload)
-    false_resp = await fetch_with_value(client, target, false_payload)
+    true_resp = await fetch_with_value(client, target, true_payload, session)
+    false_resp = await fetch_with_value(client, target, false_payload, session)
     if true_resp.status_code != false_resp.status_code:
         return None
     len_true, len_false = len(true_resp.text), len(false_resp.text)
@@ -370,10 +384,24 @@ class InjectionAgent:
         # results — the caller (graph node) checks this flag to record the
         # AgentJob as "skipped" (budget) vs "completed".
         self.budget_exceeded = False
+        self._auth_session: AuthenticatedSession | None = None
 
     async def run(
-        self, parameters: list[DiscoveredParameter], forms: list[FormInfo]
+        self,
+        parameters: list[DiscoveredParameter],
+        forms: list[FormInfo],
+        sessions: dict[uuid.UUID, AuthenticatedSession] | None = None,
     ) -> list[Finding]:
+        # A real, significant bug found live against DVWA: these probes
+        # never carried any session at all before this fix, silently
+        # running fully unauthenticated against every target — any
+        # login-gated page was structurally unreachable, regardless of
+        # how vulnerable it actually was. One representative identity
+        # (not every session — CSRF-style multi-identity iteration would
+        # multiply probe volume, and AI triage cost, by the number of
+        # credential sets for no real gain here) is enough for probes
+        # to actually reach authenticated surface at all.
+        self._auth_session = next(iter((sessions or {}).values()), None)
         targets = query_probe_targets(parameters) + form_probe_targets(forms)
         findings: list[Finding] = []
 
@@ -382,7 +410,7 @@ class InjectionAgent:
                 break
             for probe_fn in _PROBE_FNS:
                 try:
-                    candidate = await probe_fn(self._client, target)
+                    candidate = await probe_fn(self._client, target, self._auth_session)
                 except (ScopeViolationError, httpx.HTTPError):
                     continue
                 if candidate is None:
@@ -415,7 +443,7 @@ class InjectionAgent:
 
         # §2 step 1: deterministic re-execution — re-run the exact same
         # probe fresh; if it doesn't reproduce, discard silently.
-        reproduced = await candidate.probe_fn(self._client, candidate.target)
+        reproduced = await candidate.probe_fn(self._client, candidate.target, self._auth_session)
         if reproduced is None:
             return None
 

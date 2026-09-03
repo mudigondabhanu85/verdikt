@@ -403,7 +403,11 @@ def build_graph(
             ai_model=ai_model,
         )
         try:
-            findings = await agent.run(state.get("discovered_parameters", []), state.get("discovered_forms", []))
+            findings = await agent.run(
+                state.get("discovered_parameters", []),
+                state.get("discovered_forms", []),
+                state.get("sessions", {}),
+            )
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
@@ -427,7 +431,11 @@ def build_graph(
             ai_model=ai_model,
         )
         try:
-            candidates = await agent.run(state.get("discovered_parameters", []), state.get("discovered_forms", []))
+            candidates = await agent.run(
+                state.get("discovered_parameters", []),
+                state.get("discovered_forms", []),
+                state.get("sessions", {}),
+            )
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise

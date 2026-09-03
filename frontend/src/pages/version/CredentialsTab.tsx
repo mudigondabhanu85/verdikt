@@ -12,6 +12,17 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
   const [secret, setSecret] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [loginEndpoint, setLoginEndpoint] = useState('')
+  const [extraCookies, setExtraCookies] = useState('')
+
+  function parseExtraCookies(raw: string): Record<string, string> | null {
+    const trimmed = raw.trim()
+    if (!trimmed) return null
+    const entries = trimmed
+      .split(',')
+      .map((pair) => pair.split('=').map((s) => s.trim()))
+      .filter(([k, v]) => k && v !== undefined) as [string, string][]
+    return entries.length ? Object.fromEntries(entries) : null
+  }
 
   const { data: credentials, isLoading } = useQuery({
     queryKey: ['versions', versionId, 'credentials'],
@@ -27,6 +38,7 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
         username,
         secret,
         login_endpoint: loginEndpoint || null,
+        extra_cookies: parseExtraCookies(extraCookies),
       }),
     onSuccess: () => {
       invalidate()
@@ -34,6 +46,7 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
       setUsername('')
       setSecret('')
       setLoginEndpoint('')
+      setExtraCookies('')
     },
   })
 
@@ -85,12 +98,20 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
             </button>
           </div>
           {showAdvanced && (
-            <input
-              value={loginEndpoint}
-              onChange={(e) => setLoginEndpoint(e.target.value)}
-              placeholder="explicit login endpoint (optional, for JSON/REST logins)"
-              className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
-            />
+            <>
+              <input
+                value={loginEndpoint}
+                onChange={(e) => setLoginEndpoint(e.target.value)}
+                placeholder="explicit login endpoint (optional, for JSON/REST logins)"
+                className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+              />
+              <input
+                value={extraCookies}
+                onChange={(e) => setExtraCookies(e.target.value)}
+                placeholder="extra static cookies, e.g. security=low (comma-separated for more than one)"
+                className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+              />
+            </>
           )}
           <button
             type="submit"

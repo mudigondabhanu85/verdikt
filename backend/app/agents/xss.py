@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.agents.evidence import format_request_raw, format_response_raw
-from app.agents.http_client import ScopedHttpClient, ScopeViolationError
+from app.agents.http_client import AuthenticatedSession, ScopedHttpClient, ScopeViolationError
 from app.agents.probing import ProbeTarget, fetch_with_value, form_probe_targets, query_probe_targets
 from app.agents.recon import DiscoveredParameter, FormInfo
 from app.agents.xss_browser_proof import attempt_browser_proof
@@ -56,10 +56,12 @@ def _reflection_context(text: str, marker: str) -> str | None:
     return text[start:end]
 
 
-async def _probe_reflected_xss(client: ScopedHttpClient, target: ProbeTarget) -> XssCandidate | None:
+async def _probe_reflected_xss(
+    client: ScopedHttpClient, target: ProbeTarget, session: AuthenticatedSession | None = None
+) -> XssCandidate | None:
     marker = _marker_for()
     payload = f"<{marker}>alert(1)</{marker}>"
-    probe = await fetch_with_value(client, target, payload)
+    probe = await fetch_with_value(client, target, payload, session)
     context = _reflection_context(probe.text, f"<{marker}>")
     if context is None:
         return None
@@ -95,10 +97,20 @@ class XSSAgent:
         self._ai_model = ai_model
         self.budget_exceeded = False
         self.findings: list[Finding] = []
+        self._auth_session: AuthenticatedSession | None = None
 
     async def run(
-        self, parameters: list[DiscoveredParameter], forms: list[FormInfo]
+        self,
+        parameters: list[DiscoveredParameter],
+        forms: list[FormInfo],
+        sessions: dict[uuid.UUID, AuthenticatedSession] | None = None,
     ) -> list[ReviewCandidate]:
+        # See app.agents.injection.InjectionAgent.run's identical fix —
+        # a real, significant bug found live against DVWA: these probes
+        # never carried any session at all before this, silently running
+        # fully unauthenticated regardless of how vulnerable a
+        # login-gated page actually was.
+        self._auth_session = next(iter((sessions or {}).values()), None)
         targets = query_probe_targets(parameters) + form_probe_targets(forms)
         candidates: list[ReviewCandidate] = []
 
@@ -106,7 +118,7 @@ class XSSAgent:
             if self.budget_exceeded:
                 break
             try:
-                candidate = await _probe_reflected_xss(self._client, target)
+                candidate = await _probe_reflected_xss(self._client, target, self._auth_session)
             except (ScopeViolationError, httpx.HTTPError):
                 continue
             if candidate is None:
@@ -135,7 +147,7 @@ class XSSAgent:
             return None
 
         # §2 step 1: deterministic re-execution before queuing.
-        reproduced = await _probe_reflected_xss(self._client, candidate.target)
+        reproduced = await _probe_reflected_xss(self._client, candidate.target, self._auth_session)
         if reproduced is None:
             return None
 

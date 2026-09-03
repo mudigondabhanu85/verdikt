@@ -53,6 +53,28 @@ async def test_credential_set_never_returns_plaintext_secret(client):
     assert deleted.status_code == 204
 
 
+async def test_credential_set_extra_cookies_round_trip(client):
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+
+    resp = await client.post(
+        f"/versions/{version_id}/credentials",
+        json={
+            "label": "Admin",
+            "credential_type": "username_password",
+            "username": "admin",
+            "secret": "password",
+            "extra_cookies": {"security": "low"},
+        },
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["extra_cookies"] == {"security": "low"}
+
+    listed = await client.get(f"/versions/{version_id}/credentials", headers=admin["headers"])
+    assert listed.json()[0]["extra_cookies"] == {"security": "low"}
+
+
 async def test_record_macro_stores_steps_against_credential(client, monkeypatch):
     """The actual browser recording mechanism (JS injection, event
     capture, field-role inference) is covered live against a real

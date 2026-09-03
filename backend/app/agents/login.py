@@ -133,13 +133,17 @@ class SessionManager:
 
         steps = [MacroStep.from_dict(raw) for raw in macro.steps]
         player = MacroPlayer()
-        return await player.replay(
+        session = await player.replay(
             steps,
             credential_set_id=credential_set.id,
             username=username,
             password=secret,
             headless=True,
         )
+        if session is not None and credential_set.extra_cookies:
+            # extra_cookies wins on key collision — see _session_from_response.
+            session.cookies = {**session.cookies, **credential_set.extra_cookies}
+        return session
 
     async def _login_explicit(
         self, credential_set: CredentialSet, username: str, secret: str
@@ -191,6 +195,16 @@ class SessionManager:
 
         if not cookies and not bearer_token:
             return None
+
+        if credential_set.extra_cookies:
+            # extra_cookies wins on key collision — the whole point of a
+            # fixed static cookie is to force a specific value regardless
+            # of whatever the target's own login response might set. A
+            # real target found live: DVWA's login response itself resets
+            # a `security` cookie to its own default on every login,
+            # which would otherwise silently override the very setting
+            # extra_cookies exists to pin.
+            cookies = {**cookies, **credential_set.extra_cookies}
 
         return AuthenticatedSession(
             credential_set_id=credential_set.id, cookies=cookies, bearer_token=bearer_token

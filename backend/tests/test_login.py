@@ -130,6 +130,75 @@ async def test_form_auto_discovery_login_extracts_cookie(db_adapter):
         await client.aclose()
 
 
+async def test_extra_cookies_are_merged_into_the_authenticated_session(db_adapter):
+    """A real, concrete need found live: some targets gate behavior
+    behind a stateless preference/feature-flag cookie the login response
+    itself never sets (e.g. DVWA's `security` cookie choosing low/
+    medium/high/impossible difficulty per-request, independent of
+    session/auth state). extra_cookies lets a CredentialSet carry a
+    fixed cookie alongside whatever the real login response sets."""
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=443, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+        credential = _credential_set(
+            username="formuser", secret="formpass", extra_cookies={"security": "low"}
+        )
+        form = FormInfo(
+            action_url="https://site.test/do-login",
+            method="POST",
+            fields=[
+                FormField(name="username", type="text"),
+                FormField(name="password", type="password"),
+            ],
+        )
+
+        manager = SessionManager(client)
+        auth_session = await manager.login(credential, forms=[form])
+
+        assert auth_session is not None
+        # Both the extra static cookie and the real login-derived one
+        # are present — extra_cookies augments, it doesn't replace.
+        assert auth_session.cookies == {"security": "low", "sid": "abc123"}
+
+        await client.aclose()
+
+
+async def test_extra_cookies_win_over_a_login_derived_cookie_of_the_same_name(db_adapter):
+    """A real bug found live against DVWA: its login response itself
+    resets a `security` cookie to its own default on every login — if
+    the login-derived value won, extra_cookies could never actually pin
+    anything the target's own login response also happens to set,
+    defeating the entire point of the field."""
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=443, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+        credential = _credential_set(username="formuser", secret="formpass", extra_cookies={"sid": "forced-value"})
+        form = FormInfo(
+            action_url="https://site.test/do-login",
+            method="POST",
+            fields=[
+                FormField(name="username", type="text"),
+                FormField(name="password", type="password"),
+            ],
+        )
+
+        manager = SessionManager(client)
+        auth_session = await manager.login(credential, forms=[form])
+
+        assert auth_session is not None
+        assert auth_session.cookies == {"sid": "forced-value"}
+
+        await client.aclose()
+
+
 async def _drive_fixture_login(page, *, username="whatever-typed", password="whatever-typed"):
     await page.fill("#username", username)
     await page.fill("#password", password)
