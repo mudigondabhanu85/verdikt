@@ -4,6 +4,7 @@ import { api } from '../api/client'
 import { Tabs } from '../components/Tabs'
 import { StatusBadge } from '../components/Badges'
 import { AgentJobsTab } from './scanrun/AgentJobsTab'
+import { SiteMapTab } from './scanrun/SiteMapTab'
 import { FindingsTab } from './scanrun/FindingsTab'
 import { ReviewCandidatesTab } from './scanrun/ReviewCandidatesTab'
 import { ReportsTab } from './scanrun/ReportsTab'
@@ -36,6 +37,7 @@ export function ScanRunDetailPage() {
       <Tabs
         tabs={[
           { key: 'agent-jobs', label: 'Agent Jobs', content: <AgentJobsTab scanRun={scanRun} /> },
+          { key: 'site-map', label: 'Site Map', content: <SiteMapTab scanRun={scanRun} /> },
           { key: 'findings', label: 'Findings', content: <FindingsTab scanRunId={scanRunId} /> },
           { key: 'review-candidates', label: 'Review Candidates', content: <ReviewCandidatesTab scanRunId={scanRunId} /> },
           { key: 'reports', label: 'Reports', content: <ReportsTab scanRunId={scanRunId} /> },

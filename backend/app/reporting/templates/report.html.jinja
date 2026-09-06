@@ -17,19 +17,27 @@
   .summary-table td, .summary-table th { border: 1px solid #ddd; padding: .4rem .8rem; text-align: left; }
   .finding { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.25rem; margin: 1.25rem 0; }
   .finding h3 { margin-top: 0; }
+  .instance-count { font-weight: 400; font-size: .8rem; color: #555; margin-left: .5rem; }
   .meta { font-size: .85rem; color: #555; margin-bottom: .75rem; }
   .meta span { margin-right: 1rem; }
   .section-label { font-weight: 600; margin-top: .9rem; margin-bottom: .25rem; }
+  .instance { border-top: 1px solid #eee; padding-top: .75rem; margin-top: .75rem; }
+  .instance summary { cursor: pointer; font-weight: 600; }
+  .instance summary code { font-weight: 400; }
   pre { background: #f5f5f5; padding: .75rem; border-radius: 6px; overflow-x: auto; font-size: .8rem; white-space: pre-wrap; word-break: break-word; }
   .glossary dt { font-weight: 600; margin-top: .5rem; }
   .no-findings { color: #555; font-style: italic; }
   .screenshot { max-width: 100%; border: 1px solid #ddd; border-radius: 6px; margin-top: .5rem; display: block; }
-  a { color: #1d4ed8; }
+  a { color: {{ branding.primary_color_hex if branding and branding.primary_color_hex else '#1d4ed8' }}; }
+  .report-logo { max-height: 64px; margin-bottom: 1rem; display: block; }
 </style>
 </head>
 <body>
 
-<h1>Verdikt Security Assessment Report</h1>
+{% if branding and branding.logo_data_uri %}
+<img class="report-logo" src="{{ branding.logo_data_uri }}" alt="{{ branding.company_name or 'Company logo' }}">
+{% endif %}
+<h1>{{ (branding.company_name + ' — ') if branding and branding.company_name else '' }}Verdikt Security Assessment Report</h1>
 <p>Scan run <code>{{ scan_run.id }}</code> — status: <strong>{{ scan_run.status }}</strong></p>
 
 <h2>How to read this report</h2>
@@ -69,17 +77,46 @@
   {% endfor %}
 </table>
 
-<h2>Findings</h2>
-{% if findings|length == 0 %}
-<p class="no-findings">No confirmed findings for this scan run.</p>
-{% endif %}
-{% for f in findings %}
+{% if attack_chains %}
+<h2>Attack Chains</h2>
+<p>
+  These findings, individually Confirmed above and below, combine into a worse compound
+  exploit — a real attacker chaining them together achieves more than any single finding
+  suggests. Each chain listed here has independently passed the same Confirmed-Only
+  adversarial-validation discipline as every other finding in this report.
+</p>
+{% for c in attack_chains %}
 <div class="finding">
-  <h3><span class="badge {{ f.severity }}">{{ f.severity }}</span> {{ f.title }}</h3>
+  <h3><span class="badge {{ c.severity }}">{{ c.severity }}</span> {{ c.title }}</h3>
+  <div class="meta"><span>Links {{ c.finding_ids|length }} findings</span></div>
+  <div class="section-label">What this means</div>
+  <p>{{ c.plain_language_summary }}</p>
+  <div class="section-label">Narrative</div>
+  <p>{{ c.narrative }}</p>
+  {% if c.steps_to_reproduce %}
+  <div class="section-label">Steps to reproduce (end-to-end)</div>
+  <ol>{% for step in c.steps_to_reproduce %}<li>{{ step }}</li>{% endfor %}</ol>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+<h2>Findings</h2>
+{% if finding_groups|length == 0 %}
+<p class="no-findings">No confirmed findings for this scan run.</p>
+{% else %}
+<p>{{ total_finding_count }} confirmed finding{{ '' if total_finding_count == 1 else 's' }} across {{ finding_groups|length }} vulnerability type{{ '' if finding_groups|length == 1 else 's' }}.</p>
+{% endif %}
+{% for g in finding_groups %}
+{% set f = g.shared %}
+<div class="finding">
+  <h3>
+    <span class="badge {{ g.severity }}">{{ g.severity }}</span> {{ g.title }}
+    <span class="instance-count">× {{ g.instances|length }} instance{{ '' if g.instances|length == 1 else 's' }}</span>
+  </h3>
   <div class="meta">
     <span>{{ f.owasp_2025_category }}</span>
     <span>{{ f.cwe_id }}</span>
-    <span>CVSS {{ f.cvss_score }} ({{ f.cvss_vector }})</span>
   </div>
 
   <div class="section-label">What this means</div>
@@ -87,20 +124,6 @@
 
   <div class="section-label">Technical detail</div>
   <p>{{ f.technical_description }}</p>
-
-  <div class="section-label">Affected endpoint(s)</div>
-  <ul>
-    {% for endpoint in f.affected_endpoints %}
-    <li><code>{{ endpoint }}</code></li>
-    {% endfor %}
-  </ul>
-
-  <div class="section-label">Steps to reproduce</div>
-  <ol>
-    {% for step in f.steps_to_reproduce %}
-    <li>{{ step }}</li>
-    {% endfor %}
-  </ol>
 
   <div class="section-label">Remediation</div>
   <p>{{ f.remediation }}</p>
@@ -114,18 +137,47 @@
   </ul>
   {% endif %}
 
-  {% if f.evidence %}
-  <div class="section-label">Evidence — request</div>
-  <pre>{{ f.evidence.request_raw }}</pre>
-  <div class="section-label">Evidence — response</div>
-  <pre>{{ f.evidence.response_raw }}</pre>
-  {% endif %}
+  <div class="section-label">Instances</div>
+  {% for inst in g.detailed_instances %}
+  <details class="instance" {{ 'open' if g.instances|length == 1 else '' }}>
+    <summary>{{ loop.index }}. <code>{{ inst.affected_endpoints[0] if inst.affected_endpoints else '(no endpoint recorded)' }}</code> — CVSS {{ inst.cvss_score }} ({{ inst.cvss_vector }})</summary>
 
-  {% if screenshots_by_finding_id.get(f.id) %}
-  <div class="section-label">Evidence — screenshot</div>
-  {% for image_b64 in screenshots_by_finding_id[f.id] %}
-  <img class="screenshot" src="data:image/png;base64,{{ image_b64 }}" alt="Browser-proof screenshot for {{ f.title }}">
+    <div class="section-label">Affected endpoint(s)</div>
+    <ul>
+      {% for endpoint in inst.affected_endpoints %}
+      <li><code>{{ endpoint }}</code></li>
+      {% endfor %}
+    </ul>
+
+    <div class="section-label">Steps to reproduce</div>
+    <ol>
+      {% for step in inst.steps_to_reproduce %}
+      <li>{{ step }}</li>
+      {% endfor %}
+    </ol>
+
+    {% if inst.evidence %}
+    <div class="section-label">Evidence — request</div>
+    <pre>{{ inst.evidence.request_raw }}</pre>
+    <div class="section-label">Evidence — response</div>
+    <pre>{{ inst.evidence.response_raw }}</pre>
+    {% endif %}
+
+    {% if screenshots_by_finding_id.get(inst.id) %}
+    <div class="section-label">Evidence — screenshot</div>
+    {% for image_b64 in screenshots_by_finding_id[inst.id] %}
+    <img class="screenshot" src="data:image/png;base64,{{ image_b64 }}" alt="Evidence screenshot for {{ g.title }}">
+    {% endfor %}
+    {% endif %}
+  </details>
   {% endfor %}
+  {% if g.summary_only_instances %}
+  <p>Also confirmed at {{ g.summary_only_instances|length }} more endpoint{{ '' if g.summary_only_instances|length == 1 else 's' }} (full evidence shown above is representative and applies identically):</p>
+  <ul>
+    {% for inst in g.summary_only_instances %}
+    <li><code>{{ inst.affected_endpoints[0] if inst.affected_endpoints else '(no endpoint recorded)' }}</code></li>
+    {% endfor %}
+  </ul>
   {% endif %}
 </div>
 {% endfor %}

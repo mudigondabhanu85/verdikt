@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.agents.evidence import format_request_raw, format_response_raw
+from app.agents.evidence_screenshot import capture_and_store_evidence_screenshot
 from app.agents.http_client import ScopedHttpClient, ScopeViolationError
 from app.checks.loader import get_check
 from app.checks.render import render_check_template
@@ -128,14 +129,24 @@ class GraphQLAgent:
             references=[*check_def.references, check_def.portswigger_reference_url],
             confirmation_status="ai_confirmed",
         )
+        request_raw = format_request_raw(response_again)
+        response_raw = format_response_raw(response_again)
+        screenshot_refs = await capture_and_store_evidence_screenshot(
+            scan_run_id=self._scan_run_id,
+            check_id=finding.check_id,
+            title=finding.title,
+            request_raw=request_raw,
+            response_raw=response_raw,
+        )
         async with self._client.session_lock:
             self._session.add(finding)
             await self._session.flush()
             self._session.add(
                 Evidence(
                     finding_id=finding.id,
-                    request_raw=format_request_raw(response_again),
-                    response_raw=format_response_raw(response_again),
+                    request_raw=request_raw,
+                    response_raw=response_raw,
+                    screenshot_refs=screenshot_refs,
                 )
             )
             await self._session.commit()

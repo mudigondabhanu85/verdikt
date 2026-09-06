@@ -169,6 +169,20 @@ class ReconAgent:
 
     def _follow_up_links(self, url: str, response: httpx.Response) -> list[str]:
         path = urlsplit(url).path
+        # ScopedHttpClient deliberately never auto-follows redirects
+        # (follow_redirects=False) so every hop stays individually
+        # scope-checked — but that means a redirect target has to be
+        # queued as its own frontier entry, or the crawl just stops dead
+        # at the redirect. A very common real-world pattern this was
+        # silently blind to: an app whose "/" 302s an unauthenticated
+        # visitor straight to a login page (DVWA's login.php, and
+        # countless real apps) — the crawl never saw the login form at
+        # all, so login-form auto-discovery had nothing to find.
+        if response.is_redirect:
+            location = response.headers.get("location")
+            if location:
+                return [urljoin(url, location)]
+            return []
         if path == "/robots.txt" and response.status_code < 400:
             return [urljoin(url, m) for m in _ROBOTS_DISALLOW_RE.findall(response.text)]
         if path == "/sitemap.xml" and response.status_code < 400:

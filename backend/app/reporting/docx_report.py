@@ -9,7 +9,10 @@ import uuid
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 
+from app.models.attack_chain import AttackChain
 from app.models.finding import Finding
+from app.reporting.grouping import group_findings
+from app.reporting.html_report import BrandingInfo
 from app.schemas.scan import ScanRunDetail
 
 SEVERITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
@@ -36,12 +39,24 @@ def render_docx_report(
     findings: list[Finding],
     executive_summary: str,
     screenshots_by_finding_id: dict[uuid.UUID, list[bytes]] | None = None,
+    attack_chains: list[AttackChain] | None = None,
+    branding: BrandingInfo | None = None,
 ) -> bytes:
     screenshots_by_finding_id = screenshots_by_finding_id or {}
-    ordered = sorted(findings, key=lambda f: SEVERITY_ORDER.get(f.severity, 99))
+    attack_chains = attack_chains or []
+    groups = group_findings(findings)
     document = Document()
 
-    document.add_heading("Verdikt Security Assessment Report", level=1)
+    if branding and branding.logo_bytes:
+        try:
+            document.add_picture(io.BytesIO(branding.logo_bytes), width=Inches(1.5))
+        except Exception:  # noqa: BLE001 — a corrupt/unreadable logo must not break report generation
+            pass
+
+    title = "Verdikt Security Assessment Report"
+    if branding and branding.company_name:
+        title = f"{branding.company_name} — {title}"
+    document.add_heading(title, level=1)
     document.add_paragraph(f"Scan run {scan_run.id} — status: {scan_run.status}")
 
     document.add_heading("Executive Summary", level=2)
@@ -58,53 +73,110 @@ def render_docx_report(
         row[0].text = sev
         row[1].text = str(scan_run.finding_counts_by_severity.get(sev, 0))
 
-    document.add_heading("Findings", level=2)
-    if not ordered:
-        document.add_paragraph("No confirmed findings for this scan run.")
+    if attack_chains:
+        document.add_heading("Attack Chains", level=2)
+        document.add_paragraph(
+            "These findings, individually Confirmed elsewhere in this report, combine into "
+            "a worse compound exploit — a real attacker chaining them together achieves more "
+            "than any single finding suggests. Each chain listed here has independently "
+            "passed the same Confirmed-Only adversarial-validation discipline as every other "
+            "finding in this report."
+        )
+        for chain in attack_chains:
+            heading = document.add_heading(level=3)
+            run = heading.add_run(f"[{chain.severity}] {chain.title}")
+            run.font.color.rgb = SEVERITY_RGB.get(chain.severity, RGBColor(0, 0, 0))
+            meta = document.add_paragraph()
+            meta.add_run(f"Links {len(chain.finding_ids)} findings").italic = True
+            document.add_heading("What this means", level=4)
+            document.add_paragraph(chain.plain_language_summary)
+            document.add_heading("Narrative", level=4)
+            document.add_paragraph(chain.narrative)
+            if chain.steps_to_reproduce:
+                document.add_heading("Steps to reproduce (end-to-end)", level=4)
+                for step in chain.steps_to_reproduce:
+                    document.add_paragraph(step, style="List Number")
 
-    for finding in ordered:
+    document.add_heading("Findings", level=2)
+    if not groups:
+        document.add_paragraph("No confirmed findings for this scan run.")
+    else:
+        document.add_paragraph(
+            f"{len(findings)} confirmed finding{'' if len(findings) == 1 else 's'} across "
+            f"{len(groups)} vulnerability type{'' if len(groups) == 1 else 's'}."
+        )
+
+    # One heading (+ shared narrative) per (check_id, title) GROUP, not
+    # per raw Finding row — see app.reporting.grouping's docstring: a
+    # scan commonly confirms the same check across dozens of endpoints,
+    # and one full section per occurrence produced reports hundreds of
+    # pages long with near-duplicate content (a real 291-finding scan
+    # produced a 629-page PDF; this document had the same problem).
+    for group in groups:
+        shared = group.shared
         document.add_page_break()
         heading = document.add_heading(level=2)
-        run = heading.add_run(f"[{finding.severity}] {finding.title}")
-        run.font.color.rgb = SEVERITY_RGB.get(finding.severity, RGBColor(0, 0, 0))
+        run = heading.add_run(
+            f"[{group.severity}] {group.title} "
+            f"({len(group.instances)} instance{'' if len(group.instances) == 1 else 's'})"
+        )
+        run.font.color.rgb = SEVERITY_RGB.get(group.severity, RGBColor(0, 0, 0))
 
         meta = document.add_paragraph()
-        meta.add_run(
-            f"{finding.owasp_2025_category} | {finding.cwe_id} | "
-            f"CVSS {finding.cvss_score} ({finding.cvss_vector})"
-        ).italic = True
+        meta.add_run(f"{shared.owasp_2025_category} | {shared.cwe_id}").italic = True
 
         document.add_heading("What this means", level=3)
-        document.add_paragraph(finding.plain_language_summary)
+        document.add_paragraph(shared.plain_language_summary)
 
         document.add_heading("Technical detail", level=3)
-        document.add_paragraph(finding.technical_description)
-
-        if finding.affected_endpoints:
-            document.add_heading("Affected endpoint(s)", level=3)
-            for endpoint in finding.affected_endpoints:
-                document.add_paragraph(endpoint, style="List Bullet")
-
-        if finding.steps_to_reproduce:
-            document.add_heading("Steps to reproduce", level=3)
-            for step in finding.steps_to_reproduce:
-                document.add_paragraph(step, style="List Number")
+        document.add_paragraph(shared.technical_description)
 
         document.add_heading("Remediation", level=3)
-        document.add_paragraph(finding.remediation)
+        document.add_paragraph(shared.remediation)
 
-        if finding.evidence:
-            document.add_heading("Evidence — request", level=3)
-            _mono_paragraph(document, finding.evidence.request_raw)
-            document.add_heading("Evidence — response", level=3)
-            _mono_paragraph(document, finding.evidence.response_raw)
+        if shared.references:
+            document.add_heading("References", level=3)
+            for ref in shared.references:
+                document.add_paragraph(ref, style="List Bullet")
 
-        for image_bytes in screenshots_by_finding_id.get(finding.id, []):
-            document.add_heading("Evidence — screenshot", level=3)
-            try:
-                document.add_picture(io.BytesIO(image_bytes), width=Inches(5))
-            except Exception:  # noqa: BLE001 — a corrupt/unreadable image must not break report generation
-                document.add_paragraph("(screenshot could not be embedded)")
+        document.add_heading("Instances", level=3)
+        for idx, instance in enumerate(group.detailed_instances, start=1):
+            endpoint = instance.affected_endpoints[0] if instance.affected_endpoints else "(no endpoint recorded)"
+            p = document.add_paragraph()
+            p.add_run(f"{idx}. ").bold = True
+            p.add_run(f"{endpoint} — CVSS {instance.cvss_score} ({instance.cvss_vector})")
+
+            if instance.affected_endpoints:
+                for endpoint in instance.affected_endpoints:
+                    document.add_paragraph(endpoint, style="List Bullet")
+
+            if instance.steps_to_reproduce:
+                for step in instance.steps_to_reproduce:
+                    document.add_paragraph(step, style="List Number")
+
+            if instance.evidence:
+                _mono_paragraph(document, "Request:")
+                _mono_paragraph(document, instance.evidence.request_raw)
+                _mono_paragraph(document, "Response:")
+                _mono_paragraph(document, instance.evidence.response_raw)
+
+            for image_bytes in screenshots_by_finding_id.get(instance.id, []):
+                try:
+                    document.add_heading("Evidence — screenshot", level=4)
+                    document.add_picture(io.BytesIO(image_bytes), width=Inches(5))
+                except Exception:  # noqa: BLE001 — a corrupt/unreadable image must not break report generation
+                    document.add_paragraph("(screenshot could not be embedded)")
+
+        remaining = group.summary_only_instances
+        if remaining:
+            document.add_paragraph(
+                f"Also confirmed at {len(remaining)} more endpoint"
+                f"{'' if len(remaining) == 1 else 's'} (full evidence shown above is "
+                "representative and applies identically):"
+            )
+            for instance in remaining:
+                endpoint = instance.affected_endpoints[0] if instance.affected_endpoints else "(no endpoint recorded)"
+                document.add_paragraph(endpoint, style="List Bullet")
 
     buffer = io.BytesIO()
     document.save(buffer)

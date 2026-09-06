@@ -1,4 +1,8 @@
+import secrets
+import threading
 import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs
 
 import httpx
 
@@ -278,6 +282,105 @@ async def test_macro_replay_fallback_not_tried_without_db_session(db_adapter, fi
         await client.aclose()
 
 
+async def test_sso_redirect_form_is_not_auto_posted_to(db_adapter):
+    """A real bug class this closes: blindly POSTing credentials into an
+    unfamiliar third-party IdP login page (§5) — the agent must
+    recognize an Okta-hosted form and refuse to auto-post to it. Proven
+    by pointing the form's action at a URL this fixture's handler would
+    fail on if a credential-bearing POST ever actually reached it."""
+    async with session_scope(db_adapter) as session:
+
+        def _handler_that_fails_on_sso_post(request: httpx.Request) -> httpx.Response:
+            if "oktapreview" in str(request.url) or "okta.com" in str(request.url):
+                raise AssertionError(
+                    "SessionManager POSTed credentials into an Okta-hosted login "
+                    "page instead of recognizing it as SSO and refusing to auto-post"
+                )
+            return _handler(request)
+
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[
+                ScopeEntry(host="site.test", port=443, in_scope=True),
+                ScopeEntry(host="acme.okta.com", port=443, in_scope=True),
+            ],
+            db_session=session,
+            transport=httpx.MockTransport(_handler_that_fails_on_sso_post),
+        )
+        credential = _credential_set(username="formuser", secret="formpass")
+        form = FormInfo(
+            action_url="https://acme.okta.com/app/site/abc123/sso/saml",
+            method="POST",
+            fields=[
+                FormField(name="username", type="text"),
+                FormField(name="password", type="password"),
+            ],
+        )
+
+        # No db_session on this manager -> macro fallback also declines,
+        # so the only way this returns non-None is if the SSO form got
+        # auto-posted to (which _handler_that_fails_on_sso_post would
+        # have raised on) — a None result here is the expected safe
+        # failure, not a bug.
+        manager = SessionManager(client)
+        auth_session = await manager.login(credential, forms=[form])
+        assert auth_session is None
+
+        await client.aclose()
+
+
+async def test_sso_redirect_form_falls_back_to_macro_replay(db_adapter, fixture_login_server):
+    """When an SSO-redirect form is detected AND a recorded macro exists
+    for the credential set, login should still succeed — via the macro,
+    never via posting into the IdP form."""
+    host, port = fixture_login_server
+    start_url = f"http://{host}:{port}/"
+
+    recorder = MacroRecorder()
+    steps = await recorder.record(start_url, headless=True, drive=_drive_fixture_login)
+
+    credential = _credential_set(username="expected_user", secret="expected_pass")
+
+    async with session_scope(db_adapter) as session:
+        session.add(
+            LoginMacro(
+                version_id=credential.version_id,
+                credential_set_id=credential.id,
+                steps=[s.to_dict() for s in steps],
+            )
+        )
+        await session.commit()
+
+        def _handler_that_fails_on_sso_post(request: httpx.Request) -> httpx.Response:
+            if "okta.com" in str(request.url):
+                raise AssertionError("credentials were POSTed into the Okta form")
+            return _handler(request)
+
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=443, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(_handler_that_fails_on_sso_post),
+        )
+        form = FormInfo(
+            action_url="https://acme.okta.com/app/site/abc123/sso/saml",
+            method="POST",
+            fields=[
+                FormField(name="username", type="text"),
+                FormField(name="password", type="password"),
+            ],
+        )
+
+        manager = SessionManager(client, db_session=session)
+        auth_session = await manager.login(credential, forms=[form])
+
+        assert auth_session is not None
+        assert auth_session.credential_set_id == credential.id
+        assert auth_session.cookies == {"session": "abc123-real-session"}
+
+        await client.aclose()
+
+
 async def test_no_login_path_available_returns_none(db_adapter):
     async with session_scope(db_adapter) as session:
         client = ScopedHttpClient(
@@ -293,3 +396,110 @@ async def test_no_login_path_available_returns_none(db_adapter):
         assert auth_session is None
 
         await client.aclose()
+
+
+class _CsrfGatedLoginHandler(BaseHTTPRequestHandler):
+    """A real HTTP server (not httpx.MockTransport) modeling DVWA's real
+    login.php exactly, since a stateless mock can't express either real
+    bug found live against it: (1) it mints a fresh, session-bound CSRF
+    token on every GET and genuinely rejects a login whose submitted
+    token doesn't match the token tied to the session cookie the POST
+    rides on — sending it blank (the old behavior) always fails; (2) it
+    only attempts a login at all when its submit button's own named
+    field ("Login") is present in the POST body — omitting it (also the
+    old behavior, since only type=="hidden" fields were ever filled in)
+    means the handler never even runs the credential check.
+    """
+
+    _tokens_by_session: dict[str, str] = {}
+
+    def do_GET(self):  # noqa: N802
+        if self.path != "/login.php":
+            self.send_response(404)
+            self.end_headers()
+            return
+        session_id = secrets.token_hex(8)
+        token = secrets.token_hex(8)
+        self._tokens_by_session[session_id] = token
+        body = (
+            "<form action='/login.php' method='post'>"
+            "<input name='username'><input name='password' type='password'>"
+            f"<input type='hidden' name='csrf_token' value='{token}'>"
+            "<input type='submit' name='Login' value='Login'>"
+            "</form>"
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Set-Cookie", f"PHPSESSID={session_id}; Path=/")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):  # noqa: N802
+        length = int(self.headers.get("Content-Length", 0))
+        fields = parse_qs(self.rfile.read(length).decode())
+        cookie_header = self.headers.get("Cookie", "")
+        session_id = cookie_header.removeprefix("PHPSESSID=") if "PHPSESSID=" in cookie_header else None
+        expected_token = self._tokens_by_session.get(session_id or "")
+
+        authenticated = (
+            "Login" in fields  # the submit button's own field must be present
+            and fields.get("csrf_token", [None])[0] == expected_token
+            and expected_token is not None
+            and fields.get("username", [None])[0] == "admin"
+            and fields.get("password", [None])[0] == "password"
+        )
+        if authenticated:
+            self.send_response(302)
+            self.send_header("Location", "/index.php")
+            self.send_header("Set-Cookie", f"PHPSESSID={session_id}; Path=/; authenticated=1")
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"<title>Login :: still on the login page</title>")
+
+    def log_message(self, format, *args):  # noqa: A002
+        pass
+
+
+async def test_form_login_sends_live_csrf_token_and_submit_field(db_adapter):
+    """The two real bugs this closes, found live against DVWA: a form
+    auto-login that sends every hidden field blank (including a live
+    CSRF token) and drops the submit button's own field entirely both
+    fail against a real CSRF-gated, submit-gated login form like this
+    one — the old code returned None here 100% of the time."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _CsrfGatedLoginHandler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        async with session_scope(db_adapter) as session:
+            client = ScopedHttpClient(
+                version_id=uuid.uuid4(),
+                scope_entries=[ScopeEntry(host=host, port=port, in_scope=True)],
+                db_session=session,
+            )
+            credential = _credential_set(username="admin", secret="password")
+            form = FormInfo(
+                action_url=f"http://{host}:{port}/login.php",
+                method="POST",
+                fields=[
+                    FormField(name="username", type="text"),
+                    FormField(name="password", type="password"),
+                    FormField(name="csrf_token", type="hidden"),
+                    FormField(name="Login", type="submit"),
+                ],
+            )
+
+            manager = SessionManager(client)
+            auth_session = await manager.login(credential, forms=[form])
+
+            assert auth_session is not None
+            assert auth_session.cookies.get("PHPSESSID") is not None
+
+            await client.aclose()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)

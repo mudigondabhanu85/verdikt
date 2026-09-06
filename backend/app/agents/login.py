@@ -2,6 +2,7 @@ import json
 from urllib.parse import urlencode
 
 import httpx
+from bs4 import BeautifulSoup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +14,36 @@ from app.models.login_macro import LoginMacro
 from app.vault.credential_vault import decrypt_credential
 
 _DEFAULT_JSON_BODY_TEMPLATE = '{"username": "{username}", "password": "{password}"}'
+
+# Recognizable third-party IdP signatures (§5) — deliberately narrow:
+# a false positive here means skipping a legitimate simple form-login
+# unnecessarily, so this stays to genuinely IdP-specific hosts/paths,
+# never generic words like "login" or "auth" that a normal app's own
+# login form could plausibly use itself.
+_SSO_REDIRECT_MARKERS = (
+    "okta.com",
+    "oktapreview.com",
+    "login.microsoftonline.com",
+    "auth0.com",
+    "onelogin.com",
+    "pingidentity.com",
+    "/saml",
+    "/sso/",
+    "oauth2/authorize",
+    "/oauth2/v1/authorize",
+)
+
+
+def _looks_like_sso_redirect(url: str) -> bool:
+    """Classifies a login form's action URL as pointing at a third-party
+    identity provider rather than the target application's own login
+    handler (§5). When true, SessionManager must not blindly POST
+    credentials into an unfamiliar IdP login page it knows nothing
+    about — it falls back to requiring a recorded login macro instead,
+    same as when no form is found at all.
+    """
+    lowered = url.lower()
+    return any(marker in lowered for marker in _SSO_REDIRECT_MARKERS)
 
 
 def _fill_template(template: str, username: str, secret: str) -> str:
@@ -60,6 +91,35 @@ def _guess_username_field(form: FormInfo) -> str | None:
     return candidates[0].name if candidates else None
 
 
+def _live_field_values(html: str, field_names: set[str]) -> dict[str, str]:
+    """Real current values for named `<input>` fields — hidden CSRF
+    tokens and submit-button fields alike — read from a freshly-fetched
+    copy of the login page, not a stale/empty placeholder. Two distinct
+    real failures found live against DVWA's login.php: (1) it genuinely
+    rejects a login whose `user_token` doesn't match the one minted for
+    the exact session the POST rides on, so sending it blank isn't a
+    graceful fallback, it's a login that always fails silently; (2) its
+    submit button (`<input type="submit" name="Login" value="Login">`)
+    is itself a named field the server checks via `isset($_POST['Login'])`
+    to know the form was submitted at all — omitting it (as this code
+    used to, since only type=="hidden" fields were ever filled in) means
+    the handler never even attempts the login, also failing silently
+    with a plain 200 back to the same page. Best-effort: a field that
+    isn't present (or is itself blank) on the fetched page is omitted.
+    """
+    if not field_names:
+        return {}
+    soup = BeautifulSoup(html, "html.parser")
+    values: dict[str, str] = {}
+    for input_tag in soup.find_all("input"):
+        name = input_tag.get("name")
+        if name in field_names:
+            value = input_tag.get("value")
+            if value:
+                values[name] = value
+    return values
+
+
 def _cookies_from_response(response: httpx.Response) -> dict[str, str]:
     cookies: dict[str, str] = {}
     for raw in response.headers.get_list("set-cookie"):
@@ -102,12 +162,17 @@ class SessionManager:
         self, credential_set: CredentialSet, forms: list[FormInfo]
     ) -> AuthenticatedSession | None:
         username, secret = decrypt_credential(credential_set.encrypted_secret)
+        # See ScopedHttpClient.reset_cookie_jar's docstring — a fresh
+        # slate before every login attempt, since whatever the recon
+        # crawl (or an earlier credential's login attempt) happened to
+        # accumulate must never bleed into this one.
+        self._client.reset_cookie_jar()
 
         if credential_set.login_endpoint:
             return await self._login_explicit(credential_set, username, secret)
 
         form = _find_login_form(forms)
-        if form is not None:
+        if form is not None and not _looks_like_sso_redirect(form.action_url):
             session = await self._login_via_form(credential_set, form, username, secret)
             if session is not None:
                 return session
@@ -169,28 +234,71 @@ class SessionManager:
         if not username_field or not password_field:
             return None
 
+        # ScopedHttpClient never relies on an implicit cookie jar for
+        # anonymous (session=None) requests — every identity's cookies
+        # are threaded through explicitly, precisely so concurrent
+        # identities never leak into a shared jar (see _request's own
+        # comment). That means the pre-login page-view that set the
+        # server-side session this form's submission needs to belong to
+        # is never captured on its own. Real, observed failure: DVWA
+        # (and presumably other apps) issue a fresh PHPSESSID on every
+        # unauthenticated page view — recon's own crawl already
+        # accumulated several different ones for this same login page,
+        # so blindly POSTing with no cookie at all attaches the login
+        # attempt to no session, and it silently fails (200 back to the
+        # login page, not a redirect/new session). A fresh GET of the
+        # form's own page immediately before POSTing captures exactly
+        # the one session cookie this specific submission is entitled
+        # to, with no ambiguity from any earlier crawl requests. The
+        # same fetch also captures each hidden/submit field's real
+        # current value (see _live_field_values) — DVWA's login.php was
+        # found live to genuinely reject a mismatched/blank CSRF token,
+        # and separately to never even attempt a login whose submit
+        # button field was omitted.
+        pre_login = await self._client.get(form.action_url)
+        pre_login_cookies = _cookies_from_response(pre_login)
+
         payload = {username_field: username, password_field: secret}
-        for f in form.fields:
-            if f.type == "hidden" and f.name not in payload:
-                # Best-effort only — we don't re-fetch to capture a fresh
-                # CSRF token value, so hidden fields are sent empty. Forms
-                # requiring a live CSRF token will fail login here and
-                # SessionManager returns None, same as any other login
-                # failure; explicit login config is the reliable path for
-                # CSRF-protected forms.
-                payload[f.name] = ""
+        # Every other field on the form — hidden CSRF tokens and the
+        # submit button alike — gets its real, current value from the
+        # fresh pre_login fetch rather than a blank placeholder (see
+        # _live_field_values's docstring for why both matter).
+        other_names = {f.name for f in form.fields if f.type in ("hidden", "submit") and f.name not in payload}
+        live_values = _live_field_values(pre_login.text, other_names)
+        for name in other_names:
+            payload[name] = live_values.get(name, "")
 
         response = await self._client.post(
             form.action_url,
             body=urlencode(payload),
             content_type="application/x-www-form-urlencoded",
+            extra_headers=(
+                {"Cookie": "; ".join(f"{k}={v}" for k, v in pre_login_cookies.items())}
+                if pre_login_cookies
+                else None
+            ),
         )
-        return self._session_from_response(credential_set, response, None)
+        return self._session_from_response(
+            credential_set, response, None, fallback_cookies=pre_login_cookies
+        )
 
     def _session_from_response(
-        self, credential_set: CredentialSet, response: httpx.Response, token_path: str | None
+        self,
+        credential_set: CredentialSet,
+        response: httpx.Response,
+        token_path: str | None,
+        *,
+        fallback_cookies: dict[str, str] | None = None,
     ) -> AuthenticatedSession | None:
-        cookies = _cookies_from_response(response)
+        # fallback_cookies covers the common case where a login POST's
+        # own response sets no *new* Set-Cookie at all — the session ID
+        # a pre-login page view already established simply persists
+        # unchanged through login (only its server-side state flips to
+        # authenticated), so the response itself looks cookie-less even
+        # though the login genuinely succeeded. Real cookies from this
+        # response still win on key collision (some apps do rotate the
+        # session ID on login, e.g. session-fixation hardening).
+        cookies = {**(fallback_cookies or {}), **_cookies_from_response(response)}
         bearer_token = _bearer_token_from_response(response, token_path)
 
         if not cookies and not bearer_token:

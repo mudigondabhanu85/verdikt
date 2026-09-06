@@ -266,6 +266,9 @@ class ScopedHttpClient:
                 f"Hard backstop timeout ({_HARD_REQUEST_TIMEOUT_SECONDS}s) exceeded for POST {url}",
                 request=httpx.Request("POST", url),
             ) from exc
+        finally:
+            # See _request's identical fix for why this matters.
+            self._client.cookies.clear()
         elapsed_ms = (time.monotonic() - start) * 1000
 
         credential_set_id = session.credential_set_id if session else None
@@ -319,6 +322,25 @@ class ScopedHttpClient:
                 f"Hard backstop timeout ({_HARD_REQUEST_TIMEOUT_SECONDS}s) exceeded for {method} {url}",
                 request=httpx.Request(method, url),
             ) from exc
+        finally:
+            # httpx.AsyncClient auto-extracts and persists every
+            # Set-Cookie it ever sees into its own implicit jar,
+            # regardless of the fact that every cookie this class sends
+            # is already built explicitly above — directly contradicting
+            # this class's own stated "never let identities leak into a
+            # shared jar" design. Real, observed failure against DVWA: a
+            # scan with 9+ agents hammering the target truly concurrently
+            # (many of them anonymous, session=None) filled this jar with
+            # a churn of different PHPSESSID values; once contaminated,
+            # httpx started merging jar cookies into supposedly-explicit
+            # session-bearing requests too, silently downgrading
+            # authenticated probes to anonymous ones for the rest of the
+            # scan — injection/xss found nothing not because DVWA wasn't
+            # vulnerable, but because every probe after the jar got
+            # polluted was quietly redirected to the login page instead.
+            # Clearing after every single request guarantees the jar
+            # never accumulates anything to leak in the first place.
+            self._client.cookies.clear()
         elapsed_ms = (time.monotonic() - start) * 1000
 
         credential_set_id = session.credential_set_id if session else None
@@ -402,6 +424,25 @@ class ScopedHttpClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    def reset_cookie_jar(self) -> None:
+        """Every request here is meant to carry cookies explicitly
+        (session=None means "anonymous," not "whatever the underlying
+        httpx client happens to remember") — but httpx.AsyncClient
+        maintains its own implicit cookie jar regardless, silently
+        storing and re-attaching every Set-Cookie it ever sees on this
+        shared client instance. Real, observed failure: a real target
+        (DVWA) issues a fresh PHPSESSID on every unauthenticated page
+        view; after ReconAgent's crawl alone, the jar held multiple
+        same-named cookies with inconsistent domain attributes, which
+        httpx can't cleanly resolve — the wrong (or an ambiguous) one
+        then gets silently attached to the login attempt, breaking
+        session continuity in a way that looks like a normal failed
+        login. Call this right before a login attempt (see
+        SessionManager) to guarantee a clean slate — nothing downstream
+        depends on the crawl's incidental cookies surviving.
+        """
+        self._client.cookies.clear()
 
 
 def _is_textual(response: httpx.Response) -> bool:

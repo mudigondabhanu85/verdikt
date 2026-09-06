@@ -152,6 +152,35 @@ def build_graph(
             dict.fromkeys(agent.discovered_websocket_endpoints + seeded_websocket_endpoints)
         )
 
+        # Site-map/coverage data (§7 UI) — previously only the *count* of
+        # discovered endpoints survived past this node (in stats above);
+        # the actual crawled tree, discovered forms, and parameters were
+        # never persisted anywhere queryable after the scan finished,
+        # even though every one of them is already sitting in memory
+        # right here. Kept on this same AgentJob.stats JSON column
+        # (already the established place scan-run-scoped structured
+        # data lives) rather than a new table — one JSON blob per scan
+        # run is simpler than a new table and doesn't need its own
+        # migration.
+        site_map = {
+            "endpoints": [
+                {"url": url, "status": agent.discovered_responses[url].status_code}
+                for url in all_endpoints
+                if url in agent.discovered_responses
+            ]
+            + [{"url": url, "status": None} for url in all_endpoints if url not in agent.discovered_responses],
+            "forms": [
+                {
+                    "action_url": form.action_url,
+                    "method": form.method,
+                    "fields": [f.name for f in form.fields],
+                }
+                for form in agent.discovered_forms
+            ],
+            "parameters": [{"url": p.url, "name": p.name} for p in all_parameters],
+            "websocket_endpoints": all_websocket_endpoints,
+        }
+
         await _finish_job(
             job,
             status="completed",
@@ -160,6 +189,7 @@ def build_graph(
                 "endpoints_seeded_from_traffic": len(seeded_endpoints),
                 "websocket_endpoints_seeded_from_traffic": len(seeded_websocket_endpoints),
                 "tech_stack_fingerprint": fingerprint,
+                "site_map": site_map,
             },
         )
         return {

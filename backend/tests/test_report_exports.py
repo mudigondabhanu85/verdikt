@@ -7,7 +7,7 @@ from pypdf import PdfReader
 
 from app.models.finding import Evidence, Finding
 from app.reporting.docx_report import render_docx_report
-from app.reporting.html_report import render_html_report
+from app.reporting.html_report import BrandingInfo, render_html_report
 from app.reporting.pdf_report import render_pdf_report
 from app.schemas.scan import ScanRunDetail
 
@@ -209,3 +209,135 @@ def test_html_report_without_screenshots_omits_screenshot_section():
     finding = _finding_with_evidence()
     html = render_html_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
     assert "Evidence — screenshot" not in html
+
+
+def test_html_report_with_no_branding_is_unchanged():
+    finding = _finding_with_evidence()
+    html = render_html_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
+    assert '<img class="report-logo"' not in html
+    assert html.count("Verdikt Security Assessment Report") >= 1
+    assert "— Verdikt Security Assessment Report" not in html
+
+
+def test_html_report_embeds_branding_logo_and_company_name():
+    import base64
+
+    finding = _finding_with_evidence()
+    png_bytes = _sample_png()
+    branding = BrandingInfo(company_name="Acme Corp", logo_bytes=png_bytes)
+    html = render_html_report(
+        scan_run=_detail(), findings=[finding], executive_summary="summary", branding=branding
+    )
+    assert "Acme Corp — Verdikt Security Assessment Report" in html
+    expected_b64 = base64.b64encode(png_bytes).decode("ascii")
+    assert f'src="data:image/png;base64,{expected_b64}"' in html
+
+
+def test_docx_report_with_no_branding_has_no_extra_images():
+    finding = _finding_with_evidence()
+    docx_bytes = render_docx_report(
+        scan_run=_detail(), findings=[finding], executive_summary="summary"
+    )
+    document = Document(io.BytesIO(docx_bytes))
+    assert len(document.inline_shapes) == 0
+    full_text = "\n".join(p.text for p in document.paragraphs)
+    assert "Verdikt Security Assessment Report" in full_text
+    assert "Acme Corp" not in full_text
+
+
+def test_docx_report_embeds_branding_logo_and_company_name():
+    finding = _finding_with_evidence()
+    png_bytes = _sample_png()
+    branding = BrandingInfo(company_name="Acme Corp", logo_bytes=png_bytes)
+    docx_bytes = render_docx_report(
+        scan_run=_detail(), findings=[finding], executive_summary="summary", branding=branding
+    )
+    document = Document(io.BytesIO(docx_bytes))
+    assert len(document.inline_shapes) == 1
+    full_text = "\n".join(p.text for p in document.paragraphs)
+    assert any("Acme Corp — Verdikt Security Assessment Report" in h.text for h in document.paragraphs) or (
+        "Acme Corp" in full_text
+    )
+
+
+def _same_check_findings(count: int) -> list[Finding]:
+    """Several instances of the SAME check (same check_id/title, e.g. a
+    missing security header confirmed on many crawled endpoints) — the
+    real-world shape that produced a 629-page PDF from 291 near-duplicate
+    header_config findings before grouping was added."""
+    findings = []
+    for i in range(count):
+        finding = Finding(
+            id=uuid.uuid4(),
+            scan_run_id=uuid.uuid4(),
+            agent_job_id=uuid.uuid4(),
+            check_id="missing-csp",
+            title="Missing Content-Security-Policy Header",
+            severity="Low",
+            owasp_2025_category="A02 Security Misconfiguration",
+            cwe_id="CWE-693",
+            cvss_vector="AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+            cvss_score=3.1,
+            affected_endpoints=[f"http://target.test/page{i}"],
+            plain_language_summary="Shared summary text identical across every instance.",
+            technical_description="Shared technical detail identical across every instance.",
+            steps_to_reproduce=[f"1. Request http://target.test/page{i}.", "2. Observe no CSP header."],
+            remediation="Shared remediation text identical across every instance.",
+            references=["https://owasp.org/www-project-secure-headers/"],
+        )
+        finding.evidence = Evidence(
+            request_raw=f"GET /page{i} HTTP/1.1\r\nHost: target.test\r\n",
+            response_raw="HTTP/1.1 200 OK\r\n\r\n<html></html>",
+            screenshot_refs=[],
+        )
+        findings.append(finding)
+    return findings
+
+
+def test_pdf_report_groups_findings_by_check_id():
+    findings = _same_check_findings(5)
+    pdf_bytes = render_pdf_report(
+        scan_run=_detail(), findings=findings, executive_summary="summary"
+    )
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = "\n".join(page.extract_text() for page in reader.pages)
+
+    # ONE group heading, not five duplicate ones.
+    assert text.count("Missing Content-Security-Policy Header") == 1
+    assert text.count("Shared summary text identical across every instance.") == 1
+    assert text.count("Shared remediation text identical across every instance.") == 1
+    # But all five distinct endpoints still show up as instances.
+    for i in range(5):
+        assert f"target.test/page{i}" in text
+    assert "5 instances" in text
+
+
+def test_docx_report_groups_findings_by_check_id():
+    findings = _same_check_findings(5)
+    docx_bytes = render_docx_report(
+        scan_run=_detail(), findings=findings, executive_summary="summary"
+    )
+    document = Document(io.BytesIO(docx_bytes))
+    full_text = "\n".join(p.text for p in document.paragraphs)
+
+    heading_texts = [p.text for p in document.paragraphs if p.style.name.startswith("Heading 2")]
+    matching_headings = [h for h in heading_texts if "Missing Content-Security-Policy Header" in h]
+    assert len(matching_headings) == 1, f"expected exactly one group heading, got {matching_headings}"
+    assert full_text.count("Shared summary text identical across every instance.") == 1
+    for i in range(5):
+        assert f"target.test/page{i}" in full_text
+    assert "5 instances" in full_text
+
+
+def test_pdf_report_embeds_branding_logo_and_company_name():
+    finding = _finding_with_evidence()
+    png_bytes = _sample_png()
+    branding = BrandingInfo(company_name="Acme Corp", logo_bytes=png_bytes)
+    pdf_bytes = render_pdf_report(
+        scan_run=_detail(), findings=[finding], executive_summary="summary", branding=branding
+    )
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = "\n".join(page.extract_text() for page in reader.pages)
+    assert "Acme Corp" in text
+    images_found = sum(len(page.images) for page in reader.pages)
+    assert images_found >= 1

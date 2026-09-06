@@ -18,6 +18,7 @@ from app.agents.evidence import format_request_raw, format_response_raw
 from app.agents.http_client import ScopedHttpClient, ScopeViolationError
 from app.agents.recon import FormInfo
 from app.agents.xss import XSS_FINDING_METADATA
+from app.agents.xss_browser_proof import visible_proof_banner_js
 from app.models.finding import Evidence, Finding
 from app.storage.local_disk import get_object_storage
 
@@ -35,7 +36,12 @@ def _marker() -> str:
 
 
 def _payload_for(marker: str) -> str:
-    return f'<script>window["{marker}"]=true;</script>'
+    # See app.agents.xss_browser_proof.visible_proof_banner_js's
+    # docstring — the same real bug applied here: the window[marker]
+    # flag alone is reliable for the page.evaluate() check below, but
+    # invisible, so a screenshot taken right after detecting it looked
+    # identical to an unexploited page revisit.
+    return f'<script>window["{marker}"]=true;{visible_proof_banner_js(marker)}</script>'
 
 
 def _build_payload_fields(form: FormInfo, payload: str) -> dict[str, str]:

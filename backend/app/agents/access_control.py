@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.agents.evidence import format_request_raw, format_response_raw
+from app.agents.evidence_screenshot import capture_and_store_evidence_screenshot
 from app.agents.http_client import ScopedHttpClient, ScopeViolationError
 from app.agents.idor import find_numeric_id_segment, nearby_ids, substitute_path_segment
 from app.agents.matrix import Identity, build_identities
@@ -302,6 +303,15 @@ class AccessControlAgent:
             references=[meta["portswigger_reference_url"]],
             confirmation_status="ai_confirmed",
         )
+        request_raw = format_request_raw(candidate.response_b)
+        response_raw = format_response_raw(candidate.response_b)
+        screenshot_refs = await capture_and_store_evidence_screenshot(
+            scan_run_id=self._scan_run_id,
+            check_id=finding.check_id,
+            title=finding.title,
+            request_raw=request_raw,
+            response_raw=response_raw,
+        )
         async with self._client.session_lock:
             self._session.add(finding)
             await self._session.flush()
@@ -309,8 +319,9 @@ class AccessControlAgent:
             self._session.add(
                 Evidence(
                     finding_id=finding.id,
-                    request_raw=format_request_raw(candidate.response_b),
-                    response_raw=format_response_raw(candidate.response_b),
+                    request_raw=request_raw,
+                    response_raw=response_raw,
+                    screenshot_refs=screenshot_refs,
                 )
             )
             await self._session.commit()

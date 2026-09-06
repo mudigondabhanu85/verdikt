@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, ApiError, BASE_URL } from '../../api/client'
+import { api, ApiError } from '../../api/client'
+import { AuthenticatedImage } from '../../components/AuthenticatedImage'
 import { SeverityBadge, StatusBadge } from '../../components/Badges'
 import { TicketSection } from './TicketSection'
 import type { FindingOut } from '../../api/types'
@@ -116,7 +117,7 @@ function FindingDetail({ scanRunId, finding }: { scanRunId: string; finding: Fin
           {finding.evidence.screenshot_refs.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-2">
               {finding.evidence.screenshot_refs.map((ref) => (
-                <img key={ref} src={`${BASE_URL}/objects/${ref}`} alt="evidence screenshot" className="max-w-xs rounded border" />
+                <AuthenticatedImage key={ref} objectKey={ref} alt="evidence screenshot" className="max-w-xs rounded border" />
               ))}
             </div>
           )}
@@ -126,8 +127,89 @@ function FindingDetail({ scanRunId, finding }: { scanRunId: string; finding: Fin
   )
 }
 
+const SEVERITY_RANK: Record<string, number> = { Critical: 0, High: 1, Medium: 2, Low: 3 }
+
+interface FindingGroup {
+  key: string
+  checkId: string
+  title: string
+  severity: string
+  instances: FindingOut[]
+}
+
+function groupFindings(findings: FindingOut[]): FindingGroup[] {
+  const byKey = new Map<string, FindingGroup>()
+  for (const finding of findings) {
+    const key = `${finding.check_id}::${finding.title}`
+    const existing = byKey.get(key)
+    if (existing) {
+      existing.instances.push(finding)
+      if (SEVERITY_RANK[finding.severity] < SEVERITY_RANK[existing.severity]) {
+        existing.severity = finding.severity
+      }
+    } else {
+      byKey.set(key, { key, checkId: finding.check_id, title: finding.title, severity: finding.severity, instances: [finding] })
+    }
+  }
+  return Array.from(byKey.values()).sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
+}
+
+function FindingGroupRow({ scanRunId, group }: { scanRunId: string; group: FindingGroup }) {
+  const [groupOpen, setGroupOpen] = useState(false)
+  const [expandedInstance, setExpandedInstance] = useState<string | null>(null)
+  const shared = group.instances[0]
+
+  return (
+    <li>
+      <button
+        onClick={() => setGroupOpen(!groupOpen)}
+        className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-gray-50"
+      >
+        <span className="flex items-center gap-3">
+          <SeverityBadge severity={group.severity} />
+          <span className="font-medium">{group.title}</span>
+          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+            × {group.instances.length} {group.instances.length === 1 ? 'instance' : 'instances'}
+          </span>
+        </span>
+        <span className="text-xs text-gray-400">{groupOpen ? 'Hide' : 'Show'} instances</span>
+      </button>
+
+      {groupOpen && (
+        <div className="border-t border-gray-100 bg-gray-50 px-4 py-4 text-sm">
+          <p className="mb-2 text-gray-700">{shared.plain_language_summary}</p>
+          <p className="mb-3 text-gray-600">{shared.remediation}</p>
+          <div className="mb-3 flex gap-4 text-xs text-gray-500">
+            <span>CWE: {shared.cwe_id}</span>
+            <span>{shared.owasp_2025_category}</span>
+          </div>
+
+          <ul className="divide-y divide-gray-200 rounded border border-gray-200 bg-white">
+            {group.instances.map((finding) => (
+              <li key={finding.id}>
+                <button
+                  onClick={() => setExpandedInstance(expandedInstance === finding.id ? null : finding.id)}
+                  className="flex w-full items-center justify-between px-4 py-2 text-left hover:bg-gray-50"
+                >
+                  <span className="truncate font-mono text-xs text-gray-700">
+                    {finding.affected_endpoints[0] ?? '(no endpoint recorded)'}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <StatusBadge status={finding.confirmation_status} />
+                    <StatusBadge status={finding.retest_status} />
+                  </span>
+                </button>
+                {expandedInstance === finding.id && <FindingDetail scanRunId={scanRunId} finding={finding} />}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </li>
+  )
+}
+
 export function FindingsTab({ scanRunId }: { scanRunId: string }) {
-  const [expanded, setExpanded] = useState<string | null>(null)
   const [severityFilter, setSeverityFilter] = useState<string>('all')
 
   const { data: findings, isLoading } = useQuery({
@@ -136,6 +218,7 @@ export function FindingsTab({ scanRunId }: { scanRunId: string }) {
   })
 
   const visible = findings?.filter((f) => severityFilter === 'all' || f.severity === severityFilter) ?? []
+  const groups = groupFindings(visible)
 
   return (
     <div>
@@ -155,25 +238,16 @@ export function FindingsTab({ scanRunId }: { scanRunId: string }) {
 
       {isLoading && <p className="text-gray-500">Loading…</p>}
       {findings && findings.length === 0 && <p className="text-gray-500">No findings.</p>}
+      {findings && findings.length > 0 && (
+        <p className="mb-2 text-xs text-gray-500">
+          {findings.length} finding{findings.length === 1 ? '' : 's'} across {groupFindings(findings).length} vulnerability
+          type{groupFindings(findings).length === 1 ? '' : 's'}
+        </p>
+      )}
 
       <ul className="divide-y divide-gray-200 rounded border border-gray-200 bg-white">
-        {visible.map((finding) => (
-          <li key={finding.id}>
-            <button
-              onClick={() => setExpanded(expanded === finding.id ? null : finding.id)}
-              className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-gray-50"
-            >
-              <span className="flex items-center gap-3">
-                <SeverityBadge severity={finding.severity} />
-                <span className="font-medium">{finding.title}</span>
-              </span>
-              <span className="flex items-center gap-2">
-                <StatusBadge status={finding.confirmation_status} />
-                <StatusBadge status={finding.retest_status} />
-              </span>
-            </button>
-            {expanded === finding.id && <FindingDetail scanRunId={scanRunId} finding={finding} />}
-          </li>
+        {groups.map((group) => (
+          <FindingGroupRow key={group.key} scanRunId={scanRunId} group={group} />
         ))}
       </ul>
     </div>

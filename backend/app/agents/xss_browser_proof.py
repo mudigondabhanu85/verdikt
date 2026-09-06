@@ -39,8 +39,31 @@ def _proof_marker() -> str:
     return f"verdikt_proof_{uuid.uuid4().hex[:12]}"
 
 
+def visible_proof_banner_js(marker: str) -> str:
+    """Injects an unmissable, full-width banner into the page — the
+    `window[marker]` flag alone is reliable, deterministic proof for
+    `page.evaluate()` to check, but is invisible, so the resulting
+    screenshot looked identical to a normal, unexploited page (a real
+    complaint: "I don't see an XSS pop up, I just see the page"). A
+    native `alert()` can't be used for this instead — Playwright/Chrome
+    auto-dismisses or blocks JS dialogs, so it never appears in a
+    screenshot either. A visible DOM banner is what actually makes the
+    screenshot itself function as evidence, not just the pass/fail flag
+    behind it.
+    """
+    return (
+        f'var b=document.createElement("div");'
+        f'b.textContent="\\u26a0 XSS PROOF-OF-CONCEPT \\u2014 JavaScript executed by Verdikt "'
+        f'+"(marker: {marker})";'
+        f'b.style.cssText="position:fixed;top:0;left:0;right:0;z-index:2147483647;'
+        f'background:#dc2626;color:#fff;font:bold 16px -apple-system,sans-serif;'
+        f'padding:14px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.4);";'
+        f'document.documentElement.appendChild(b);'
+    )
+
+
 def _payload_for(marker: str) -> str:
-    return f'<script>window["{marker}"]=true;</script>'
+    return f'<script>window["{marker}"]=true;{visible_proof_banner_js(marker)}</script>'
 
 
 # DOM-based XSS payloads, tried via the URL *fragment* (app.agents.dom_xss)
@@ -52,9 +75,10 @@ def _payload_for(marker: str) -> str:
 # per the HTML spec, but an event-handler-bearing element (onerror) does
 # — different sinks call for different proof payloads.
 def _dom_xss_payloads(marker: str) -> list[str]:
+    banner_js = visible_proof_banner_js(marker)
     return [
-        f'<script>window["{marker}"]=true;</script>',
-        f'<img src=x onerror=window["{marker}"]=true>',
+        f'<script>window["{marker}"]=true;{banner_js}</script>',
+        f'<img src=x onerror=\'window["{marker}"]=true;{banner_js}\'>',
     ]
 
 
