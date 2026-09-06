@@ -2,11 +2,20 @@ import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, BASE_URL } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
-import { AI_PROVIDER_TYPES, type AiProviderType, BASELINE_ROLES, type Role } from '../api/types'
+import {
+  AI_PROVIDER_TYPES,
+  type AiProviderAuthType,
+  type AiProviderType,
+  BASELINE_ROLES,
+  type Role,
+} from '../api/types'
 import { CMDBConfigsSection } from './account/CMDBConfigsSection'
 import { NotificationConfigsSection } from './account/NotificationConfigsSection'
 import { TicketingConfigsSection } from './account/TicketingConfigsSection'
+import { UsersSection } from './account/UsersSection'
 import { VGSConfigsSection } from './account/VGSConfigsSection'
+import { SamlConfigsSection } from './account/SamlConfigsSection'
+import { BrandingSection } from './account/BrandingSection'
 
 function ApiKeysSection() {
   const queryClient = useQueryClient()
@@ -91,6 +100,7 @@ function AiProviderConfigsSection() {
   const [model, setModel] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
+  const [authType, setAuthType] = useState<AiProviderAuthType>('api_key')
 
   const { data: configs, isLoading } = useQuery({
     queryKey: ['ai-provider-configs'],
@@ -100,7 +110,14 @@ function AiProviderConfigsSection() {
 
   const createMutation = useMutation({
     mutationFn: () =>
-      api.aiProviderConfigs.create({ label, provider, model, api_key: apiKey, base_url: baseUrl || undefined }),
+      api.aiProviderConfigs.create({
+        label,
+        provider,
+        model,
+        api_key: apiKey,
+        base_url: baseUrl || undefined,
+        auth_type: authType,
+      }),
     onSuccess: () => {
       invalidate()
       setLabel('')
@@ -157,6 +174,14 @@ function AiProviderConfigsSection() {
           type="password"
           className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
         />
+        <select
+          value={authType}
+          onChange={(e) => setAuthType(e.target.value as AiProviderAuthType)}
+          className="rounded border border-gray-300 px-3 py-2 text-sm"
+        >
+          <option value="api_key">API Key</option>
+          <option value="bearer_token">Bearer Token</option>
+        </select>
         {provider === 'custom' && (
           <input
             value={baseUrl}
@@ -181,6 +206,7 @@ function AiProviderConfigsSection() {
             <span>
               <span className="font-medium">{cfg.label}</span>
               <span className="ml-2 text-xs text-gray-400">{cfg.provider} / {cfg.model}</span>
+              <span className="ml-2 text-xs text-gray-400">({cfg.auth_type})</span>
               <span className="ml-2 font-mono text-xs text-gray-400">{cfg.masked_reference}</span>
             </span>
             <button onClick={() => deleteMutation.mutate(cfg.id)} className="text-xs text-red-600 hover:underline">
@@ -357,10 +383,13 @@ export function AccountPage() {
           <ApiKeysSection />
           <AiProviderConfigsSection />
           <OidcProvidersSection />
+          <SamlConfigsSection />
           <NotificationConfigsSection />
           <TicketingConfigsSection />
           <CMDBConfigsSection />
           <VGSConfigsSection />
+          <UsersSection />
+          <BrandingSection />
         </>
       )}
       {user?.role !== 'org_admin' && (

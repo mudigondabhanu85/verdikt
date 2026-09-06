@@ -4,8 +4,10 @@ required for create_all() in tests and for Alembic autogenerate.
 
 from app.models.ai_provider_config import AIProviderConfig
 from app.models.api_key import ApiKey
+from app.models.attack_chain import AttackChain, AttackChainEvidence
 from app.models.audit import AuditLogEntry
 from app.models.business_rule import BusinessRule
+from app.models.cmdb_config import CMDBConfig
 from app.models.credential import CredentialSet
 from app.models.finding import Evidence, Finding
 from app.models.finding_ticket import FindingTicket
@@ -21,12 +23,22 @@ from app.models.scan import AgentJob, ScanRun
 from app.models.target import Target
 from app.models.ticketing_config import TicketingConfig
 from app.models.traffic import TrafficInteraction
+from app.models.vgs_config import VGSConfig
+from app.models.vgs_vulnerability import (
+    VgsEvidenceStep,
+    VgsReportDraft,
+    VgsReportVulnerability,
+    VgsVulnerabilityLibraryEntry,
+)
 
 __all__ = [
     "AIProviderConfig",
     "ApiKey",
+    "AttackChain",
+    "AttackChainEvidence",
     "AuditLogEntry",
     "BusinessRule",
+    "CMDBConfig",
     "CredentialSet",
     "Evidence",
     "Finding",
@@ -48,4 +60,9 @@ __all__ = [
     "Target",
     "TicketingConfig",
     "TrafficInteraction",
+    "VGSConfig",
+    "VgsEvidenceStep",
+    "VgsReportDraft",
+    "VgsReportVulnerability",
+    "VgsVulnerabilityLibraryEntry",
 ]

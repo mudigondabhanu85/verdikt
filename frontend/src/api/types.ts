@@ -11,6 +11,16 @@ export interface UserOut {
   email: string
   role: Role
   is_active: boolean
+  invited_at: string | null
+  invite_accepted_at: string | null
+}
+
+export interface UserInviteOut {
+  id: string
+  email: string
+  role: Role
+  invite_token: string
+  invited_at: string
 }
 
 export interface TokenResponse {
@@ -29,6 +39,7 @@ export interface ProjectOut {
   org_id: string
   name: string
   created_at: string
+  archived_at: string | null
 }
 
 export interface VersionOut {
@@ -252,8 +263,10 @@ export interface ApiKeyOut {
   revoked_at: string | null
 }
 
-export const AI_PROVIDER_TYPES = ['claude', 'openai', 'custom'] as const
+export const AI_PROVIDER_TYPES = ['claude', 'openai', 'gemini', 'grok', 'custom'] as const
 export type AiProviderType = (typeof AI_PROVIDER_TYPES)[number]
+export const AI_PROVIDER_AUTH_TYPES = ['api_key', 'bearer_token'] as const
+export type AiProviderAuthType = (typeof AI_PROVIDER_AUTH_TYPES)[number]
 
 export interface AIProviderConfigOut {
   id: string
@@ -262,6 +275,7 @@ export interface AIProviderConfigOut {
   provider: AiProviderType
   model: string
   base_url: string | null
+  auth_type: AiProviderAuthType
   masked_reference: string
 }
 
@@ -340,7 +354,7 @@ export interface BurpImportResult {
   finding_ids: string[]
 }
 
-export const NOTIFICATION_PROVIDER_TYPES = ['slack'] as const
+export const NOTIFICATION_PROVIDER_TYPES = ['slack', 'teams', 'outlook'] as const
 export type NotificationProviderType = (typeof NOTIFICATION_PROVIDER_TYPES)[number]
 
 export interface NotificationConfigOut {
@@ -350,6 +364,19 @@ export interface NotificationConfigOut {
   provider: NotificationProviderType
   masked_reference: string
   notify_on_scan_completed: boolean
+}
+
+export interface NotificationConfigCreate {
+  label: string
+  provider: NotificationProviderType
+  webhook_url?: string | null
+  smtp_host?: string | null
+  smtp_port?: number | null
+  smtp_username?: string | null
+  smtp_password?: string | null
+  from_address?: string | null
+  to_address?: string | null
+  notify_on_scan_completed?: boolean
 }
 
 export const TICKETING_PROVIDER_TYPES = ['jira'] as const
@@ -397,12 +424,25 @@ export interface AssetMetadataOut {
   raw: Record<string, unknown>
 }
 
+export const VGS_AUTH_TYPES = ['api_key', 'bearer_token', 'basic'] as const
+export type VgsAuthType = (typeof VGS_AUTH_TYPES)[number]
+
 export interface VGSConfigOut {
   id: string
   org_id: string
   label: string
   masked_reference: string
   push_on_scan_completed: boolean
+  auth_type: VgsAuthType | null
+  masked_auth_reference: string | null
+}
+
+export interface VGSConfigCreate {
+  label: string
+  webhook_url: string
+  push_on_scan_completed?: boolean
+  auth_type?: VgsAuthType | null
+  auth_value?: string | null
 }
 
 export interface OidcProviderConfigOut {
@@ -413,4 +453,49 @@ export interface OidcProviderConfigOut {
   client_id: string
   redirect_uri: string
   default_role: Role
+}
+
+export interface SamlConfigOut {
+  id: string
+  org_id: string
+  label: string
+  idp_sso_url: string | null
+  idp_entity_id: string | null
+  has_idp_metadata: boolean
+}
+
+export interface SamlIdpMetadataUpload {
+  idp_metadata_xml?: string | null
+  idp_sso_url?: string | null
+  idp_entity_id?: string | null
+  idp_x509_cert?: string | null
+}
+
+export interface OrgBrandingOut {
+  org_id: string
+  logo_object_key: string | null
+  company_name: string | null
+  primary_color_hex: string | null
+}
+
+export interface AttackChainEvidenceOut {
+  request_raw: string
+  response_raw: string
+  screenshot_refs: string[]
+  additional_notes: string | null
+}
+
+export interface AttackChainOut {
+  id: string
+  scan_run_id: string
+  title: string
+  severity: Severity
+  finding_ids: string[]
+  plain_language_summary: string
+  narrative: string
+  steps_to_reproduce: string[]
+  references: string[]
+  confirmation_status: string
+  created_at: string
+  evidence: AttackChainEvidenceOut | null
 }

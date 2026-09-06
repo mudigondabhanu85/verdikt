@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import (
     ai_provider_configs,
     api_keys,
+    attack_chains,
     auth,
     burp,
     business_rules,
@@ -15,19 +16,24 @@ from app.api.routes import (
     credentials,
     dashboard,
     finding_tickets,
+    macro_upload,
     notification_configs,
     objects,
     oidc,
+    org_branding,
     organizations,
     projects,
     retest_jobs,
     review_candidates,
+    saml,
     scans,
     targets,
     ticketing_configs,
     traffic_import,
+    users,
     versions,
     vgs_configs,
+    vgs_vulnerabilities,
 )
 from app.config import get_settings
 
@@ -83,6 +89,13 @@ app.include_router(ticketing_configs.router)
 app.include_router(finding_tickets.router)
 app.include_router(cmdb_configs.router)
 app.include_router(vgs_configs.router)
+app.include_router(users.router)
+app.include_router(attack_chains.router)
+app.include_router(macro_upload.router)
+app.include_router(org_branding.router)
+app.include_router(saml.router)
+app.include_router(vgs_vulnerabilities.library_router)
+app.include_router(vgs_vulnerabilities.draft_router)
 
 
 @app.get("/health")

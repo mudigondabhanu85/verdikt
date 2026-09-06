@@ -20,6 +20,10 @@ RESOURCES = (
     "ticketing_config",
     "cmdb_config",
     "vgs_config",
+    "user",
+    "org_branding",
+    "saml_config",
+    "vgs_vulnerability",
 )
 ACTIONS = ("create", "read", "update", "delete")
 
@@ -134,3 +138,34 @@ def vgs_config_resource_grants() -> list[tuple[str, str, str]]:
     migration adding this resource, same reasoning as
     scan_resource_grants() above."""
     return _grants_for_resource("vgs_config")
+
+
+def user_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "user" resource rows — used by the incremental migration
+    adding this resource, same reasoning as scan_resource_grants() above.
+    org_admin gets full CRUD (invite/deactivate/reactivate) via the
+    blanket RESOURCES loop; project_lead gets nothing (deliberately not
+    added to its explicit list — user management stays org-admin-only);
+    analyst/viewer get read-only via their own blanket loops."""
+    return _grants_for_resource("user")
+
+
+def org_branding_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "org_branding" resource rows — used by the incremental
+    migration adding this resource, same reasoning as
+    scan_resource_grants() above."""
+    return _grants_for_resource("org_branding")
+
+
+def saml_config_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "saml_config" resource rows — used by the incremental
+    migration adding this resource, same reasoning as
+    scan_resource_grants() above."""
+    return _grants_for_resource("saml_config")
+
+
+def vgs_vulnerability_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "vgs_vulnerability" resource rows — used by the
+    incremental migration adding this resource, same reasoning as
+    scan_resource_grants() above."""
+    return _grants_for_resource("vgs_vulnerability")

@@ -4,6 +4,7 @@ import type {
   ApiKeyCreated,
   ApiKeyOut,
   AssetMetadataOut,
+  AttackChainOut,
   AuthorizationRecordOut,
   BurpImportResult,
   BurpScanCreated,
@@ -18,10 +19,13 @@ import type {
   HttpRequest,
   HttpResponse,
   OidcProviderConfigOut,
+  OrgBrandingOut,
   OrganizationOut,
   ProjectOut,
   RetestJobOut,
   ReviewCandidateOut,
+  SamlConfigOut,
+  SamlIdpMetadataUpload,
   ScanRunDetail,
   ScanRunDiffOut,
   ScanRunOut,
@@ -31,6 +35,7 @@ import type {
   TokenResponse,
   TrafficImportResult,
   TrafficInteractionOut,
+  UserInviteOut,
   UserOut,
   VersionOut,
   VGSConfigOut,
@@ -113,6 +118,22 @@ async function request<T>(
   return (await response.json()) as T
 }
 
+// Same reasoning as downloadReport below — GET /objects/{key} requires
+// the bearer token (app.api.routes.objects), so a plain <img src=...>
+// gets a 401 on every request (a browser never attaches Authorization
+// headers to image-tag fetches). Fetch the bytes ourselves and hand the
+// caller an object: URL to put in an <img src>; caller must revoke it
+// (e.g. on unmount) once done.
+export async function fetchObjectBlobUrl(objectKey: string): Promise<string | null> {
+  const token = getToken()
+  const response = await fetch(`${BASE_URL}/objects/${objectKey}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!response.ok) return null
+  const blob = await response.blob()
+  return URL.createObjectURL(blob)
+}
+
 // Blob download for the four report formats — needs the bearer token
 // on the request, so a plain <a href> won't work (no way to attach an
 // Authorization header to a browser-navigated download).
@@ -140,6 +161,29 @@ export async function downloadReport(
   URL.revokeObjectURL(url)
 }
 
+// Same reasoning as downloadReport above — this endpoint requires the
+// bearer token, so a plain <a href> can't be used for it either.
+export async function downloadSamlMetadata(configId: string): Promise<void> {
+  const token = getToken()
+  const response = await fetch(`${BASE_URL}/saml-configs/${configId}/metadata.xml`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (response.status === 401) {
+    handleUnauthorized()
+    return
+  }
+  if (!response.ok) throw new ApiError(response.status, response.statusText)
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `verdikt-sp-metadata-${configId}.xml`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export const api = {
   auth: {
     register: (body: { org_name: string; email: string; password: string }) =>
@@ -155,9 +199,23 @@ export const api = {
   },
 
   projects: {
-    list: () => request<ProjectOut[]>('/projects'),
+    list: (includeArchived = false) =>
+      request<ProjectOut[]>(`/projects${includeArchived ? '?include_archived=true' : ''}`),
     get: (projectId: string) => request<ProjectOut>(`/projects/${projectId}`),
     create: (body: { name: string }) => request<ProjectOut>('/projects', { method: 'POST', body }),
+    archive: (projectId: string) => request<void>(`/projects/${projectId}/archive`, { method: 'POST' }),
+    unarchive: (projectId: string) => request<void>(`/projects/${projectId}/unarchive`, { method: 'POST' }),
+    delete: (projectId: string) => request<void>(`/projects/${projectId}`, { method: 'DELETE' }),
+  },
+
+  users: {
+    list: () => request<UserOut[]>('/users'),
+    invite: (body: { email: string; role: string }) =>
+      request<UserInviteOut>('/users/invite', { method: 'POST', body }),
+    acceptInvite: (body: { invite_token: string; password: string }) =>
+      request<TokenResponse>('/users/accept-invite', { method: 'POST', body }),
+    deactivate: (userId: string) => request<void>(`/users/${userId}/deactivate`, { method: 'POST' }),
+    reactivate: (userId: string) => request<void>(`/users/${userId}/reactivate`, { method: 'POST' }),
   },
 
   versions: {
@@ -214,8 +272,33 @@ export const api = {
         extra_cookies?: Record<string, string> | null
       },
     ) => request<CredentialSetOut>(`/versions/${versionId}/credentials`, { method: 'POST', body }),
+    update: (
+      versionId: string,
+      credentialId: string,
+      body: {
+        label?: string
+        credential_type?: string
+        username?: string
+        secret?: string
+        login_endpoint?: string | null
+        login_method?: string | null
+        login_body_template?: string | null
+        login_content_type?: string | null
+        token_response_path?: string | null
+        extra_cookies?: Record<string, string> | null
+      },
+    ) =>
+      request<CredentialSetOut>(`/versions/${versionId}/credentials/${credentialId}`, {
+        method: 'PATCH',
+        body,
+      }),
     delete: (versionId: string, credentialId: string) =>
       request<void>(`/versions/${versionId}/credentials/${credentialId}`, { method: 'DELETE' }),
+    uploadMacro: (versionId: string, credentialId: string, body: { steps: Record<string, unknown>[] }) =>
+      request<LoginMacroOut>(`/versions/${versionId}/credentials/${credentialId}/macros/upload`, {
+        method: 'POST',
+        body,
+      }),
     // Blocks server-side until the analyst closes a real, local headed
     // browser window on whatever machine is running the API — only
     // meaningful for a self-hosted, single-analyst deployment where
@@ -276,8 +359,14 @@ export const api = {
 
   aiProviderConfigs: {
     list: () => request<AIProviderConfigOut[]>('/ai-provider-configs'),
-    create: (body: { label: string; provider: string; model: string; api_key: string; base_url?: string }) =>
-      request<AIProviderConfigOut>('/ai-provider-configs', { method: 'POST', body }),
+    create: (body: {
+      label: string
+      provider: string
+      model: string
+      api_key: string
+      base_url?: string
+      auth_type?: string
+    }) => request<AIProviderConfigOut>('/ai-provider-configs', { method: 'POST', body }),
     delete: (id: string) => request<void>(`/ai-provider-configs/${id}`, { method: 'DELETE' }),
   },
 
@@ -327,8 +416,18 @@ export const api = {
 
   notificationConfigs: {
     list: () => request<NotificationConfigOut[]>('/notification-configs'),
-    create: (body: { label: string; provider: string; webhook_url: string; notify_on_scan_completed?: boolean }) =>
-      request<NotificationConfigOut>('/notification-configs', { method: 'POST', body }),
+    create: (body: {
+      label: string
+      provider: string
+      webhook_url?: string
+      smtp_host?: string
+      smtp_port?: number
+      smtp_username?: string
+      smtp_password?: string
+      from_address?: string
+      to_address?: string
+      notify_on_scan_completed?: boolean
+    }) => request<NotificationConfigOut>('/notification-configs', { method: 'POST', body }),
     delete: (id: string) => request<void>(`/notification-configs/${id}`, { method: 'DELETE' }),
     test: (id: string) => request<void>(`/notification-configs/${id}/test`, { method: 'POST' }),
   },
@@ -374,10 +473,39 @@ export const api = {
 
   vgsConfigs: {
     list: () => request<VGSConfigOut[]>('/vgs-configs'),
-    create: (body: { label: string; webhook_url: string; push_on_scan_completed?: boolean }) =>
-      request<VGSConfigOut>('/vgs-configs', { method: 'POST', body }),
+    create: (body: {
+      label: string
+      webhook_url: string
+      push_on_scan_completed?: boolean
+      auth_type?: string | null
+      auth_value?: string | null
+    }) => request<VGSConfigOut>('/vgs-configs', { method: 'POST', body }),
     delete: (id: string) => request<void>(`/vgs-configs/${id}`, { method: 'DELETE' }),
     test: (id: string) => request<void>(`/vgs-configs/${id}/test`, { method: 'POST' }),
+  },
+
+  samlConfigs: {
+    list: () => request<SamlConfigOut[]>('/saml-configs'),
+    create: (body: { label: string }) => request<SamlConfigOut>('/saml-configs', { method: 'POST', body }),
+    delete: (id: string) => request<void>(`/saml-configs/${id}`, { method: 'DELETE' }),
+    uploadIdpMetadata: (id: string, body: SamlIdpMetadataUpload) =>
+      request<SamlConfigOut>(`/saml-configs/${id}/idp-metadata`, { method: 'POST', body }),
+  },
+
+  orgBranding: {
+    get: () => request<OrgBrandingOut>('/org-branding'),
+    update: (body: { company_name?: string | null; primary_color_hex?: string | null }) =>
+      request<OrgBrandingOut>('/org-branding', { method: 'PUT', body }),
+    uploadLogo: (file: File) => {
+      const formData = new FormData()
+      formData.set('logo', file)
+      return request<OrgBrandingOut>('/org-branding/logo', { method: 'POST', formData })
+    },
+    deleteLogo: () => request<OrgBrandingOut>('/org-branding/logo', { method: 'DELETE' }),
+  },
+
+  attackChains: {
+    list: (scanRunId: string) => request<AttackChainOut[]>(`/scan-runs/${scanRunId}/attack-chains`),
   },
 
   oidcProviderConfigs: {
