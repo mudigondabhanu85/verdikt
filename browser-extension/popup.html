@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Verdikt Login Macro Recorder</title>
+    <style>
+      body { font-family: system-ui, sans-serif; width: 260px; padding: 12px; }
+      button { width: 100%; padding: 8px; margin-top: 8px; cursor: pointer; }
+      #status { font-size: 13px; color: #444; margin-top: 8px; }
+      #export-section { display: none; margin-top: 12px; border-top: 1px solid #ddd; padding-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <h3 style="margin:0 0 4px 0;">Verdikt Macro Recorder</h3>
+    <div id="status">Not recording.</div>
+    <button id="start-btn">Start Recording</button>
+    <button id="stop-btn" style="display:none;">Stop Recording</button>
+    <div id="export-section">
+      <button id="export-btn">Export macro (.json)</button>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Verdikt Login Macro Recorder",
+  "version": "1.0.0",
+  "description": "Records a login flow as a Verdikt login macro, independent of the main Verdikt app — capture on any machine/network segment, export, and upload into a project's credential set afterward.",
+  "permissions": ["activeTab", "scripting", "storage", "downloads"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Verdikt Login Macro Recorder"
+  }
+}
