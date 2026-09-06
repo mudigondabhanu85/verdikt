@@ -10,7 +10,7 @@ confirmed Finding the same way browser-confirmed reflected XSS does.
 
 import uuid
 
-from app.agents.http_client import ScopedHttpClient
+from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
 from app.agents.xss import XSS_FINDING_METADATA
 from app.agents.xss_browser_proof import attempt_dom_xss_fragment_proof
 from app.models.finding import Evidence, Finding
@@ -42,8 +42,18 @@ class DomXssAgent:
         self._scan_run_id = scan_run_id
         self._agent_job_id = agent_job_id
         self._session = db_session
+        self._auth_session: AuthenticatedSession | None = None
 
-    async def run(self, endpoints: list[str]) -> list[Finding]:
+    async def run(
+        self,
+        endpoints: list[str],
+        sessions: dict[uuid.UUID, AuthenticatedSession] | None = None,
+    ) -> list[Finding]:
+        # Same login-gated-page fix as app.agents.injection/stored_xss —
+        # without a session cookie, a real headless browser navigating to
+        # a login-gated page just lands on the login form, so a DOM XSS
+        # sink behind auth never gets a chance to run at all.
+        self._auth_session = next(iter((sessions or {}).values()), None)
         findings: list[Finding] = []
         for url in endpoints[: self.MAX_ENDPOINTS]:
             finding = await self._check_endpoint(url)
@@ -52,7 +62,7 @@ class DomXssAgent:
         return findings
 
     async def _check_endpoint(self, url: str) -> Finding | None:
-        result = await attempt_dom_xss_fragment_proof(url)
+        result = await attempt_dom_xss_fragment_proof(url, session=self._auth_session)
         if not result.executed:
             return None
 

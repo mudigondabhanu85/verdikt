@@ -6,11 +6,21 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 import httpx
 from bs4 import BeautifulSoup
 
-from app.agents.http_client import ScopedHttpClient, ScopeViolationError
+from app.agents.http_client import AuthenticatedSession, ScopedHttpClient, ScopeViolationError
 from app.models.target import Target
 
 _ROBOTS_DISALLOW_RE = re.compile(r"^\s*Disallow:\s*(\S+)", re.IGNORECASE | re.MULTILINE)
 _SITEMAP_LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.IGNORECASE)
+# A classic crawler pitfall, live-found against DVWA: an authenticated
+# crawl that follows every <a href> indiscriminately eventually clicks
+# "Logout" — which, since every agent node shares one AuthenticatedSession
+# per credential set, destroys the session for every *other* agent still
+# relying on it mid-scan, not just this crawl. The fetch appears to
+# succeed fine (a clean 200/302, no exception) and the crawl itself never
+# notices anything wrong — the damage only shows up later, silently, as
+# every other authenticated probe suddenly landing on the login redirect
+# instead of the page it asked for.
+_LOGOUT_LINK_RE = re.compile(r"log[\s_-]?out|sign[\s_-]?out", re.IGNORECASE)
 # Looks for ws(s):// literals in any fetched page or script body (e.g.
 # inside a `new WebSocket("wss://...")` call) — good enough to surface
 # an endpoint for app.agents.websocket_security without needing to
@@ -54,6 +64,8 @@ def _extract_links(base_url: str, soup: BeautifulSoup) -> list[str]:
     for tag in soup.find_all("a", href=True):
         href = tag["href"].strip()
         if href.startswith(("javascript:", "mailto:", "tel:", "#")):
+            continue
+        if _LOGOUT_LINK_RE.search(href) or _LOGOUT_LINK_RE.search(tag.get_text()):
             continue
         links.append(urljoin(base_url, href))
     return links
@@ -107,15 +119,32 @@ class ReconAgent:
     endpoints discovered (status < 400); discovered_parameters and
     discovered_forms are populated as a side effect of the same crawl for
     later agents (Injection/XSS probe parameters, login auto-discovery).
+
+    An optional `session` crawls authenticated instead of anonymous — see
+    app.agents.graph's authenticated_recon_node, which re-runs this crawl
+    once a login succeeds. Without it, this crawl only ever sees whatever
+    an unauthenticated visitor sees (the login page, public static
+    assets); a real app's vulnerability surface almost entirely lives
+    behind that login wall, and a purely pre-login crawl was found (via a
+    live DVWA scan) to discover exactly one <form> — login.php's own —
+    leaving injection/XSS/CSRF/access-control/etc. with nothing to probe
+    beyond whatever a traffic import happened to already seed.
     """
 
     MAX_PAGES = 40
     MAX_DEPTH = 2
     CONCURRENCY = 5
 
-    def __init__(self, client: ScopedHttpClient, targets: list[Target]):
+    def __init__(
+        self,
+        client: ScopedHttpClient,
+        targets: list[Target],
+        *,
+        session: AuthenticatedSession | None = None,
+    ):
         self._client = client
         self._targets = targets
+        self._session = session
         self._semaphore = asyncio.Semaphore(self.CONCURRENCY)
         self.discovered_parameters: list[DiscoveredParameter] = []
         self.discovered_forms: list[FormInfo] = []
@@ -128,7 +157,7 @@ class ReconAgent:
     async def _fetch(self, url: str) -> httpx.Response | None:
         async with self._semaphore:
             try:
-                return await self._client.get(url)
+                return await self._client.get(url, session=self._session)
             except (ScopeViolationError, httpx.HTTPError):
                 return None
 

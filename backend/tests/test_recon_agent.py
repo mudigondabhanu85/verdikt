@@ -41,6 +41,12 @@ PAGES = {
         '<html><body>Deep page<script>var s = new WebSocket("wss://site.test/live-feed");'
         "</script></body></html>",
     ),
+    "http://site.test/dashboard/": (
+        "text/html",
+        '<html><body><a href="/logout.php">Logout</a> <a href="/account">Account</a></body></html>',
+    ),
+    "http://site.test/logout.php": ("text/html", "<html><body>Logged out</body></html>"),
+    "http://site.test/account": ("text/html", "<html><body>Account settings</body></html>"),
 }
 
 
@@ -74,6 +80,32 @@ async def test_recon_agent_discovers_endpoints_and_respects_scope(db_adapter):
         assert "http://site.test/secret" in discovered  # via robots.txt Disallow
         assert "http://site.test/from-sitemap" in discovered  # via sitemap.xml
         assert not any("evil.test" in url for url in discovered)
+
+        await client.aclose()
+
+
+async def test_recon_agent_never_follows_logout_links(db_adapter):
+    # A real, live-found bug: crawling every <a href> indiscriminately
+    # eventually clicks "Logout" — since every agent node shares one
+    # AuthenticatedSession per credential set, that destroys the session
+    # for every *other* agent still relying on it mid-scan, not just this
+    # crawl (see app.agents.recon's _LOGOUT_LINK_RE docstring).
+    async with session_scope(db_adapter) as session:
+        version_id = uuid.uuid4()
+        scope_entries = [ScopeEntry(host="site.test", port=80, in_scope=True)]
+        client = ScopedHttpClient(
+            version_id=version_id,
+            scope_entries=scope_entries,
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+        target = Target(host="site.test", port=80, base_url="http://site.test/dashboard")
+
+        agent = ReconAgent(client, [target])
+        discovered = await agent.run()
+
+        assert "http://site.test/account" in discovered
+        assert "http://site.test/logout.php" not in discovered
 
         await client.aclose()
 

@@ -15,10 +15,10 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
 from app.agents.evidence import format_request_raw, format_response_raw
-from app.agents.http_client import ScopedHttpClient, ScopeViolationError
+from app.agents.http_client import AuthenticatedSession, ScopedHttpClient, ScopeViolationError
+from app.agents.login import _live_field_values
 from app.agents.recon import FormInfo
 from app.agents.xss import XSS_FINDING_METADATA
-from app.agents.xss_browser_proof import visible_proof_banner_js
 from app.models.finding import Evidence, Finding
 from app.storage.local_disk import get_object_storage
 
@@ -36,19 +36,47 @@ def _marker() -> str:
 
 
 def _payload_for(marker: str) -> str:
-    # See app.agents.xss_browser_proof.visible_proof_banner_js's
-    # docstring — the same real bug applied here: the window[marker]
-    # flag alone is reliable for the page.evaluate() check below, but
-    # invisible, so a screenshot taken right after detecting it looked
-    # identical to an unexploited page revisit.
-    return f'<script>window["{marker}"]=true;{visible_proof_banner_js(marker)}</script>'
+    # Same real bug as app.agents.xss_browser_proof.visible_proof_banner_js
+    # (the window[marker] flag alone is reliable but invisible, so a
+    # screenshot taken right after detecting it looked identical to an
+    # unexploited page) — but that helper's full banner is too long here:
+    # a real, live-found constraint against DVWA's own stored-XSS teaching
+    # example is that its guestbook `comment` column is a bounded
+    # varchar, and MySQL strict mode rejects the whole INSERT outright
+    # (a real mysqli_sql_exception, not a silent truncation) once the
+    # payload gets much past ~200-250 characters — confirmed empirically
+    # against the live container. A stored payload has to survive a
+    # database round-trip that a purely reflected/DOM one never does, so
+    # it gets its own deliberately compact banner instead of the shared
+    # one.
+    return (
+        f'<script>window["{marker}"]=true;'
+        f'var b=document.createElement("div");b.textContent="XSS POC";'
+        f'b.style.cssText="position:fixed;top:0;background:red;color:#fff;padding:4px";'
+        f"document.body.appendChild(b);</script>"
+    )
 
 
-def _build_payload_fields(form: FormInfo, payload: str) -> dict[str, str]:
+_BASELINE_FIELD_VALUE = "verdikt1"
+
+
+def _testable_fields(form: FormInfo) -> list:
+    return [f for f in form.fields if f.type not in ("hidden", "submit", "button") and f.name]
+
+
+def _build_payload_fields(form: FormInfo, target_field: str, payload: str) -> dict[str, str]:
+    # Same real bug this class of form-filling already had elsewhere
+    # (app.agents.probing.form_probe_targets tests one field at a time
+    # for exactly this reason): stuffing the SAME long payload into
+    # *every* testable field meant a short, tightly-constrained field
+    # (DVWA's guestbook `txtName`, maxlength 10) got the same oversized
+    # value as the one actually being tested — and since a single INSERT
+    # covers every column at once, that field alone failing MySQL's
+    # strict-mode length check silently killed the whole submission,
+    # including whichever field's XSS was actually being tested.
     return {
-        field.name: payload
-        for field in form.fields
-        if field.type not in ("hidden", "submit", "button") and field.name
+        field.name: payload if field.name == target_field else _BASELINE_FIELD_VALUE
+        for field in _testable_fields(form)
     }
 
 
@@ -65,24 +93,69 @@ class StoredXssAgent:
         self._scan_run_id = scan_run_id
         self._agent_job_id = agent_job_id
         self._session = db_session
+        self._auth_session: AuthenticatedSession | None = None
 
-    async def run(self, forms: list[FormInfo], endpoints: list[str]) -> list[Finding]:
-        candidates = endpoints[:_MAX_REVISIT_PAGES]
+    async def run(
+        self,
+        forms: list[FormInfo],
+        endpoints: list[str],
+        sessions: dict[uuid.UUID, AuthenticatedSession] | None = None,
+    ) -> list[Finding]:
+        # A real, live-found gap (same class as app.agents.xss_browser_proof's
+        # own fix): neither the submission nor the revisit ever carried an
+        # authenticated session, so a login-gated form (DVWA's own stored-XSS
+        # guestbook included) always just hit the login redirect — the
+        # submission silently did nothing, and there was nothing to see on
+        # revisit either. One representative identity, same reasoning as
+        # app.agents.injection.InjectionAgent.run.
+        self._auth_session = next(iter((sessions or {}).values()), None)
         findings: list[Finding] = []
         for form in forms:
             if form.method != "POST":
                 continue
-            finding = await self._check_form(form, candidates)
-            if finding is not None:
-                findings.append(finding)
+            # A real, live-found gap: DVWA's own stored-XSS teaching
+            # example (a guestbook) — like plenty of real-world comment
+            # threads/review pages — displays what you just submitted
+            # right back on the SAME page, not some other one. A plain
+            # `endpoints[:N]` slice put the page that actually needs
+            # checking last (it's typically only discoverable via the
+            # authenticated re-crawl, appended after everything an
+            # earlier traffic import already seeded), past the cap far
+            # more often than not. Guaranteeing the form's own page is
+            # always among the candidates, ahead of everything else,
+            # fixes that without discarding the "other pages" case a
+            # true cross-page stored XSS needs.
+            candidates = list(dict.fromkeys([form.action_url, *endpoints]))[:_MAX_REVISIT_PAGES]
+            for field in _testable_fields(form):
+                finding = await self._check_form(form, field.name, candidates)
+                if finding is not None:
+                    findings.append(finding)
         return findings
 
-    async def _submit(self, form: FormInfo, payload: str) -> httpx.Response | None:
+    async def _submit(self, form: FormInfo, target_field: str, payload: str) -> httpx.Response | None:
+        fields = _build_payload_fields(form, target_field, payload)
+        # Same real bug already fixed for the login form (app.agents.login):
+        # a hidden CSRF token or the submit button's own field
+        # (`isset($_POST['btnSign'])`-style checks) is often required for
+        # the server to treat the request as a real submission at all —
+        # live-found against DVWA's own guestbook, whose stored-XSS
+        # "vulnerability" silently no-ops without its submit button field
+        # present. Best-effort: a live re-fetch that fails just means this
+        # submission proceeds without those fields, same as before.
+        other_names = {f.name for f in form.fields if f.type in ("hidden", "submit") and f.name not in fields}
+        if other_names:
+            try:
+                pre_submit = await self._client.get(form.action_url, session=self._auth_session)
+            except (ScopeViolationError, httpx.HTTPError):
+                pre_submit = None
+            if pre_submit is not None:
+                fields = {**fields, **_live_field_values(pre_submit.text, other_names)}
         try:
             return await self._client.post(
                 form.action_url,
-                body=urlencode(_build_payload_fields(form, payload)),
+                body=urlencode(fields),
                 content_type="application/x-www-form-urlencoded",
+                session=self._auth_session,
             )
         except (ScopeViolationError, httpx.HTTPError):
             return None
@@ -93,7 +166,21 @@ class StoredXssAgent:
         try:
             async with async_playwright() as playwright:
                 browser = await playwright.chromium.launch(headless=True)
-                page = await browser.new_page()
+                context = await browser.new_context()
+                if self._auth_session is not None and self._auth_session.cookies:
+                    await context.add_cookies(
+                        [
+                            {"name": name, "value": value, "url": candidates[0]}
+                            for name, value in self._auth_session.cookies.items()
+                        ]
+                        if candidates
+                        else []
+                    )
+                page = await context.new_page()
+                if self._auth_session is not None and self._auth_session.bearer_token:
+                    await page.set_extra_http_headers(
+                        {"Authorization": f"Bearer {self._auth_session.bearer_token}"}
+                    )
                 found: tuple[str, bytes] | None = None
                 for url in candidates:
                     try:
@@ -109,9 +196,9 @@ class StoredXssAgent:
         except PlaywrightError:
             return None
 
-    async def _check_form(self, form: FormInfo, candidates: list[str]) -> Finding | None:
+    async def _check_form(self, form: FormInfo, target_field: str, candidates: list[str]) -> Finding | None:
         marker = _marker()
-        submit_response = await self._submit(form, _payload_for(marker))
+        submit_response = await self._submit(form, target_field, _payload_for(marker))
         if submit_response is None:
             return None
 
@@ -123,7 +210,7 @@ class StoredXssAgent:
         # §2 step 1: deterministic re-execution — a fresh marker, fresh
         # submission, fresh page load, not just re-checking the same one.
         marker2 = _marker()
-        submit_response2 = await self._submit(form, _payload_for(marker2))
+        submit_response2 = await self._submit(form, target_field, _payload_for(marker2))
         if submit_response2 is None:
             return None
         found_again = await self._find_execution(marker2, [found_url])
@@ -157,15 +244,15 @@ class StoredXssAgent:
                 "visitor, including administrators, without them clicking anything."
             ),
             technical_description=(
-                f"Submitting {form.action_url} with a <script> payload in place of its normal "
-                f"field value(s), then loading {found_url} in a real browser, caused the "
-                "injected script to execute — confirming the payload was stored server-side and "
-                "rendered unescaped on a page different from where it was submitted."
+                f"Submitting {form.action_url} with a <script> payload in the '{target_field}' "
+                f"field, then loading {found_url} in a real browser, caused the injected script "
+                "to execute — confirming the payload was stored server-side and rendered "
+                "unescaped on revisit."
             ),
             steps_to_reproduce=[
-                f'1. Submit {form.action_url} with a field value of '
+                f"1. Submit {form.action_url} with the '{target_field}' field set to "
                 '<script>alert(document.domain)</script> instead of its normal content.',
-                f"2. Visit {found_url} (a different page that displays the stored data).",
+                f"2. Visit {found_url} (where the stored data is displayed back).",
                 "3. Observe the injected script executes — verified here by an automated "
                 "headless-browser check across two independent submissions, with a screenshot "
                 "captured as evidence.",

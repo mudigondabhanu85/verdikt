@@ -151,12 +151,18 @@ async def attempt_browser_proof(
     return BrowserProofResult(executed=executed, screenshot_png=screenshot)
 
 
-async def attempt_dom_xss_fragment_proof(url: str, *, headless: bool = True) -> BrowserProofResult:
+async def attempt_dom_xss_fragment_proof(
+    url: str, *, headless: bool = True, session: AuthenticatedSession | None = None
+) -> BrowserProofResult:
     """Loads `url` with an XSS payload appended as the URL fragment
     (`#...`), which never reaches the server — real execution here proves
     a client-side JS sink reads location.hash/location.href and writes it
     somewhere unsafe (innerHTML, document.write, eval, ...), independent
     of anything the server itself does.
+
+    Same login-gated-page gap as attempt_browser_proof above applies here
+    too — a DOM XSS sink on a page you can't even reach without a session
+    cookie never gets a chance to run.
     """
     marker = _proof_marker()
     executed = False
@@ -165,7 +171,14 @@ async def attempt_dom_xss_fragment_proof(url: str, *, headless: bool = True) -> 
     try:
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=headless)
-            page = await browser.new_page()
+            context = await browser.new_context()
+            if session is not None and session.cookies:
+                await context.add_cookies(
+                    [{"name": name, "value": value, "url": url} for name, value in session.cookies.items()]
+                )
+            page = await context.new_page()
+            if session is not None and session.bearer_token:
+                await page.set_extra_http_headers({"Authorization": f"Bearer {session.bearer_token}"})
             for payload in _dom_xss_payloads(marker):
                 # A navigation that changes only the fragment is treated
                 # by the browser as same-document (fires "hashchange",

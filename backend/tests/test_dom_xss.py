@@ -201,7 +201,7 @@ async def test_endpoints_beyond_the_cap_are_never_probed(db_adapter, monkeypatch
     call counter instead of real browser navigations."""
     calls: list[str] = []
 
-    async def _fake_proof(url, *, headless=True):
+    async def _fake_proof(url, *, headless=True, session=None):
         calls.append(url)
         from app.agents.xss_browser_proof import BrowserProofResult
 

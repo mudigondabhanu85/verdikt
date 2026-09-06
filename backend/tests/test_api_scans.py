@@ -347,6 +347,7 @@ async def test_full_scan_flow_completes_and_produces_report(client, fixture_site
         "oauth",
         "cache_poisoning",
         "login",
+        "authenticated_recon",
         "injection",
         "xss",
         "auth",

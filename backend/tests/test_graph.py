@@ -111,6 +111,7 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             "oauth",
             "cache_poisoning",
             "login",
+            "authenticated_recon",
             "injection",
             "xss",
             "auth",

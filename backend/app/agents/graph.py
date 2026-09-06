@@ -260,7 +260,11 @@ def build_graph(
         job = await _start_job("stored_xss")
         agent = StoredXssAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
         try:
-            findings = await agent.run(state.get("discovered_forms", []), state.get("discovered_endpoints", []))
+            findings = await agent.run(
+                state.get("discovered_forms", []),
+                state.get("discovered_endpoints", []),
+                state.get("sessions", {}),
+            )
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
@@ -338,7 +342,7 @@ def build_graph(
         job = await _start_job("dom_xss")
         agent = DomXssAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
         try:
-            findings = await agent.run(state.get("discovered_endpoints", []))
+            findings = await agent.run(state.get("discovered_endpoints", []), state.get("sessions", {}))
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
@@ -421,6 +425,50 @@ def build_graph(
             raise
         await _finish_job(job, status="completed", stats={"sessions_established": len(sessions)})
         return {"sessions": sessions}
+
+    async def authenticated_recon_node(state: ScanState) -> dict:
+        """Re-runs the same crawl as recon_node, but as a logged-in user
+        instead of an anonymous one — see ReconAgent's docstring for why:
+        a purely pre-login crawl only ever sees the login page and public
+        assets, missing virtually every form/endpoint an authenticated
+        app actually exposes. Skipped (not failed) when no credential
+        set produced a session — an unauthenticated target has nothing
+        further to discover here.
+        """
+        job = await _start_job("authenticated_recon")
+        sessions = state.get("sessions", {})
+        if not sessions:
+            await _finish_job(job, status="completed", stats={"endpoints_discovered": 0})
+            return {}
+
+        # One session is enough to crawl as — this is discovering the
+        # app's *shape* (forms/endpoints/parameters), not testing
+        # per-credential behavior differences (that's Access Control's
+        # job, which already juggles every session itself).
+        auth_session = next(iter(sessions.values()))
+        agent = ReconAgent(client, targets, session=auth_session)
+        try:
+            endpoints = await agent.run()
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+
+        merged_endpoints = list(dict.fromkeys(state.get("discovered_endpoints", []) + endpoints))
+        merged_responses = {**state.get("discovered_responses", {}), **agent.discovered_responses}
+        merged_websocket_endpoints = list(
+            dict.fromkeys(
+                state.get("discovered_websocket_endpoints", []) + agent.discovered_websocket_endpoints
+            )
+        )
+
+        await _finish_job(job, status="completed", stats={"endpoints_discovered": len(endpoints)})
+        return {
+            "discovered_endpoints": merged_endpoints,
+            "discovered_parameters": state.get("discovered_parameters", []) + agent.discovered_parameters,
+            "discovered_forms": state.get("discovered_forms", []) + agent.discovered_forms,
+            "discovered_responses": merged_responses,
+            "discovered_websocket_endpoints": merged_websocket_endpoints,
+        }
 
     async def injection_node(state: ScanState) -> dict:
         job = await _start_job("injection")
@@ -543,6 +591,7 @@ def build_graph(
 
     graph = StateGraph(ScanState)
     graph.add_node("recon", recon_node)
+    graph.add_node("authenticated_recon", authenticated_recon_node)
     graph.add_node("header_config", header_config_node)
     graph.add_node("host_header", host_header_node)
     graph.add_node("cors", cors_node)
@@ -575,22 +624,23 @@ def build_graph(
     graph.add_edge("recon", "xxe")
     graph.add_edge("recon", "graphql")
     graph.add_edge("recon", "deserialization")
-    graph.add_edge("recon", "dom_xss")
     graph.add_edge("recon", "ssrf")
     graph.add_edge("recon", "prototype_pollution")
     graph.add_edge("recon", "request_smuggling")
     graph.add_edge("recon", "oauth")
     graph.add_edge("recon", "cache_poisoning")
     graph.add_edge("recon", "login")
-    graph.add_edge("login", "injection")
-    graph.add_edge("login", "xss")
-    graph.add_edge("login", "auth")
-    graph.add_edge("login", "access_control")
-    graph.add_edge("login", "business_logic")
-    graph.add_edge("login", "csrf")
-    graph.add_edge("login", "stored_xss")
-    graph.add_edge("login", "file_upload")
-    graph.add_edge("login", "websocket")
+    graph.add_edge("login", "authenticated_recon")
+    graph.add_edge("authenticated_recon", "dom_xss")
+    graph.add_edge("authenticated_recon", "injection")
+    graph.add_edge("authenticated_recon", "xss")
+    graph.add_edge("authenticated_recon", "auth")
+    graph.add_edge("authenticated_recon", "access_control")
+    graph.add_edge("authenticated_recon", "business_logic")
+    graph.add_edge("authenticated_recon", "csrf")
+    graph.add_edge("authenticated_recon", "stored_xss")
+    graph.add_edge("authenticated_recon", "file_upload")
+    graph.add_edge("authenticated_recon", "websocket")
     graph.add_edge("header_config", END)
     graph.add_edge("host_header", END)
     graph.add_edge("cors", END)
