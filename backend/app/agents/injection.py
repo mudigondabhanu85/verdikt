@@ -17,11 +17,10 @@ from app.agents.probing import (
 )
 from app.agents.recon import DiscoveredParameter, FormInfo
 from app.ai.budget import BudgetExceededError, BudgetGuard
+from app.ai.prompt_truncation import truncate_pair_for_prompt
 from app.ai.prompts.loader import render_prompt
 from app.ai.verdict import parse_verdict
 from app.models.finding import Evidence, Finding
-
-_TRUNCATE = 2000
 
 _SQLI_ERROR_PATTERNS = [
     re.compile(p, re.IGNORECASE)
@@ -427,6 +426,9 @@ class InjectionAgent:
         return findings
 
     async def _triage_and_confirm(self, candidate: InjectionCandidate) -> Finding | None:
+        baseline_text, probe_text = truncate_pair_for_prompt(
+            candidate.baseline_response.text, candidate.probe_response.text
+        )
         messages = render_prompt(
             "injection_triage",
             payload_type=candidate.payload_type,
@@ -434,8 +436,8 @@ class InjectionAgent:
             parameter=candidate.target.param_name,
             payload=candidate.payload,
             deterministic_signal=candidate.deterministic_signal,
-            baseline_response=candidate.baseline_response.text[:_TRUNCATE],
-            probe_response=candidate.probe_response.text[:_TRUNCATE],
+            baseline_response=baseline_text,
+            probe_response=probe_text,
         )
         response = await self._budget_guard.guarded_complete(messages, model=self._ai_model)
         verdict = parse_verdict(response.content)
@@ -448,6 +450,9 @@ class InjectionAgent:
         if reproduced is None:
             return None
 
+        reproduced_baseline_text, reproduced_probe_text = truncate_pair_for_prompt(
+            reproduced.baseline_response.text, reproduced.probe_response.text
+        )
         validation_messages = render_prompt(
             "injection_validation",
             payload_type=reproduced.payload_type,
@@ -455,8 +460,8 @@ class InjectionAgent:
             parameter=reproduced.target.param_name,
             payload=reproduced.payload,
             prior_reasoning=verdict.reasoning,
-            baseline_response=reproduced.baseline_response.text[:_TRUNCATE],
-            probe_response=reproduced.probe_response.text[:_TRUNCATE],
+            baseline_response=reproduced_baseline_text,
+            probe_response=reproduced_probe_text,
         )
         validation_response = await self._budget_guard.guarded_complete(
             validation_messages, model=self._ai_model

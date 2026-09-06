@@ -9,11 +9,10 @@ from app.agents.http_client import ScopedHttpClient, ScopeViolationError
 from app.agents.idor import find_numeric_id_segment, nearby_ids, substitute_path_segment
 from app.agents.matrix import Identity, build_identities
 from app.ai.budget import BudgetExceededError, BudgetGuard
+from app.ai.prompt_truncation import truncate_pair_for_prompt
 from app.ai.prompts.loader import render_prompt
 from app.ai.verdict import parse_verdict
 from app.models.finding import Evidence, Finding
-
-_TRUNCATE = 2000
 
 _ACCESS_CONTROL_METADATA = {
     "vertical": {
@@ -237,14 +236,17 @@ class AccessControlAgent:
         return findings
 
     async def _triage_and_confirm(self, candidate: AccessControlCandidate) -> Finding | None:
+        response_a_text, response_b_text = truncate_pair_for_prompt(
+            format_response_raw(candidate.response_a), format_response_raw(candidate.response_b)
+        )
         messages = render_prompt(
             "access_control_triage",
             url=candidate.endpoint,
             comparison_type=candidate.comparison_type,
             identity_a_label=candidate.identity_a.label,
             identity_b_label=candidate.identity_b.label,
-            response_a=format_response_raw(candidate.response_a)[:_TRUNCATE],
-            response_b=format_response_raw(candidate.response_b)[:_TRUNCATE],
+            response_a=response_a_text,
+            response_b=response_b_text,
             deterministic_signal=candidate.deterministic_signal,
         )
         response = await self._budget_guard.guarded_complete(messages, model=self._ai_model)
@@ -256,6 +258,9 @@ class AccessControlAgent:
         if reproduced is None:
             return None
 
+        reproduced_response_a_text, reproduced_response_b_text = truncate_pair_for_prompt(
+            format_response_raw(reproduced.response_a), format_response_raw(reproduced.response_b)
+        )
         validation_messages = render_prompt(
             "access_control_validation",
             url=reproduced.endpoint,
@@ -263,8 +268,8 @@ class AccessControlAgent:
             identity_a_label=reproduced.identity_a.label,
             identity_b_label=reproduced.identity_b.label,
             prior_reasoning=verdict.reasoning,
-            response_a=format_response_raw(reproduced.response_a)[:_TRUNCATE],
-            response_b=format_response_raw(reproduced.response_b)[:_TRUNCATE],
+            response_a=reproduced_response_a_text,
+            response_b=reproduced_response_b_text,
         )
         validation_response = await self._budget_guard.guarded_complete(
             validation_messages, model=self._ai_model

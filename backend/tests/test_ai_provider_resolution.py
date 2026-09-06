@@ -13,7 +13,18 @@ from app.vault.credential_vault import encrypt_secret
 from tests.conftest import session_scope
 
 
-async def test_resolve_falls_back_to_global_default_when_no_config_attached(db_adapter):
+async def test_resolve_falls_back_to_global_default_when_no_config_attached(db_adapter, monkeypatch):
+    # get_ai_provider() (the fallback this test exercises) reads the real
+    # deployment-wide AI_PROVIDER setting — this dev environment has that
+    # set to "claude" for actual live scanning against DVWA, not the
+    # fresh-checkout "fake" default, so asserting on its real return type
+    # here would be asserting on ambient environment config rather than on
+    # resolve_provider_and_model's own fallback logic. Patch the one
+    # dependency actually under test instead of assuming env state.
+    import app.ai.provider as provider_module
+
+    monkeypatch.setattr(provider_module, "get_ai_provider", lambda: NullAIProviderAdapter())
+
     async with session_scope(db_adapter) as session:
         scan_run = ScanRun(version_id=uuid.uuid4(), status="pending", requested_by=uuid.uuid4())
         session.add(scan_run)
@@ -55,7 +66,13 @@ async def test_resolve_uses_attached_custom_provider_config(db_adapter):
         assert model == "llama3.1:8b"
 
 
-async def test_resolve_falls_back_when_attached_config_was_deleted(db_adapter):
+async def test_resolve_falls_back_when_attached_config_was_deleted(db_adapter, monkeypatch):
+    # Same reasoning as test_resolve_falls_back_to_global_default_when_no_config_attached
+    # above — isolate from this environment's real AI_PROVIDER setting.
+    import app.ai.provider as provider_module
+
+    monkeypatch.setattr(provider_module, "get_ai_provider", lambda: NullAIProviderAdapter())
+
     async with session_scope(db_adapter) as session:
         scan_run = ScanRun(
             version_id=uuid.uuid4(),
