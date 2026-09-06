@@ -24,6 +24,9 @@ export function Layout() {
             <Link to="/" className="text-gray-600 hover:text-gray-900">
               Projects
             </Link>
+            <Link to="/vgs" className="text-gray-600 hover:text-gray-900">
+              VGS
+            </Link>
             <Link to="/account" className="text-gray-600 hover:text-gray-900">
               Account
             </Link>

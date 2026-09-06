@@ -13,6 +13,8 @@ import { ProjectDetailPage } from './pages/ProjectDetailPage'
 import { VersionDetailPage } from './pages/VersionDetailPage'
 import { ScanRunDetailPage } from './pages/ScanRunDetailPage'
 import { AccountPage } from './pages/AccountPage'
+import { VgsLandingPage } from './pages/vgs/VgsLandingPage'
+import { VgsWorkspacePage } from './pages/vgs/VgsWorkspacePage'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 5000 } },
@@ -35,6 +37,8 @@ export default function App() {
                 <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
                 <Route path="/versions/:versionId" element={<VersionDetailPage />} />
                 <Route path="/scan-runs/:scanRunId" element={<ScanRunDetailPage />} />
+                <Route path="/vgs" element={<VgsLandingPage />} />
+                <Route path="/vgs/:versionId" element={<VgsWorkspacePage />} />
                 <Route path="/account" element={<AccountPage />} />
               </Route>
             </Route>
