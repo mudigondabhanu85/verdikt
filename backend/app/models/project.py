@@ -13,6 +13,11 @@ class Project(Base):
     org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"))
     name: Mapped[str] = mapped_column(String(255))
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    # Soft delete (§6): set on archive, cleared on unarchive. Archived
+    # projects are hidden from the default list view but never lose data.
+    # Hard delete (admin-only, typed confirmation) removes the row outright
+    # instead of setting this.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     versions: Mapped[list["Version"]] = relationship(back_populates="project")
 

@@ -10,12 +10,11 @@ from collections import Counter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.integrations.slack.client import SlackClient, SlackNotificationError
 from app.models.finding import Finding
 from app.models.notification_config import NotificationConfig
 from app.models.project import Project, Version
 from app.models.scan import ScanRun
-from app.vault.credential_vault import decrypt_secret
+from app.notifications.dispatch import NotificationDispatchError, send_notification
 
 
 def _summary_text(scan_run: ScanRun, counts: Counter) -> str:
@@ -54,13 +53,12 @@ async def notify_scan_completed(session: AsyncSession, scan_run: ScanRun) -> Non
     text = _summary_text(scan_run, counts)
 
     for config in configs:
-        webhook_url = decrypt_secret(config.encrypted_webhook_url)
-        client = SlackClient(webhook_url)
         try:
-            await client.post_message(text)
-        except SlackNotificationError:
-            # Best-effort — a broken webhook must never fail the scan
-            # itself. An analyst debugging a silent notification would
-            # use the "test" endpoint (app.api.routes.notification_configs)
-            # rather than relying on scan-run failure to surface this.
+            await send_notification(config, text)
+        except NotificationDispatchError:
+            # Best-effort — a broken webhook/SMTP config must never fail
+            # the scan itself. An analyst debugging a silent notification
+            # would use the "test" endpoint
+            # (app.api.routes.notification_configs) rather than relying on
+            # scan-run failure to surface this.
             continue

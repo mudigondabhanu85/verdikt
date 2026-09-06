@@ -1,3 +1,4 @@
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -7,11 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import write_audit_log
 from app.auth.rbac import require_permission
 from app.db.session import get_db_session
-from app.integrations.slack.client import SlackClient, SlackNotificationError
 from app.models.notification_config import NotificationConfig
 from app.models.organization import User
+from app.notifications.dispatch import NotificationDispatchError, send_notification
 from app.schemas.notification_config import NotificationConfigCreate, NotificationConfigOut
-from app.vault.credential_vault import decrypt_secret, encrypt_secret, mask_secret
+from app.vault.credential_vault import encrypt_secret, mask_secret
 
 router = APIRouter(prefix="/notification-configs", tags=["notification-configs"])
 
@@ -22,14 +23,32 @@ async def create_notification_config(
     user: User = Depends(require_permission("notification_config", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> NotificationConfig:
-    config = NotificationConfig(
-        org_id=user.org_id,
-        label=payload.label,
-        provider=payload.provider,
-        encrypted_webhook_url=encrypt_secret(payload.webhook_url),
-        masked_reference=mask_secret(payload.webhook_url),
-        notify_on_scan_completed=payload.notify_on_scan_completed,
-    )
+    if payload.provider == "outlook":
+        smtp_config = {
+            "smtp_host": payload.smtp_host,
+            "smtp_port": payload.smtp_port,
+            "smtp_username": payload.smtp_username,
+            "smtp_password": payload.smtp_password,
+            "from_address": payload.from_address,
+            "to_address": payload.to_address,
+        }
+        config = NotificationConfig(
+            org_id=user.org_id,
+            label=payload.label,
+            provider=payload.provider,
+            encrypted_config_json=encrypt_secret(json.dumps(smtp_config)),
+            masked_reference=f"{payload.smtp_host}:{payload.smtp_port} -> {payload.to_address}",
+            notify_on_scan_completed=payload.notify_on_scan_completed,
+        )
+    else:
+        config = NotificationConfig(
+            org_id=user.org_id,
+            label=payload.label,
+            provider=payload.provider,
+            encrypted_webhook_url=encrypt_secret(payload.webhook_url),
+            masked_reference=mask_secret(payload.webhook_url),
+            notify_on_scan_completed=payload.notify_on_scan_completed,
+        )
     session.add(config)
     # Audit the creation event, never the webhook URL itself (§1.5) — it's
     # a bearer secret, same as an API key.
@@ -89,9 +108,9 @@ async def test_notification_config(
     if config is None or config.org_id != user.org_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Notification config not found")
 
-    webhook_url = decrypt_secret(config.encrypted_webhook_url)
-    client = SlackClient(webhook_url)
     try:
-        await client.post_message(f'Verdikt test notification from "{config.label}" — this connection works.')
-    except SlackNotificationError as exc:
+        await send_notification(
+            config, f'Verdikt test notification from "{config.label}" — this connection works.'
+        )
+    except NotificationDispatchError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc

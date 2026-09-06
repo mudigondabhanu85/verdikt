@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -34,5 +35,14 @@ class User(Base):
     # SSO at least once — scoped by org (a lookup always happens within
     # one specific org's configured OIDC provider), not globally unique.
     oidc_subject: Mapped[str | None] = mapped_column(String(255), index=True)
+
+    # Invite lifecycle (§6/§7 user management). A row created via invite
+    # has hashed_password=None and invite_token set; accepting the invite
+    # (setting a password) clears invite_token and sets
+    # invite_accepted_at. is_active above stays the separate
+    # deactivate/reactivate switch, orthogonal to invite state.
+    invite_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    invited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    invite_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     organization: Mapped[Organization] = relationship(back_populates="users")

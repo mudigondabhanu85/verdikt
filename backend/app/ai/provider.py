@@ -4,7 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.adapters.base import AIProviderAdapter
 from app.ai.adapters.claude import ClaudeAdapter
+from app.ai.adapters.gemini import GeminiAdapter
 from app.ai.adapters.generic_openai import GenericOpenAIAdapter
+from app.ai.adapters.grok import GrokAdapter
 from app.ai.adapters.null import NullAIProviderAdapter
 from app.ai.adapters.openai import OpenAIAdapter
 from app.config import get_settings
@@ -43,10 +45,14 @@ def build_adapter_from_config(config: AIProviderConfig) -> AIProviderAdapter:
         return ClaudeAdapter(api_key)
     if config.provider == "openai":
         return OpenAIAdapter(api_key)
+    if config.provider == "gemini":
+        return GeminiAdapter(api_key, base_url=config.base_url or "https://generativelanguage.googleapis.com")
+    if config.provider == "grok":
+        return GrokAdapter(api_key)
     if config.provider == "custom":
         if not config.base_url:
             raise ValueError(f"AIProviderConfig {config.id} is provider='custom' but has no base_url")
-        return GenericOpenAIAdapter(api_key, base_url=config.base_url)
+        return GenericOpenAIAdapter(api_key, base_url=config.base_url, auth_type=config.auth_type)
     raise ValueError(f"Unknown AIProviderConfig.provider: {config.provider!r}")
 
 

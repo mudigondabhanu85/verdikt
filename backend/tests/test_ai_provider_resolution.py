@@ -1,8 +1,11 @@
 import uuid
 
 from app.ai.adapters.claude import ClaudeAdapter
+from app.ai.adapters.gemini import GeminiAdapter
 from app.ai.adapters.generic_openai import GenericOpenAIAdapter
+from app.ai.adapters.grok import GrokAdapter
 from app.ai.adapters.null import NullAIProviderAdapter
+from app.ai.adapters.openai import OpenAIAdapter
 from app.ai.provider import build_adapter_from_config, resolve_provider_and_model
 from app.models.ai_provider_config import AIProviderConfig
 from app.models.scan import ScanRun
@@ -80,3 +83,72 @@ def test_build_adapter_from_config_maps_claude():
     )
     adapter = build_adapter_from_config(config)
     assert isinstance(adapter, ClaudeAdapter)
+
+
+def test_build_adapter_from_config_maps_openai():
+    config = AIProviderConfig(
+        org_id=uuid.uuid4(),
+        label="OpenAI",
+        provider="openai",
+        model="gpt-4o-mini",
+        base_url=None,
+        encrypted_api_key=encrypt_secret("sk-oai-abc"),
+        masked_reference="****",
+    )
+    assert isinstance(build_adapter_from_config(config), OpenAIAdapter)
+
+
+def test_build_adapter_from_config_maps_gemini():
+    config = AIProviderConfig(
+        org_id=uuid.uuid4(),
+        label="Gemini",
+        provider="gemini",
+        model="gemini-2.0-flash",
+        base_url=None,
+        encrypted_api_key=encrypt_secret("g-key"),
+        masked_reference="****",
+    )
+    assert isinstance(build_adapter_from_config(config), GeminiAdapter)
+
+
+def test_build_adapter_from_config_maps_grok():
+    config = AIProviderConfig(
+        org_id=uuid.uuid4(),
+        label="Grok",
+        provider="grok",
+        model="grok-2",
+        base_url=None,
+        encrypted_api_key=encrypt_secret("xai-key"),
+        masked_reference="****",
+    )
+    assert isinstance(build_adapter_from_config(config), GrokAdapter)
+
+
+def test_build_adapter_from_config_honors_bearer_token_auth_type_for_custom():
+    config = AIProviderConfig(
+        org_id=uuid.uuid4(),
+        label="In-house bearer",
+        provider="custom",
+        model="llama3.1:8b",
+        base_url="http://localhost:11434/v1",
+        auth_type="bearer_token",
+        encrypted_api_key=encrypt_secret("sk-abc"),
+        masked_reference="****abc",
+    )
+    adapter = build_adapter_from_config(config)
+    assert isinstance(adapter, GenericOpenAIAdapter)
+
+
+def test_build_adapter_from_config_honors_api_key_auth_type_for_custom():
+    config = AIProviderConfig(
+        org_id=uuid.uuid4(),
+        label="In-house api-key header",
+        provider="custom",
+        model="llama3.1:8b",
+        base_url="http://localhost:11434/v1",
+        auth_type="api_key",
+        encrypted_api_key=encrypt_secret("sk-abc"),
+        masked_reference="****abc",
+    )
+    adapter = build_adapter_from_config(config)
+    assert isinstance(adapter, GenericOpenAIAdapter)

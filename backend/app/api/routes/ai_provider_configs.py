@@ -27,6 +27,7 @@ async def create_ai_provider_config(
         provider=payload.provider,
         model=payload.model,
         base_url=payload.base_url,
+        auth_type=payload.auth_type,
         encrypted_api_key=encrypt_secret(payload.api_key),
         masked_reference=mask_secret(payload.api_key),
     )

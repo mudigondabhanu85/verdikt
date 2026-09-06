@@ -8,6 +8,12 @@ export function NotificationConfigsSection() {
   const [label, setLabel] = useState('')
   const [provider, setProvider] = useState<NotificationProviderType>('slack')
   const [webhookUrl, setWebhookUrl] = useState('')
+  const [smtpHost, setSmtpHost] = useState('')
+  const [smtpPort, setSmtpPort] = useState('587')
+  const [smtpUsername, setSmtpUsername] = useState('')
+  const [smtpPassword, setSmtpPassword] = useState('')
+  const [fromAddress, setFromAddress] = useState('')
+  const [toAddress, setToAddress] = useState('')
   const [testResult, setTestResult] = useState<Record<string, string>>({})
 
   const { data: configs, isLoading } = useQuery({
@@ -17,11 +23,31 @@ export function NotificationConfigsSection() {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['notification-configs'] })
 
   const createMutation = useMutation({
-    mutationFn: () => api.notificationConfigs.create({ label, provider, webhook_url: webhookUrl }),
+    mutationFn: () =>
+      api.notificationConfigs.create(
+        provider === 'outlook'
+          ? {
+              label,
+              provider,
+              smtp_host: smtpHost,
+              smtp_port: Number(smtpPort),
+              smtp_username: smtpUsername,
+              smtp_password: smtpPassword,
+              from_address: fromAddress,
+              to_address: toAddress,
+            }
+          : { label, provider, webhook_url: webhookUrl },
+      ),
     onSuccess: () => {
       invalidate()
       setLabel('')
       setWebhookUrl('')
+      setSmtpHost('')
+      setSmtpPort('587')
+      setSmtpUsername('')
+      setSmtpPassword('')
+      setFromAddress('')
+      setToAddress('')
     },
   })
 
@@ -39,7 +65,13 @@ export function NotificationConfigsSection() {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (!label.trim() || !webhookUrl.trim()) return
+    if (!label.trim()) return
+    if (provider === 'outlook') {
+      if (!smtpHost.trim() || !smtpUsername.trim() || !smtpPassword.trim() || !fromAddress.trim() || !toAddress.trim())
+        return
+    } else if (!webhookUrl.trim()) {
+      return
+    }
     createMutation.mutate()
   }
 
@@ -47,8 +79,9 @@ export function NotificationConfigsSection() {
     <section className="mb-10">
       <h2 className="mb-3 text-lg font-medium text-gray-800">Notifications</h2>
       <p className="mb-4 text-sm text-gray-500">
-        Posts a summary to Slack whenever a scan run reaches a terminal state. Best-effort — a broken webhook never
-        fails the scan itself; use "Send test" below to confirm the URL works.
+        Posts a summary to Slack, Teams, or sends an email via Outlook/SMTP whenever a scan run reaches a terminal
+        state. Best-effort — a broken connection never fails the scan itself; use "Send test" below to confirm it
+        works.
       </p>
 
       <form onSubmit={handleSubmit} className="mb-4 flex flex-wrap gap-2">
@@ -69,13 +102,56 @@ export function NotificationConfigsSection() {
             </option>
           ))}
         </select>
-        <input
-          value={webhookUrl}
-          onChange={(e) => setWebhookUrl(e.target.value)}
-          placeholder="webhook URL"
-          type="password"
-          className="min-w-64 flex-1 rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
-        />
+        {provider === 'outlook' ? (
+          <>
+            <input
+              value={smtpHost}
+              onChange={(e) => setSmtpHost(e.target.value)}
+              placeholder="SMTP host"
+              className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+            />
+            <input
+              value={smtpPort}
+              onChange={(e) => setSmtpPort(e.target.value)}
+              placeholder="port"
+              type="number"
+              className="w-20 rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+            />
+            <input
+              value={smtpUsername}
+              onChange={(e) => setSmtpUsername(e.target.value)}
+              placeholder="SMTP username"
+              className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+            />
+            <input
+              value={smtpPassword}
+              onChange={(e) => setSmtpPassword(e.target.value)}
+              placeholder="SMTP password"
+              type="password"
+              className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+            />
+            <input
+              value={fromAddress}
+              onChange={(e) => setFromAddress(e.target.value)}
+              placeholder="from address"
+              className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+            />
+            <input
+              value={toAddress}
+              onChange={(e) => setToAddress(e.target.value)}
+              placeholder="to address"
+              className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+            />
+          </>
+        ) : (
+          <input
+            value={webhookUrl}
+            onChange={(e) => setWebhookUrl(e.target.value)}
+            placeholder="webhook URL"
+            type="password"
+            className="min-w-64 flex-1 rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+          />
+        )}
         <button
           type="submit"
           disabled={createMutation.isPending}

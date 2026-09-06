@@ -5,6 +5,7 @@ import { ProtectedRoute } from './components/ProtectedRoute'
 import { Layout } from './components/Layout'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
+import { AcceptInvitePage } from './pages/AcceptInvitePage'
 import { OidcCallbackPage } from './pages/OidcCallbackPage'
 import { ProjectsPage } from './pages/ProjectsPage'
 import { DashboardPage } from './pages/DashboardPage'
@@ -25,6 +26,7 @@ export default function App() {
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
+            <Route path="/accept-invite" element={<AcceptInvitePage />} />
             <Route path="/oidc-callback" element={<OidcCallbackPage />} />
             <Route element={<ProtectedRoute />}>
               <Route element={<Layout />}>

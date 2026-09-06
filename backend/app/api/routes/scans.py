@@ -16,6 +16,7 @@ from app.api.deps import get_scan_run_or_404, get_version_or_404, write_audit_lo
 from app.auth.rbac import require_permission
 from app.db.session import get_db_session
 from app.models.ai_provider_config import AIProviderConfig
+from app.models.attack_chain import AttackChain
 from app.models.finding import Finding
 from app.models.organization import User
 from app.models.project import Version
@@ -26,6 +27,7 @@ from app.reporting.executive_summary import generate_executive_summary
 from app.reporting.html_report import render_html_report
 from app.reporting.pdf_report import render_pdf_report
 from app.reporting.screenshots import load_screenshots_by_finding
+from app.schemas.attack_chain import AttackChainOut
 from app.schemas.finding import FindingOut
 from app.schemas.scan import AgentJobOut, ScanRunCreate, ScanRunDetail, ScanRunDiffOut, ScanRunOut
 
@@ -196,6 +198,16 @@ async def _list_findings(session: AsyncSession, scan_run_id: uuid.UUID) -> list[
     return list(result.scalars().all())
 
 
+async def _list_attack_chains(session: AsyncSession, scan_run_id: uuid.UUID) -> list[AttackChain]:
+    result = await session.execute(
+        select(AttackChain).where(AttackChain.scan_run_id == scan_run_id)
+    )
+    chains = list(result.scalars().unique().all())
+    for chain in chains:
+        await session.refresh(chain, attribute_names=["evidence"])
+    return chains
+
+
 @router.get("/scan-runs/{scan_run_id}/findings", response_model=list[FindingOut])
 async def list_findings(
     scan_run_id: uuid.UUID,
@@ -235,10 +247,12 @@ async def get_report_json(
     detail = await _scan_run_detail(session, scan_run)
     findings = await _list_findings(session, scan_run_id)
     executive_summary = await _get_or_generate_executive_summary(session, scan_run, detail, findings)
+    attack_chains = await _list_attack_chains(session, scan_run_id)
     return {
         "scan_run": detail.model_dump(mode="json"),
         "executive_summary": executive_summary,
         "findings": [FindingOut.model_validate(f).model_dump(mode="json") for f in findings],
+        "attack_chains": [AttackChainOut.model_validate(c).model_dump(mode="json") for c in attack_chains],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -254,11 +268,13 @@ async def get_report_html(
     findings = await _list_findings(session, scan_run_id)
     executive_summary = await _get_or_generate_executive_summary(session, scan_run, detail, findings)
     screenshots = await load_screenshots_by_finding(findings)
+    attack_chains = await _list_attack_chains(session, scan_run_id)
     return render_html_report(
         scan_run=detail,
         findings=findings,
         executive_summary=executive_summary,
         screenshots_by_finding_id=screenshots,
+        attack_chains=attack_chains,
     )
 
 
@@ -273,11 +289,13 @@ async def get_report_pdf(
     findings = await _list_findings(session, scan_run_id)
     executive_summary = await _get_or_generate_executive_summary(session, scan_run, detail, findings)
     screenshots = await load_screenshots_by_finding(findings)
+    attack_chains = await _list_attack_chains(session, scan_run_id)
     pdf_bytes = render_pdf_report(
         scan_run=detail,
         findings=findings,
         executive_summary=executive_summary,
         screenshots_by_finding_id=screenshots,
+        attack_chains=attack_chains,
     )
     return Response(
         content=pdf_bytes,
@@ -297,11 +315,13 @@ async def get_report_docx(
     findings = await _list_findings(session, scan_run_id)
     executive_summary = await _get_or_generate_executive_summary(session, scan_run, detail, findings)
     screenshots = await load_screenshots_by_finding(findings)
+    attack_chains = await _list_attack_chains(session, scan_run_id)
     docx_bytes = render_docx_report(
         scan_run=detail,
         findings=findings,
         executive_summary=executive_summary,
         screenshots_by_finding_id=screenshots,
+        attack_chains=attack_chains,
     )
     return Response(
         content=docx_bytes,

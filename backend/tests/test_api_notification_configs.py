@@ -2,6 +2,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from tests.conftest import register_org_admin
+from tests.test_outlook_client import _FakeSmtpServer
 
 
 def _make_slack_fixture(*, accept: bool):
@@ -104,3 +105,76 @@ async def test_test_endpoint_surfaces_a_real_rejection_cleanly(client):
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+
+async def test_teams_config_create_and_test_endpoint_send_a_real_message(client):
+    admin = await register_org_admin(client)
+    server, thread, received = _make_slack_fixture(accept=True)
+    try:
+        host, port = server.server_address
+        created = await client.post(
+            "/notification-configs",
+            json={"label": "Fixture Teams", "provider": "teams", "webhook_url": f"http://{host}:{port}/webhook"},
+            headers=admin["headers"],
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["provider"] == "teams"
+
+        resp = await client.post(
+            f"/notification-configs/{created.json()['id']}/test", headers=admin["headers"]
+        )
+        assert resp.status_code == 204, resp.text
+        assert len(received) == 1
+        import json as _json
+
+        body = _json.loads(received[0])
+        assert body["@type"] == "MessageCard"
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+async def test_outlook_config_requires_all_smtp_fields(client):
+    admin = await register_org_admin(client)
+    resp = await client.post(
+        "/notification-configs",
+        json={"label": "Missing fields", "provider": "outlook", "smtp_host": "smtp.example.com"},
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 422
+
+
+async def test_outlook_config_create_and_test_endpoint_send_a_real_email(client):
+    admin = await register_org_admin(client)
+    server = _FakeSmtpServer()
+    server.start()
+    try:
+        created = await client.post(
+            "/notification-configs",
+            json={
+                "label": "Fixture Outlook",
+                "provider": "outlook",
+                "smtp_host": server.host,
+                "smtp_port": server.port,
+                "smtp_username": "verdikt@example.com",
+                "smtp_password": "app-password",
+                "from_address": "verdikt@example.com",
+                "to_address": "analyst@example.com",
+            },
+            headers=admin["headers"],
+        )
+        assert created.status_code == 201, created.text
+        assert "app-password" not in created.text
+        assert created.json()["provider"] == "outlook"
+
+        # The real OutlookClient defaults to STARTTLS, which this bare
+        # fixture doesn't speak — this proves the config round-trips and
+        # the test endpoint genuinely attempts a live send (and surfaces
+        # the resulting failure cleanly), not that a TLS-capable SMTP
+        # relay is reachable from this test.
+        resp = await client.post(
+            f"/notification-configs/{created.json()['id']}/test", headers=admin["headers"]
+        )
+        assert resp.status_code == 502
+    finally:
+        server.stop()

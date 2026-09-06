@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
+from app.agents.chain_analysis import ChainAnalysisAgent
 from app.agents.graph import build_graph
 from app.agents.http_client import ScopedHttpClient, install_commit_backstop
 from app.ai import provider as ai_provider
@@ -11,11 +12,63 @@ from app.ai.budget import BudgetGuard
 from app.db import session as db_session
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
+from app.models.finding import Finding
 from app.models.project import ScopeEntry
-from app.models.scan import ScanRun
+from app.models.scan import AgentJob, ScanRun
 from app.models.target import Target
 from app.notifications.scan_notifications import notify_scan_completed
 from app.notifications.vgs_push import push_findings_to_vgs
+
+
+async def _run_chain_analysis(
+    session, *, scan_run: ScanRun, budget_guard: BudgetGuard, ai_model: str
+) -> None:
+    """§2's Chain Analysis Agent runs after every other agent has fully
+    finished (not as a graph fan-in node — LangGraph's join semantics
+    fire a node once per superstep in which *any* predecessor completes,
+    not once all of them have, so nodes converging from branches of
+    different depths (e.g. header_config, 2 hops from recon, vs.
+    injection, 3 hops through login) fire the join multiple times,
+    racing each other over the shared AsyncSession. Running this as a
+    plain sequential step here, after `graph.ainvoke()` has already
+    returned, sidesteps that entirely — by construction nothing else is
+    still writing to the session at this point) — matches the spec's own
+    framing: "run after validation, before reporting."
+    """
+    job = AgentJob(
+        scan_run_id=scan_run.id,
+        agent_type="chain_analysis",
+        status="running",
+        started_at=datetime.now(timezone.utc),
+    )
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+
+    findings = list(
+        (await session.execute(select(Finding).where(Finding.scan_run_id == scan_run.id))).scalars()
+    )
+    agent = ChainAnalysisAgent(
+        scan_run_id=scan_run.id,
+        agent_job_id=job.id,
+        db_session=session,
+        budget_guard=budget_guard,
+        ai_model=ai_model,
+    )
+    try:
+        chains = await agent.run(findings)
+    except Exception as exc:  # noqa: BLE001 — a failed chain-analysis pass shouldn't fail the scan
+        job.status = "failed"
+        job.error = str(exc)
+        job.completed_at = datetime.now(timezone.utc)
+        await session.commit()
+        return
+
+    job.status = "skipped" if agent.budget_exceeded else "completed"
+    job.stats = {"chains_confirmed": len(chains)}
+    job.error = "budget exceeded" if agent.budget_exceeded else None
+    job.completed_at = datetime.now(timezone.utc)
+    await session.commit()
 
 
 async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
@@ -94,6 +147,9 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
                 scope_entries=scope_entries,
             )
             await graph.ainvoke({})
+            await _run_chain_analysis(
+                session, scan_run=scan_run, budget_guard=budget_guard, ai_model=ai_model
+            )
 
             scan_run.status = "completed"
         except Exception as exc:  # noqa: BLE001 — surfaced on the ScanRun, not swallowed
