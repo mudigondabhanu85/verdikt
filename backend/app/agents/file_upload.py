@@ -5,13 +5,17 @@ validation? See app.checks.file_upload_catalog.yaml for the honest scope
 of what this does and doesn't prove.
 """
 
+import re
 import uuid
+from urllib.parse import urljoin
 
 import httpx
+from bs4 import BeautifulSoup
 
 from app.agents.evidence import format_request_raw, format_response_raw
 from app.agents.evidence_screenshot import capture_and_store_evidence_screenshot
-from app.agents.http_client import ScopedHttpClient, ScopeViolationError
+from app.agents.http_client import AuthenticatedSession, ScopedHttpClient, ScopeViolationError
+from app.agents.login import _live_field_values
 from app.agents.recon import FormInfo
 from app.checks.loader import get_check
 from app.checks.render import render_check_template
@@ -45,9 +49,16 @@ def _other_fields(form: FormInfo, file_field_name: str) -> dict[str, str]:
 
 
 class FileUploadAgent:
-    """No LLM needed — a single deterministic acceptance check per form
-    (§1.2 safe-by-default: uploads a small, inert marker file — no
-    payload here is ever actually executed by this agent)."""
+    """No LLM needed — a deterministic acceptance check per form (§1.2
+    safe-by-default: uploads a small, inert marker file — no payload
+    here is ever actually executed by this agent). Confirmation requires
+    actually fetching the uploaded file back and finding our marker
+    content in it — not just inferring acceptance from a status code —
+    after a real, live-found false positive: an unauthenticated upload
+    attempt against DVWA got redirected to its login page (a 302, well
+    under the old ">= 400 means rejected" bar) and was wrongly recorded
+    as an accepted upload on every security level, every scan, all
+    session (see (1) and (2) below for the two underlying causes)."""
 
     def __init__(
         self,
@@ -61,8 +72,18 @@ class FileUploadAgent:
         self._scan_run_id = scan_run_id
         self._agent_job_id = agent_job_id
         self._session = db_session
+        self._auth_session: AuthenticatedSession | None = None
 
-    async def run(self, forms: list[FormInfo]) -> list[Finding]:
+    async def run(
+        self,
+        forms: list[FormInfo],
+        sessions: dict[uuid.UUID, "AuthenticatedSession"] | None = None,
+    ) -> list[Finding]:
+        # (1) A real, live-found bug: this never carried any session at
+        # all, so every upload attempt was fully unauthenticated —
+        # structurally unable to reach a login-gated upload form
+        # regardless of how permissive its validation really was.
+        self._auth_session = next(iter((sessions or {}).values()), None)
         findings: list[Finding] = []
         for form in forms:
             if form.method != "POST":
@@ -75,37 +96,117 @@ class FileUploadAgent:
                 findings.append(finding)
         return findings
 
+    async def _live_hidden_and_submit_values(self, form: FormInfo, file_field: str) -> dict[str, str]:
+        # (2) Same bug class already fixed for the login form and Stored
+        # XSS: a hidden anti-CSRF token or the submit button's own field
+        # is often required for the server to treat this as a real
+        # submission at all, and both need a *fresh* value read right
+        # before submitting, not a stale one captured whenever recon
+        # first crawled the page.
+        other_names = {
+            f.name for f in form.fields if f.type in ("hidden", "submit") and f.name != file_field
+        }
+        if not other_names:
+            return {}
+        try:
+            pre_submit = await self._client.get(form.action_url, session=self._auth_session)
+        except (ScopeViolationError, httpx.HTTPError):
+            return {}
+        return _live_field_values(pre_submit.text, other_names)
+
     async def _try_upload(
         self, form: FormInfo, file_field: str, extension: str, content_type: str, content: bytes
-    ) -> httpx.Response | None:
+    ) -> tuple[str, httpx.Response] | None:
         filename = f"verdikt-upload-test{extension}"
+        fields = {**_other_fields(form, file_field), **await self._live_hidden_and_submit_values(form, file_field)}
         try:
-            return await self._client.post_multipart(
+            response = await self._client.post_multipart(
                 form.action_url,
                 files={file_field: (filename, content, content_type)},
-                fields=_other_fields(form, file_field),
+                fields=fields,
+                session=self._auth_session,
             )
         except (ScopeViolationError, httpx.HTTPError):
             return None
+        return filename, response
+
+    def _rejected(self, response: httpx.Response) -> bool:
+        # A redirect elsewhere (a login page being the real, live-found
+        # case) means the request was never actually processed as an
+        # upload attempt at all — treating "any status under 400" as
+        # acceptance, as this used to, counted an unauthenticated
+        # redirect-to-login as a confirmed vulnerability.
+        return response.status_code >= 400 or response.is_redirect
+
+    async def _fetch_uploaded_file(self, form: FormInfo, response: httpx.Response, filename: str) -> str | None:
+        """Looks for the uploaded filename anywhere in the acceptance
+        response — as a plain-text echoed path (DVWA's own low/medium/
+        high all do exactly this: `{path}/{filename} succesfully
+        uploaded!`, no link markup at all) or as a real `<a href>` — and
+        actually fetches whatever URL that resolves to, returning its
+        body only if our own marker content is really present there.
+        Real reproduction, not an inference from a status code or a
+        hopeful success-looking message: matches this codebase's
+        Confirmed-Only bar for every other check (SSRF's real
+        out-of-band callback, XSS's real browser execution).
+        """
+        text = response.text
+        candidate_paths: list[str] = []
+
+        soup = BeautifulSoup(text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            if filename in a["href"] or filename in a.get_text():
+                candidate_paths.append(a["href"])
+
+        for match in re.finditer(r"[\w./-]*" + re.escape(filename), text):
+            candidate_paths.append(match.group(0))
+
+        base_url = str(response.url) if response.url else form.action_url
+        for path in dict.fromkeys(candidate_paths):
+            url = urljoin(base_url, path)
+            try:
+                fetched = await self._client.get(url, session=self._auth_session)
+            except (ScopeViolationError, httpx.HTTPError):
+                continue
+            if fetched.status_code < 400 and "verdikt-upload-test" in fetched.text:
+                return url
+        return None
 
     async def _check_form(self, form: FormInfo, file_field: str) -> Finding | None:
         for extension, content_type, content in _DANGEROUS_UPLOADS:
-            response = await self._try_upload(form, file_field, extension, content_type, content)
-            if response is None or response.status_code >= 400:
+            result = await self._try_upload(form, file_field, extension, content_type, content)
+            if result is None:
+                continue
+            filename, response = result
+            if self._rejected(response):
+                continue
+            uploaded_url = await self._fetch_uploaded_file(form, response, filename)
+            if uploaded_url is None:
                 continue
 
-            # §2 step 1: deterministic re-execution before confirming.
-            response_again = await self._try_upload(
-                form, file_field, extension, content_type, content
-            )
-            if response_again is None or response_again.status_code >= 400:
+            # §2 step 1: deterministic re-execution before confirming —
+            # a fresh upload, fresh fetch-back, not just re-checking the
+            # same one.
+            result_again = await self._try_upload(form, file_field, extension, content_type, content)
+            if result_again is None:
+                continue
+            filename_again, response_again = result_again
+            if self._rejected(response_again):
+                continue
+            uploaded_url_again = await self._fetch_uploaded_file(form, response_again, filename_again)
+            if uploaded_url_again is None:
                 continue
 
-            return await self._persist(form, extension, content_type, response_again)
+            return await self._persist(form, extension, content_type, response_again, uploaded_url_again)
         return None
 
     async def _persist(
-        self, form: FormInfo, extension: str, content_type: str, response: httpx.Response
+        self,
+        form: FormInfo,
+        extension: str,
+        content_type: str,
+        response: httpx.Response,
+        uploaded_url: str,
     ) -> Finding:
         check_def = get_check("file-upload-insufficient-validation", filename=_CATALOG_FILE)
         extra = {
@@ -134,8 +235,9 @@ class FileUploadAgent:
             steps_to_reproduce=[
                 f'1. Submit {form.action_url} with a file named "verdikt-upload-test{extension}" '
                 f'(Content-Type: {content_type}).',
-                f"2. Observe the upload is accepted (HTTP {response.status_code}) instead of "
-                "being rejected for its extension/content type.",
+                f"2. Fetch {uploaded_url} and observe the uploaded content is served back "
+                "unchanged — the file was genuinely accepted and stored, not just given a "
+                "non-error status code.",
             ],
             remediation=check_def.remediation,
             references=[*check_def.references, check_def.portswigger_reference_url],
@@ -159,6 +261,11 @@ class FileUploadAgent:
                     request_raw=request_raw,
                     response_raw=response_raw,
                     screenshot_refs=screenshot_refs,
+                    additional_notes=(
+                        f"Confirmed by actually fetching the uploaded file back at {uploaded_url} "
+                        "and finding our own marker content in it — not inferred from the upload "
+                        "response's status code alone."
+                    ),
                 )
             )
             await self._session.commit()

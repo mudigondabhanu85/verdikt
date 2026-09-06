@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from sqlalchemy import select
 
 from app.agents.file_upload import FileUploadAgent
-from app.agents.http_client import ScopedHttpClient
+from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
 from app.agents.recon import FormField, FormInfo
 from app.models.finding import Finding
 from app.models.project import ScopeEntry
@@ -21,7 +21,30 @@ def _extract_filename(body: bytes) -> str | None:
     return match.group(1).decode() if match else None
 
 
+def _extract_file_content(body: bytes) -> bytes:
+    # The actual file bytes sit between the blank line following the
+    # *file* part's own headers (found via its filename= marker, since a
+    # multipart body has other parts too — the "caption" text field) and
+    # the next boundary marker.
+    filename_match = _FILENAME_RE.search(body)
+    if filename_match is None:
+        return b""
+    headers_end = body.find(b"\r\n\r\n", filename_match.end())
+    if headers_end == -1:
+        return b""
+    start = headers_end + len(b"\r\n\r\n")
+    end = body.find(b"\r\n--", start)
+    return body[start:end] if end != -1 else body[start:]
+
+
 def _make_handler(*, reject_dangerous: bool):
+    # Module-scoped so both do_POST and do_GET (separate request-handler
+    # instances) see the same store — mirrors a real vulnerable app that
+    # actually accepts and later serves the file back, which is exactly
+    # what FileUploadAgent now requires proof of (see file_upload.py's
+    # class docstring for the real false-positive this replaced).
+    uploaded_files: dict[str, bytes] = {}
+
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):  # noqa: N802
             if self.path != "/upload":
@@ -38,9 +61,27 @@ def _make_handler(*, reject_dangerous: bool):
                 self.wfile.write(b"File type not allowed")
                 return
 
+            content = _extract_file_content(body)
+            uploaded_files[filename] = content
+
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b"Upload successful")
+            self.wfile.write(f"/uploads/{filename} succesfully uploaded!".encode())
+
+        def do_GET(self):  # noqa: N802
+            if self.path.startswith("/uploads/"):
+                filename = self.path.removeprefix("/uploads/")
+                content = uploaded_files.get(filename)
+                if content is None:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(content)
+                return
+            self.send_response(404)
+            self.end_headers()
 
         def log_message(self, format, *args):  # noqa: A002
             pass
@@ -50,6 +91,63 @@ def _make_handler(*, reject_dangerous: bool):
 
 def _server(*, reject_dangerous: bool):
     server = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(reject_dangerous=reject_dangerous))
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+def _make_login_gated_handler():
+    # Mirrors the real, live-found false positive: an unauthenticated
+    # upload attempt gets redirected to a login page (a 302, well under
+    # the old ">= 400 means rejected" bar) rather than genuinely
+    # processed — FileUploadAgent must not count that as an accepted
+    # upload just because the status code is under 400.
+    uploaded_files: dict[str, bytes] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            if self.path != "/upload":
+                self.send_response(404)
+                self.end_headers()
+                return
+            if self.headers.get("Cookie") != "session=valid":
+                self.send_response(302)
+                self.send_header("Location", "/login.php")
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            filename = _extract_filename(body) or ""
+            content = _extract_file_content(body)
+            uploaded_files[filename] = content
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(f"/uploads/{filename} succesfully uploaded!".encode())
+
+        def do_GET(self):  # noqa: N802
+            if self.path.startswith("/uploads/"):
+                filename = self.path.removeprefix("/uploads/")
+                content = uploaded_files.get(filename)
+                if content is None:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(content)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, format, *args):  # noqa: A002
+            pass
+
+    return Handler
+
+
+def _login_gated_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _make_login_gated_handler())
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -134,3 +232,55 @@ async def test_forms_without_a_file_field_are_skipped(db_adapter):
         findings = await agent.run([form])
         assert findings == []
         await client.aclose()
+
+
+async def test_unauthenticated_redirect_to_login_is_not_flagged(db_adapter):
+    # The real, live-found bug: a 302 to a login page is well under the
+    # old ">= 400 means rejected" bar and was wrongly recorded as an
+    # accepted upload. Calling run() with no sessions at all reproduces
+    # the exact original failure mode (every request unauthenticated).
+    server, thread = _login_gated_server()
+    try:
+        host, port = server.server_address
+        async with session_scope(db_adapter) as session:
+            client = ScopedHttpClient(
+                version_id=uuid.uuid4(),
+                scope_entries=[ScopeEntry(host=host, port=port, in_scope=True)],
+                db_session=session,
+            )
+            agent = FileUploadAgent(
+                client, scan_run_id=uuid.uuid4(), agent_job_id=uuid.uuid4(), db_session=session
+            )
+            findings = await agent.run([_form(host, port)])
+            assert findings == []
+            await client.aclose()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+async def test_authenticated_upload_that_is_really_retrievable_is_flagged(db_adapter):
+    server, thread = _login_gated_server()
+    try:
+        host, port = server.server_address
+        async with session_scope(db_adapter) as session:
+            client = ScopedHttpClient(
+                version_id=uuid.uuid4(),
+                scope_entries=[ScopeEntry(host=host, port=port, in_scope=True)],
+                db_session=session,
+            )
+            agent = FileUploadAgent(
+                client, scan_run_id=uuid.uuid4(), agent_job_id=uuid.uuid4(), db_session=session
+            )
+            credential_set_id = uuid.uuid4()
+            sessions = {
+                credential_set_id: AuthenticatedSession(
+                    credential_set_id=credential_set_id, cookies={"session": "valid"}
+                )
+            }
+            findings = await agent.run([_form(host, port)], sessions)
+            assert len(findings) == 1
+            await client.aclose()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)

@@ -275,7 +275,7 @@ def build_graph(
         job = await _start_job("file_upload")
         agent = FileUploadAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
         try:
-            findings = await agent.run(state.get("discovered_forms", []))
+            findings = await agent.run(state.get("discovered_forms", []), state.get("sessions", {}))
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
