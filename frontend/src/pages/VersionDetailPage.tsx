@@ -10,6 +10,10 @@ import { BusinessRulesTab } from './version/BusinessRulesTab'
 import { ScanRunsTab } from './version/ScanRunsTab'
 import { TrafficTab } from './version/TrafficTab'
 import { BurpTab } from './version/BurpTab'
+import { ReportProjectInfoTab } from './version/vgs/ReportProjectInfoTab'
+import { ReportVulnerabilitiesTab } from './version/vgs/ReportVulnerabilitiesTab'
+import { ReportEvidenceTab } from './version/vgs/ReportEvidenceTab'
+import { ReportGenerateTab } from './version/vgs/ReportGenerateTab'
 
 export function VersionDetailPage() {
   const { versionId } = useParams<{ versionId: string }>()
@@ -41,6 +45,10 @@ export function VersionDetailPage() {
           { key: 'business-rules', label: 'Business Rules', content: <BusinessRulesTab versionId={versionId} /> },
           { key: 'traffic', label: 'Traffic', content: <TrafficTab versionId={versionId} /> },
           { key: 'burp', label: 'Burp', content: <BurpTab versionId={versionId} isAuthorized={!!version?.is_authorized} /> },
+          { key: 'report-project-info', label: 'Report: Project Info', content: <ReportProjectInfoTab versionId={versionId} /> },
+          { key: 'report-vulnerabilities', label: 'Report: Vulnerabilities', content: <ReportVulnerabilitiesTab versionId={versionId} /> },
+          { key: 'report-evidence', label: 'Report: Evidence', content: <ReportEvidenceTab versionId={versionId} /> },
+          { key: 'report-generate', label: 'Report: Generate', content: <ReportGenerateTab versionId={versionId} /> },
         ]}
       />
     </div>
