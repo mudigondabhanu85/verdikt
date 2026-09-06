@@ -39,21 +39,24 @@ def _payload_for(marker: str) -> str:
     # Same real bug as app.agents.xss_browser_proof.visible_proof_banner_js
     # (the window[marker] flag alone is reliable but invisible, so a
     # screenshot taken right after detecting it looked identical to an
-    # unexploited page) — but that helper's full banner is too long here:
-    # a real, live-found constraint against DVWA's own stored-XSS teaching
-    # example is that its guestbook `comment` column is a bounded
-    # varchar, and MySQL strict mode rejects the whole INSERT outright
-    # (a real mysqli_sql_exception, not a silent truncation) once the
-    # payload gets much past ~200-250 characters — confirmed empirically
-    # against the live container. A stored payload has to survive a
-    # database round-trip that a purely reflected/DOM one never does, so
-    # it gets its own deliberately compact banner instead of the shared
-    # one.
+    # unexploited page) — but that helper's full modal-dialog proof is
+    # too long here: a real, live-found constraint against DVWA's own
+    # stored-XSS teaching example is that its guestbook `comment` column
+    # is a bounded varchar, and MySQL strict mode rejects the whole
+    # INSERT outright (a real mysqli_sql_exception, not a silent
+    # truncation) past ~250-300 characters — confirmed empirically
+    # against the live container (253 chars survives; 460 doesn't). A
+    # stored payload has to survive a database round-trip a purely
+    # reflected/DOM one never does, so this is a deliberately compact
+    # floating box rather than the shared helper's full dialog — small
+    # and bordered so it still reads as a pop-up in a screenshot rather
+    # than blending into the page, not a full-width banner either.
     return (
         f'<script>window["{marker}"]=true;'
-        f'var b=document.createElement("div");b.textContent="XSS POC";'
-        f'b.style.cssText="position:fixed;top:0;background:red;color:#fff;padding:4px";'
-        f"document.body.appendChild(b);</script>"
+        f'var d=document.createElement("div");d.textContent="XSS POC";'
+        f'd.style.cssText="position:fixed;top:30%;left:35%;background:#fff;'
+        f'border:3px solid red;padding:8px 16px";'
+        f"document.body.appendChild(d);</script>"
     )
 
 

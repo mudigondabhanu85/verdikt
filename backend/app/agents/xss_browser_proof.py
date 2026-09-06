@@ -40,25 +40,50 @@ def _proof_marker() -> str:
 
 
 def visible_proof_banner_js(marker: str) -> str:
-    """Injects an unmissable, full-width banner into the page — the
+    """Injects an unmissable on-page proof of execution — the
     `window[marker]` flag alone is reliable, deterministic proof for
     `page.evaluate()` to check, but is invisible, so the resulting
     screenshot looked identical to a normal, unexploited page (a real
     complaint: "I don't see an XSS pop up, I just see the page"). A
     native `alert()` can't be used for this instead — Playwright/Chrome
-    auto-dismisses or blocks JS dialogs, so it never appears in a
-    screenshot either. A visible DOM banner is what actually makes the
-    screenshot itself function as evidence, not just the pass/fail flag
-    behind it.
+    auto-dismisses or blocks JS dialogs, and even if it didn't, a native
+    dialog is browser-chrome UI rendered outside the page's own DOM, so
+    `page.screenshot()` can never capture it regardless. This renders a
+    centered modal styled to read unambiguously as a real pop-up dialog
+    ("This page says" + message + OK button, the same shape a real
+    alert() takes) rather than a banner, which a second real complaint
+    found didn't read as "a pop-up" even though it was genuine proof.
+
+    Built with plain createElement/textContent, not innerHTML, and using
+    only double quotes throughout — this same string also gets embedded
+    inside a single-quoted `onerror='...'` HTML attribute value
+    elsewhere (_dom_xss_payloads below), and a stray single quote here
+    would prematurely terminate that attribute and corrupt the payload.
     """
     return (
-        f'var b=document.createElement("div");'
-        f'b.textContent="\\u26a0 XSS PROOF-OF-CONCEPT \\u2014 JavaScript executed by Verdikt "'
-        f'+"(marker: {marker})";'
-        f'b.style.cssText="position:fixed;top:0;left:0;right:0;z-index:2147483647;'
-        f'background:#dc2626;color:#fff;font:bold 16px -apple-system,sans-serif;'
-        f'padding:14px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.4);";'
-        f'document.documentElement.appendChild(b);'
+        f'var o=document.createElement("div");'
+        f'o.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.4);'
+        f"z-index:2147483647;display:flex;align-items:center;justify-content:center;"
+        f'font-family:-apple-system,sans-serif";'
+        f'var d=document.createElement("div");'
+        f'd.style.cssText="background:#fff;border-radius:8px;'
+        f'box-shadow:0 10px 40px rgba(0,0,0,.45);min-width:300px;max-width:440px";'
+        f'var t=document.createElement("div");'
+        f't.textContent="This page says";'
+        f't.style.cssText="padding:16px 18px 0;font:13px -apple-system,sans-serif;color:#5f6368";'
+        f'var m=document.createElement("div");'
+        f'm.textContent="\\u26a0 XSS PROOF-OF-CONCEPT \\u2014 JavaScript executed by Verdikt '
+        f'(marker: {marker})";'
+        f'm.style.cssText="padding:10px 18px 18px;font:14px -apple-system,sans-serif;'
+        f'color:#202124;word-break:break-word";'
+        f'var f=document.createElement("div");'
+        f'f.style.cssText="padding:10px 16px;text-align:right;border-top:1px solid #e8eaed";'
+        f'var k=document.createElement("button");'
+        f'k.textContent="OK";'
+        f'k.style.cssText="background:#1a73e8;color:#fff;border:0;border-radius:4px;'
+        f'padding:8px 22px;font:14px -apple-system,sans-serif;cursor:pointer";'
+        f"f.appendChild(k);d.appendChild(t);d.appendChild(m);d.appendChild(f);o.appendChild(d);"
+        f"document.documentElement.appendChild(o);"
     )
 
 
