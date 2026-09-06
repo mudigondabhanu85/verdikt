@@ -14,6 +14,11 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
   const [loginEndpoint, setLoginEndpoint] = useState('')
   const [extraCookies, setExtraCookies] = useState('')
 
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editLabel, setEditLabel] = useState('')
+  const [editSecret, setEditSecret] = useState('')
+  const [editLoginEndpoint, setEditLoginEndpoint] = useState('')
+
   function parseExtraCookies(raw: string): Record<string, string> | null {
     const trimmed = raw.trim()
     if (!trimmed) return null
@@ -55,10 +60,30 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
     onSuccess: invalidate,
   })
 
+  const updateMutation = useMutation({
+    mutationFn: (id: string) =>
+      api.credentials.update(versionId, id, {
+        label: editLabel || undefined,
+        secret: editSecret || undefined,
+        login_endpoint: editLoginEndpoint || undefined,
+      }),
+    onSuccess: () => {
+      invalidate()
+      setEditingId(null)
+    },
+  })
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
     if (!label.trim() || !username.trim() || !secret.trim()) return
     createMutation.mutate()
+  }
+
+  function startEdit(cred: { id: string; label: string; login_endpoint: string | null }) {
+    setEditingId(cred.id)
+    setEditLabel(cred.label)
+    setEditSecret('')
+    setEditLoginEndpoint(cred.login_endpoint ?? '')
   }
 
   return (
@@ -134,14 +159,54 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
                 <span className="ml-2 text-xs text-gray-400">{cred.credential_type}</span>
               </span>
               {canWrite(user?.role) && (
-                <button
-                  onClick={() => deleteMutation.mutate(cred.id)}
-                  className="text-xs text-red-600 hover:underline"
-                >
-                  Delete
-                </button>
+                <span className="flex items-center gap-3">
+                  <button
+                    onClick={() => (editingId === cred.id ? setEditingId(null) : startEdit(cred))}
+                    className="text-xs text-purple-700 hover:underline"
+                  >
+                    {editingId === cred.id ? 'Cancel' : 'Edit'}
+                  </button>
+                  <button
+                    onClick={() => deleteMutation.mutate(cred.id)}
+                    className="text-xs text-red-600 hover:underline"
+                  >
+                    Delete
+                  </button>
+                </span>
               )}
             </div>
+            {editingId === cred.id && (
+              <div className="mt-2 space-y-2 rounded border border-purple-200 bg-purple-50 p-3">
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    value={editLabel}
+                    onChange={(e) => setEditLabel(e.target.value)}
+                    placeholder="label"
+                    className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+                  />
+                  <input
+                    value={editSecret}
+                    onChange={(e) => setEditSecret(e.target.value)}
+                    placeholder="new secret (leave blank to keep current)"
+                    type="password"
+                    className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+                  />
+                  <input
+                    value={editLoginEndpoint}
+                    onChange={(e) => setEditLoginEndpoint(e.target.value)}
+                    placeholder="login endpoint"
+                    className="min-w-64 flex-1 rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+                  />
+                </div>
+                <button
+                  onClick={() => updateMutation.mutate(cred.id)}
+                  disabled={updateMutation.isPending}
+                  className="rounded bg-purple-700 px-4 py-2 text-xs font-medium text-white hover:bg-purple-800 disabled:opacity-50"
+                >
+                  Save changes
+                </button>
+              </div>
+            )}
             {canWrite(user?.role) && <MacroSection versionId={versionId} credentialId={cred.id} />}
           </li>
         ))}

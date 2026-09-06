@@ -25,6 +25,28 @@ class CredentialSetCreate(BaseModel):
     extra_cookies: dict[str, str] | None = None
 
 
+class CredentialSetUpdate(BaseModel):
+    """All fields optional — a PATCH only touches what's present (§5/§6:
+    an analyst rotating a password after a client rotation, or fixing a
+    login endpoint, without deleting and recreating the credential set).
+    username/secret can each be supplied independently — the route
+    decrypts the existing envelope first and only overrides the field(s)
+    actually present here before re-encrypting (the envelope itself
+    always stores both jointly, see app.vault.credential_vault).
+    """
+
+    label: str | None = None
+    credential_type: str | None = None
+    username: str | None = None
+    secret: str | None = None
+    login_endpoint: str | None = None
+    login_method: str | None = None
+    login_body_template: str | None = None
+    login_content_type: str | None = None
+    token_response_path: str | None = None
+    extra_cookies: dict[str, str] | None = None
+
+
 class CredentialSetOut(BaseModel):
     id: uuid.UUID
     version_id: uuid.UUID

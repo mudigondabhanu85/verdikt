@@ -28,6 +28,9 @@ async def create_vgs_config(
         encrypted_webhook_url=encrypt_secret(payload.webhook_url),
         masked_reference=mask_secret(payload.webhook_url),
         push_on_scan_completed=payload.push_on_scan_completed,
+        auth_type=payload.auth_type,
+        encrypted_auth_value=encrypt_secret(payload.auth_value) if payload.auth_value else None,
+        masked_auth_reference=mask_secret(payload.auth_value) if payload.auth_value else None,
     )
     session.add(config)
     # Audit the creation event, never the webhook URL itself (§1.5) — it's
@@ -90,7 +93,8 @@ async def test_vgs_config(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "VGS config not found")
 
     webhook_url = decrypt_secret(config.encrypted_webhook_url)
-    client = VGSClient(webhook_url)
+    auth_value = decrypt_secret(config.encrypted_auth_value) if config.encrypted_auth_value else None
+    client = VGSClient(webhook_url, auth_type=config.auth_type, auth_value=auth_value)
     try:
         await client.push_findings("test", [])
     except VGSPushError as exc:

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_project_or_404, get_version_or_404, write_audit_log
 from app.auth.rbac import require_permission
 from app.db.session import get_db_session
+from app.models.credential import CredentialSet
 from app.models.organization import User
 from app.models.project import AuthorizationRecord, ScopeEntry, Version
 from app.schemas.version import (
@@ -32,6 +33,41 @@ async def create_version(
     await get_project_or_404(session, project_id, user.org_id)
     version = Version(project_id=project_id, name=payload.name, created_by=user.id)
     session.add(version)
+    await session.flush()
+
+    # Credential carry-forward (§5/§6): a new Version's credential sets
+    # default to copies of the project's most recent prior Version, so a
+    # re-engagement doesn't start from zero credentials. Copies, not
+    # shared rows — editing the new version's copy (PATCH, credentials.py)
+    # must never mutate the old version's historical record.
+    prior_version_result = await session.execute(
+        select(Version)
+        .where(Version.project_id == project_id, Version.id != version.id)
+        .order_by(Version.created_at.desc())
+        .limit(1)
+    )
+    prior_version = prior_version_result.scalar_one_or_none()
+    if prior_version is not None:
+        prior_credentials_result = await session.execute(
+            select(CredentialSet).where(CredentialSet.version_id == prior_version.id)
+        )
+        for prior in prior_credentials_result.scalars().all():
+            session.add(
+                CredentialSet(
+                    version_id=version.id,
+                    label=prior.label,
+                    credential_type=prior.credential_type,
+                    encrypted_secret=prior.encrypted_secret,
+                    masked_reference=prior.masked_reference,
+                    login_endpoint=prior.login_endpoint,
+                    login_method=prior.login_method,
+                    login_body_template=prior.login_body_template,
+                    login_content_type=prior.login_content_type,
+                    token_response_path=prior.token_response_path,
+                    extra_cookies=prior.extra_cookies,
+                )
+            )
+
     await session.commit()
     await session.refresh(version, attribute_names=["authorization_records"])
     return version

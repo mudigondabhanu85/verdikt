@@ -55,7 +55,8 @@ async def push_findings_to_vgs(session: AsyncSession, scan_run: ScanRun) -> None
 
     for config in configs:
         webhook_url = decrypt_secret(config.encrypted_webhook_url)
-        client = VGSClient(webhook_url)
+        auth_value = decrypt_secret(config.encrypted_auth_value) if config.encrypted_auth_value else None
+        client = VGSClient(webhook_url, auth_type=config.auth_type, auth_value=auth_value)
         try:
             await client.push_findings(str(scan_run.id), findings_payload)
         except VGSPushError:

@@ -11,9 +11,9 @@ from app.db.session import get_db_session
 from app.models.credential import CredentialSet
 from app.models.login_macro import LoginMacro
 from app.models.organization import User
-from app.schemas.credential import CredentialSetCreate, CredentialSetOut
+from app.schemas.credential import CredentialSetCreate, CredentialSetOut, CredentialSetUpdate
 from app.schemas.login_macro import LoginMacroOut, RecordMacroRequest
-from app.vault.credential_vault import encrypt_credential, mask_reference
+from app.vault.credential_vault import decrypt_credential, encrypt_credential, mask_reference
 
 router = APIRouter(prefix="/versions/{version_id}/credentials", tags=["credentials"])
 
@@ -74,6 +74,42 @@ async def list_credential_sets(
         select(CredentialSet).where(CredentialSet.version_id == version_id)
     )
     return list(result.scalars().all())
+
+
+@router.patch("/{credential_id}", response_model=CredentialSetOut)
+async def update_credential_set(
+    version_id: uuid.UUID,
+    credential_id: uuid.UUID,
+    payload: CredentialSetUpdate,
+    user: User = Depends(require_permission("credential", "update")),
+    session: AsyncSession = Depends(get_db_session),
+) -> CredentialSet:
+    await get_version_or_404(session, version_id, user.org_id)
+    credential = await _get_credential_or_404(session, version_id, credential_id)
+
+    updates = payload.model_dump(exclude_unset=True)
+
+    if "username" in updates or "secret" in updates:
+        current_username, current_secret = decrypt_credential(credential.encrypted_secret)
+        new_username = updates.pop("username", current_username)
+        new_secret = updates.pop("secret", current_secret)
+        credential.encrypted_secret = encrypt_credential(new_username, new_secret)
+        credential.masked_reference = mask_reference(new_username, new_secret)
+
+    for field, value in updates.items():
+        setattr(credential, field, value)
+
+    await write_audit_log(
+        session,
+        user=user,
+        action="credential.update",
+        resource_type="version",
+        resource_id=version_id,
+        metadata={"credential_id": str(credential.id), "fields_updated": list(payload.model_dump(exclude_unset=True).keys())},
+    )
+    await session.commit()
+    await session.refresh(credential)
+    return credential
 
 
 @router.delete("/{credential_id}", status_code=204)

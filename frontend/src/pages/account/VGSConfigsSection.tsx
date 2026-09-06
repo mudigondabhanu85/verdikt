@@ -6,6 +6,8 @@ export function VGSConfigsSection() {
   const queryClient = useQueryClient()
   const [label, setLabel] = useState('')
   const [webhookUrl, setWebhookUrl] = useState('')
+  const [authType, setAuthType] = useState<'' | 'api_key' | 'bearer_token' | 'basic'>('')
+  const [authValue, setAuthValue] = useState('')
   const [testResult, setTestResult] = useState<Record<string, string>>({})
 
   const { data: configs, isLoading } = useQuery({
@@ -15,11 +17,19 @@ export function VGSConfigsSection() {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['vgs-configs'] })
 
   const createMutation = useMutation({
-    mutationFn: () => api.vgsConfigs.create({ label, webhook_url: webhookUrl }),
+    mutationFn: () =>
+      api.vgsConfigs.create({
+        label,
+        webhook_url: webhookUrl,
+        auth_type: authType || null,
+        auth_value: authType ? authValue : null,
+      }),
     onSuccess: () => {
       invalidate()
       setLabel('')
       setWebhookUrl('')
+      setAuthType('')
+      setAuthValue('')
     },
   })
 
@@ -64,6 +74,25 @@ export function VGSConfigsSection() {
           type="password"
           className="min-w-64 flex-1 rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
         />
+        <select
+          value={authType}
+          onChange={(e) => setAuthType(e.target.value as typeof authType)}
+          className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+        >
+          <option value="">No auth (default — real VGS has none)</option>
+          <option value="api_key">API Key (X-API-Key)</option>
+          <option value="bearer_token">Bearer Token</option>
+          <option value="basic">Basic (username:password)</option>
+        </select>
+        {authType && (
+          <input
+            value={authValue}
+            onChange={(e) => setAuthValue(e.target.value)}
+            placeholder={authType === 'basic' ? 'username:password' : 'secret value'}
+            type="password"
+            className="min-w-48 rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+          />
+        )}
         <button
           type="submit"
           disabled={createMutation.isPending}
