@@ -56,14 +56,15 @@ final class VerdiktContextMenuProvider implements ContextMenuItemsProvider {
     }
 
     private void sendToVerdikt(HttpRequestResponse exchange) {
-        String baseUrl = System.getenv("VERDIKT_API_BASE_URL");
-        String versionId = System.getenv("VERDIKT_VERSION_ID");
-        String token = System.getenv("VERDIKT_API_TOKEN");
+        String baseUrl = ConnectionSettings.baseUrl(api);
+        String versionId = ConnectionSettings.versionId(api);
+        String token = ConnectionSettings.apiToken(api);
 
         if (baseUrl == null || versionId == null) {
             api.logging().logToError(
-                "Cannot send to Verdikt: VERDIKT_API_BASE_URL and/or "
-                    + "VERDIKT_VERSION_ID are not set in Burp's JVM environment.");
+                "Cannot send to Verdikt: no base URL/Version configured. Open the "
+                    + "\"Verdikt\" tab and connect, or set VERDIKT_API_BASE_URL and "
+                    + "VERDIKT_VERSION_ID in Burp's JVM environment.");
             return;
         }
 
