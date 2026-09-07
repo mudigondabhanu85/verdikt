@@ -155,6 +155,7 @@ export interface ScanRunOut {
   started_at: string | null
   completed_at: string | null
   error: string | null
+  warning: string | null
   ai_provider_config_id: string | null
 }
 

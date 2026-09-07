@@ -71,6 +71,25 @@ async def _run_chain_analysis(
     await session.commit()
 
 
+_ZERO_ENDPOINTS_WARNING = (
+    "Recon discovered 0 endpoints — nothing was crawled, so this scan's results "
+    "are not meaningful. This usually means the Target's host doesn't exactly "
+    "match an in-scope entry (Scope enforces an exact host string match), or "
+    "there's no Target configured at all. Check the Scope and Targets tabs, "
+    "then rerun."
+)
+
+
+async def _endpoints_discovered_total(session, scan_run_id: uuid.UUID) -> int:
+    result = await session.execute(
+        select(AgentJob.stats).where(
+            AgentJob.scan_run_id == scan_run_id,
+            AgentJob.agent_type.in_(("recon", "authenticated_recon")),
+        )
+    )
+    return sum((stats or {}).get("endpoints_discovered", 0) for (stats,) in result.all())
+
+
 async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
     """Builds the Phase-2 agent graph (app.agents.graph) for one ScanRun
     and runs it to completion. Invoked by FastAPI BackgroundTasks. Opens
@@ -152,6 +171,8 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
             )
 
             scan_run.status = "completed"
+            if await _endpoints_discovered_total(session, scan_run.id) == 0:
+                scan_run.warning = _ZERO_ENDPOINTS_WARNING
         except asyncio.CancelledError:
             # A user-requested cancel (app.api.routes.scans' cancel
             # endpoint, via app.agents.task_registry) reaches this task

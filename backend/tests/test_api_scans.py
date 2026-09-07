@@ -296,6 +296,53 @@ async def test_scan_run_rejected_without_a_target(client):
     assert "target" in resp.json()["detail"].lower()
 
 
+async def test_scan_run_warns_when_scope_mismatch_leaves_nothing_crawled(client, fixture_site):
+    """Regression test for the real bug this session traced: a Target
+    configured correctly but a Scope entry whose host doesn't exactly
+    match it (Scope enforces an exact host string, see app.agents.scope)
+    makes every agent 'complete' having crawled nothing — status looks
+    identical to a real, thorough scan with a clean result. The new
+    warning field must flag this instead of leaving it silent."""
+    host, port = fixture_site
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+    await client.post(
+        f"/versions/{version_id}/targets",
+        json={"host": host, "port": port, "base_url": f"http://{host}:{port}/"},
+        headers=admin["headers"],
+    )
+    # Deliberately wrong host — the exact mismatch that caused the real bug.
+    await client.post(
+        f"/versions/{version_id}/scope-entries",
+        json={"host": "not-the-real-host", "port": port, "in_scope": True},
+        headers=admin["headers"],
+    )
+
+    created = await client.post(f"/versions/{version_id}/scan-runs", headers=admin["headers"])
+    assert created.status_code == 201, created.text
+    scan_run_id = created.json()["id"]
+
+    detail = await client.get(f"/scan-runs/{scan_run_id}", headers=admin["headers"])
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["status"] == "completed"
+    assert body["warning"] is not None
+    assert "0 endpoints" in body["warning"]
+
+
+async def test_scan_run_has_no_warning_when_endpoints_are_discovered(client, fixture_site):
+    host, port = fixture_site
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+    await _authorize_and_target(client, admin["headers"], version_id, host, port)
+
+    created = await client.post(f"/versions/{version_id}/scan-runs", headers=admin["headers"])
+    assert created.status_code == 201
+
+    detail = await client.get(f"/scan-runs/{created.json()['id']}", headers=admin["headers"])
+    assert detail.json()["warning"] is None
+
+
 async def test_scan_run_rejects_unknown_ai_provider_config(client, fixture_site):
     host, port = fixture_site
     admin = await register_org_admin(client)

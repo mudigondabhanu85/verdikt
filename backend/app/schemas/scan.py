@@ -23,6 +23,7 @@ class ScanRunOut(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     error: str | None
+    warning: str | None = None
     ai_provider_config_id: uuid.UUID | None = None
 
     model_config = {"from_attributes": True}

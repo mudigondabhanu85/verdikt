@@ -73,6 +73,11 @@ export function ScanRunsTab({ versionId }: { versionId: string }) {
                   <span className="ml-3 text-xs text-gray-400">{new Date(run.started_at).toLocaleString()}</span>
                 )}
                 {run.error && <span className="ml-3 text-xs text-red-600">{run.error}</span>}
+                {run.warning && (
+                  <span className="ml-3 text-xs text-amber-700" title={run.warning}>
+                    ⚠ found nothing — likely misconfigured
+                  </span>
+                )}
               </Link>
               {canWrite(user?.role) && (
                 <span className="flex items-center gap-3">

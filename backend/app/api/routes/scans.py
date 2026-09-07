@@ -198,6 +198,7 @@ async def _scan_run_detail(session: AsyncSession, scan_run: ScanRun) -> ScanRunD
         started_at=scan_run.started_at,
         completed_at=scan_run.completed_at,
         error=scan_run.error,
+        warning=scan_run.warning,
         ai_provider_config_id=scan_run.ai_provider_config_id,
         agent_jobs=[AgentJobOut.model_validate(j) for j in jobs],
         finding_counts_by_severity={sev: counts.get(sev, 0) for sev in ("Critical", "High", "Medium", "Low")},

@@ -22,6 +22,12 @@ class ScanRun(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
+    # Set when the run reached status="completed" having crawled
+    # effectively nothing (recon + authenticated_recon both discovered 0
+    # endpoints) — a Target/Scope-host mismatch, or an auth failure the
+    # crawler can't distinguish from "nothing to find". Distinct from
+    # `error`: this scan didn't fail, it's just very likely misconfigured.
+    warning: Mapped[str | None] = mapped_column(Text)
     # Running total of estimated LLM spend for this run (§10.5 budget guardrail).
     llm_cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal(0))
     # Generated lazily on first report request and cached here (§8) so
