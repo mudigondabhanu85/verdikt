@@ -15,7 +15,7 @@ from app.models.finding import Evidence, Finding
 from app.models.finding_ticket import FindingTicket
 from app.models.login_macro import LoginMacro
 from app.models.organization import User
-from app.models.project import AuthorizationRecord, Project, ScopeEntry, Version
+from app.models.project import Project, ScopeEntry, Version
 from app.models.retest_job import RetestJob
 from app.models.review_candidate import ReviewCandidate
 from app.models.scan import AgentJob, ScanRun
@@ -137,9 +137,6 @@ async def _hard_delete_project(session: AsyncSession, project: Project) -> None:
     await session.execute(delete(Target).where(Target.version_id.in_(version_ids)))
     await session.execute(delete(CredentialSet).where(CredentialSet.id.in_(credential_set_ids)))
     await session.execute(delete(ScopeEntry).where(ScopeEntry.version_id.in_(version_ids)))
-    await session.execute(
-        delete(AuthorizationRecord).where(AuthorizationRecord.version_id.in_(version_ids))
-    )
     await session.execute(delete(Version).where(Version.project_id == project.id))
     await session.delete(project)
 

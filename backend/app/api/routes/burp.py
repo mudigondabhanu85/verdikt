@@ -31,15 +31,7 @@ async def start_burp_scan(
     per-call, never persisted — avoids inventing a new stored-secret
     concept for one integration.
     """
-    version = await get_version_or_404(session, version_id, user.org_id)
-    await session.refresh(version, attribute_names=["authorization_records"])
-    if not version.is_authorized:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "This Version has no authorization record — the §1 authorization gate "
-            "requires at least one before any active testing (including a Burp "
-            "scan) can run against its targets.",
-        )
+    await get_version_or_404(session, version_id, user.org_id)
 
     scan_run = ScanRun(
         version_id=version_id,

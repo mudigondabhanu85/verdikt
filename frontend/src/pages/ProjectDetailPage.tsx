@@ -74,15 +74,6 @@ export function ProjectDetailPage() {
           <li key={version.id}>
             <Link to={`/versions/${version.id}`} className="flex items-center justify-between px-4 py-3 hover:bg-gray-50">
               <span className="font-medium text-gray-900">{version.name}</span>
-              {version.is_authorized ? (
-                <span className="rounded-full border border-green-300 bg-green-100 px-2 py-0.5 text-xs text-green-800">
-                  authorized
-                </span>
-              ) : (
-                <span className="rounded-full border border-red-300 bg-red-100 px-2 py-0.5 text-xs text-red-800">
-                  not authorized
-                </span>
-              )}
             </Link>
           </li>
         ))}

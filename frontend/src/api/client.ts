@@ -5,7 +5,6 @@ import type {
   ApiKeyOut,
   AssetMetadataOut,
   AttackChainOut,
-  AuthorizationRecordOut,
   BurpImportResult,
   BurpScanCreated,
   BusinessRuleOut,
@@ -240,22 +239,6 @@ export const api = {
       }),
     deleteScopeEntry: (versionId: string, scopeEntryId: string) =>
       request<void>(`/versions/${versionId}/scope-entries/${scopeEntryId}`, { method: 'DELETE' }),
-
-    listAuthorizationRecords: (versionId: string) =>
-      request<AuthorizationRecordOut[]>(`/versions/${versionId}/authorization`),
-    addAuthorizationRecord: (
-      versionId: string,
-      body: { approver_name: string; attestation_text?: string; letter?: File },
-    ) => {
-      const formData = new FormData()
-      formData.set('approver_name', body.approver_name)
-      if (body.attestation_text) formData.set('attestation_text', body.attestation_text)
-      if (body.letter) formData.set('letter', body.letter)
-      return request<AuthorizationRecordOut>(`/versions/${versionId}/authorization`, {
-        method: 'POST',
-        formData,
-      })
-    },
   },
 
   targets: {

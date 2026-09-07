@@ -47,7 +47,6 @@ export interface VersionOut {
   project_id: string
   name: string
   created_at: string
-  is_authorized: boolean
 }
 
 export interface ScopeEntryOut {
@@ -57,16 +56,6 @@ export interface ScopeEntryOut {
   port: number | null
   path_pattern: string | null
   in_scope: boolean
-}
-
-export interface AuthorizationRecordOut {
-  id: string
-  version_id: string
-  approver_name: string
-  attestation_text: string | null
-  letter_object_key: string | null
-  attested_by: string
-  attested_at: string
 }
 
 export interface TargetOut {

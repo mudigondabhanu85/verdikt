@@ -81,14 +81,6 @@ class TeamsCommandDispatcher:
         if version is None:
             return f'Project "{project_name}" has no versions yet — finish setup in the Verdikt web app first.'
 
-        await self._session.refresh(version, attribute_names=["authorization_records"])
-        if not version.is_authorized:
-            return (
-                f'Project "{project_name}" has no recorded authorization for its latest '
-                "version — the §1 authorization gate requires one before any scan can run. "
-                "Complete this in the Verdikt web app."
-            )
-
         scan_run = ScanRun(
             version_id=version.id,
             status="pending",
@@ -134,6 +126,6 @@ class TeamsCommandDispatcher:
         settings = get_settings()
         deep_link = f"{settings.frontend_origin}/projects/{project.id}"
         return (
-            f'Created project shell for {url}. Finish setup (scope, authorization, '
+            f'Created project shell for {url}. Finish setup (scope, target, '
             f"credentials) in the Verdikt web app: {deep_link}"
         )

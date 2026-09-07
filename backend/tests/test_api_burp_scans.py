@@ -37,27 +37,6 @@ async def _authorize_version(client, headers, version_id):
         json={"host": "example.test", "port": 443, "in_scope": True},
         headers=headers,
     )
-    await client.post(
-        f"/versions/{version_id}/authorization",
-        data={"approver_name": "Self", "attestation_text": "authorized for burp test"},
-        headers=headers,
-    )
-
-
-async def test_burp_scan_rejected_without_authorization(client, monkeypatch):
-    monkeypatch.setattr(
-        "app.api.routes.burp.BurpRestClient",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not construct a client")),
-    )
-    admin = await register_org_admin(client)
-    _, version_id = await create_project_and_version(client, admin["headers"])
-
-    resp = await client.post(
-        f"/versions/{version_id}/burp/scans",
-        json={"burp_base_url": "https://burp.local:1337", "urls": ["https://example.test/"]},
-        headers=admin["headers"],
-    )
-    assert resp.status_code == 403
 
 
 async def test_burp_scan_trigger_and_import_creates_findings(client, monkeypatch):

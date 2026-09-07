@@ -5,7 +5,7 @@ import { api, ApiError } from '../../api/client'
 import type { BurpImportResult, BurpScanCreated } from '../../api/types'
 import { useAuth, canWrite } from '../../auth/AuthContext'
 
-function StartScanForm({ versionId, isAuthorized }: { versionId: string; isAuthorized: boolean }) {
+function StartScanForm({ versionId }: { versionId: string }) {
   const [baseUrl, setBaseUrl] = useState('http://localhost:1337')
   const [apiKey, setApiKey] = useState('')
   const [urlsText, setUrlsText] = useState('')
@@ -41,7 +41,7 @@ function StartScanForm({ versionId, isAuthorized }: { versionId: string; isAutho
       <h3 className="text-sm font-medium text-gray-800">Start a Burp scan</h3>
       <p className="text-xs text-gray-500">
         Triggers a scan on Burp Suite Professional's local Scanner REST API — Burp Community Edition doesn't expose
-        this. {!isAuthorized && 'This version has no authorization record yet, so this will be rejected — add one under the Authorization tab first.'}
+        this.
       </p>
       <div className="flex flex-wrap gap-2">
         <input
@@ -77,7 +77,7 @@ function StartScanForm({ versionId, isAuthorized }: { versionId: string; isAutho
       )}
       <button
         type="submit"
-        disabled={!isAuthorized || startMutation.isPending}
+        disabled={startMutation.isPending}
         className="rounded bg-purple-700 px-4 py-2 text-sm font-medium text-white hover:bg-purple-800 disabled:opacity-50"
       >
         {startMutation.isPending ? 'Starting…' : 'Start scan'}
@@ -171,7 +171,7 @@ function ImportResultsForm({ versionId }: { versionId: string }) {
   )
 }
 
-export function BurpTab({ versionId, isAuthorized }: { versionId: string; isAuthorized: boolean }) {
+export function BurpTab({ versionId }: { versionId: string }) {
   const { user } = useAuth()
 
   if (!canWrite(user?.role)) {
@@ -180,7 +180,7 @@ export function BurpTab({ versionId, isAuthorized }: { versionId: string; isAuth
 
   return (
     <div>
-      <StartScanForm versionId={versionId} isAuthorized={isAuthorized} />
+      <StartScanForm versionId={versionId} />
       <ImportResultsForm versionId={versionId} />
     </div>
   )

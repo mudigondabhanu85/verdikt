@@ -91,11 +91,6 @@ async def _authorize_and_target(client, headers, version_id, host, port):
         headers=headers,
     )
     await client.post(
-        f"/versions/{version_id}/authorization",
-        data={"approver_name": "Self", "attestation_text": "local fixture site, self-authorized"},
-        headers=headers,
-    )
-    await client.post(
         f"/versions/{version_id}/targets",
         json={"host": host, "port": port, "base_url": f"http://{host}:{port}/"},
         headers=headers,
@@ -261,10 +256,11 @@ async def test_retest_rejects_prior_scan_run_from_another_version(client, mutabl
     assert retest.status_code == 404
 
 
-async def test_scan_run_no_longer_requires_authorization(client, fixture_site):
-    """The §1 authorization gate was removed from scan creation per user
-    request — a Version with a Target but no authorization record must
-    be allowed to scan (only the target guardrail below still applies)."""
+async def test_scan_run_succeeds_with_just_a_target(client, fixture_site):
+    """A Version with a Target (which auto-derives its matching Scope
+    entry — see app.api.routes.targets) needs nothing else configured
+    before a scan can run; only the missing-target guardrail below
+    still applies."""
     host, port = fixture_site
     admin = await register_org_admin(client)
     _, version_id = await create_project_and_version(client, admin["headers"])
@@ -279,17 +275,12 @@ async def test_scan_run_no_longer_requires_authorization(client, fixture_site):
 
 
 async def test_scan_run_rejected_without_a_target(client):
-    """Regression test: a Version with authorization but no Target used
-    to let a scan through — every agent 'completed' having crawled
-    nothing, looking like a successful-but-empty scan rather than a
-    misconfigured one. Now caught up front with a clear 400."""
+    """Regression test: a Version with no Target used to let a scan
+    through — every agent 'completed' having crawled nothing, looking
+    like a successful-but-empty scan rather than a misconfigured one.
+    Now caught up front with a clear 400."""
     admin = await register_org_admin(client)
     _, version_id = await create_project_and_version(client, admin["headers"])
-    await client.post(
-        f"/versions/{version_id}/authorization",
-        data={"approver_name": "Self", "attestation_text": "no target on purpose"},
-        headers=admin["headers"],
-    )
 
     resp = await client.post(f"/versions/{version_id}/scan-runs", headers=admin["headers"])
     assert resp.status_code == 400

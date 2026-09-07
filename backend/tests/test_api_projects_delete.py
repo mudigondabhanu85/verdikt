@@ -52,11 +52,6 @@ async def test_hard_delete_removes_project_and_all_dependents_without_fk_errors(
         json={"host": "example.test", "in_scope": True},
         headers=admin["headers"],
     )
-    await client.post(
-        f"/versions/{version_id}/authorization",
-        data={"approver_name": "Tester", "attestation_text": "authorized"},
-        headers=admin["headers"],
-    )
     cred = await client.post(
         f"/versions/{version_id}/credentials",
         json={"label": "Admin", "username": "alice", "secret": "hunter2"},

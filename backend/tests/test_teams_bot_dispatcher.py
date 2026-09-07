@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.integrations.teams_bot.commands import NewProjectCommand, ScanCommand, StatusCommand
 from app.integrations.teams_bot.dispatcher import TeamsCommandDispatcher
 from app.models.organization import Organization, User
-from app.models.project import AuthorizationRecord, Project, ScopeEntry, Version
+from app.models.project import Project, ScopeEntry, Version
 from app.models.scan import ScanRun
 from app.auth.security import hash_password
 from tests.conftest import session_scope
@@ -42,7 +42,7 @@ async def _make_org_and_user(db_adapter) -> User:
         return user
 
 
-async def test_scan_command_creates_scan_run_for_existing_authorized_project(db_adapter, monkeypatch):
+async def test_scan_command_creates_scan_run_for_existing_project(db_adapter, monkeypatch):
     monkeypatch.setattr("app.db.session.get_adapter", lambda: db_adapter)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FixtureHandler)
@@ -61,15 +61,6 @@ async def test_scan_command_creates_scan_run_for_existing_authorized_project(db_
             session.add(version)
             await session.flush()
             session.add(ScopeEntry(version_id=version.id, host=host, port=port, in_scope=True))
-            session.add(
-                AuthorizationRecord(
-                    version_id=version.id,
-                    approver_name="Test Approver",
-                    attestation_text="authorized",
-                    attested_by=user.id,
-                    attested_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
-                )
-            )
             await session.commit()
 
         tasks_before = asyncio.all_tasks()

@@ -5,7 +5,6 @@ import { Tabs } from '../components/Tabs'
 import { ScopeTab } from './version/ScopeTab'
 import { TargetsTab } from './version/TargetsTab'
 import { CredentialsTab } from './version/CredentialsTab'
-import { AuthorizationTab } from './version/AuthorizationTab'
 import { BusinessRulesTab } from './version/BusinessRulesTab'
 import { ScanRunsTab } from './version/ScanRunsTab'
 import { TrafficTab } from './version/TrafficTab'
@@ -45,10 +44,9 @@ export function VersionDetailPage() {
           { key: 'scope', label: 'Scope', content: <ScopeTab versionId={versionId} /> },
           { key: 'targets', label: 'Targets', content: <TargetsTab versionId={versionId} /> },
           { key: 'credentials', label: 'Credentials', content: <CredentialsTab versionId={versionId} /> },
-          { key: 'authorization', label: 'Authorization', content: <AuthorizationTab versionId={versionId} /> },
           { key: 'business-rules', label: 'Business Rules', content: <BusinessRulesTab versionId={versionId} /> },
           { key: 'traffic', label: 'Traffic', content: <TrafficTab versionId={versionId} /> },
-          { key: 'burp', label: 'Burp', content: <BurpTab versionId={versionId} isAuthorized={!!version?.is_authorized} /> },
+          { key: 'burp', label: 'Burp', content: <BurpTab versionId={versionId} /> },
         ]}
       />
     </div>
