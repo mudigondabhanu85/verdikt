@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { calculateCvss, vgsApi, type Severity, type VgsVulnerabilityLibraryEntryOut } from './api'
+import { calculateCvss, vgsApi, type AvailableFindingOut, type Severity, type VgsVulnerabilityLibraryEntryOut } from './api'
 
 const CVSS_METRICS: Record<string, { label: string; options: Record<string, string> }> = {
   AV: { label: 'Attack Vector', options: { N: 'Network', A: 'Adjacent', L: 'Local', P: 'Physical' } },
@@ -78,10 +78,64 @@ function LibraryEntryRow({
   )
 }
 
+function FindingRow({ item, versionId }: { item: AvailableFindingOut; versionId: string }) {
+  const queryClient = useQueryClient()
+  const [expanded, setExpanded] = useState(false)
+  const { finding } = item
+
+  const addMutation = useMutation({
+    mutationFn: () => vgsApi.vulnerabilities.addFromFinding(versionId, finding.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['vgs-report-vulnerabilities', versionId] })
+      queryClient.invalidateQueries({ queryKey: ['vgs-available-findings', versionId] })
+    },
+  })
+
+  return (
+    <li className="rounded border border-gray-200 bg-white p-3 shadow-sm">
+      <div className="flex items-center justify-between">
+        <span className="font-medium">{finding.title}</span>
+        <span className="flex items-center gap-2">
+          <button onClick={() => setExpanded(!expanded)} className="text-xs text-purple-700 hover:underline">
+            {expanded ? 'Hide details' : 'Details'}
+          </button>
+          {item.already_added ? (
+            <span className="rounded bg-gray-100 px-2 py-1 text-xs font-medium text-gray-500">Added</span>
+          ) : (
+            <button
+              onClick={() => addMutation.mutate()}
+              disabled={addMutation.isPending}
+              className="rounded bg-purple-700 px-2 py-1 text-xs font-medium text-white hover:bg-purple-800 disabled:opacity-50"
+            >
+              Add
+            </button>
+          )}
+        </span>
+      </div>
+      <p className="mt-1 text-xs text-gray-600">
+        {finding.severity} · CVSS {finding.cvss_score} · {finding.owasp_2025_category}
+      </p>
+      {expanded && (
+        <div className="mt-2 space-y-1 text-xs text-gray-600">
+          <p>{finding.plain_language_summary}</p>
+          {finding.affected_endpoints.length > 0 && (
+            <p className="text-gray-500">Endpoints: {finding.affected_endpoints.join(', ')}</p>
+          )}
+        </div>
+      )}
+    </li>
+  )
+}
+
 export function ReportVulnerabilitiesTab({ versionId }: { versionId: string }) {
   const queryClient = useQueryClient()
   const [searchTerm, setSearchTerm] = useState('')
+  const [source, setSource] = useState<'findings' | 'library'>('findings')
 
+  const { data: availableFindings } = useQuery({
+    queryKey: ['vgs-available-findings', versionId],
+    queryFn: () => vgsApi.availableFindings.list(versionId),
+  })
   const { data: library } = useQuery({
     queryKey: ['vgs-vulnerability-library'],
     queryFn: vgsApi.library.list,
@@ -114,24 +168,58 @@ export function ReportVulnerabilitiesTab({ versionId }: { versionId: string }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['vgs-report-vulnerabilities', versionId] }),
   })
 
-  const filtered = (library ?? []).filter((v) => v.title.toLowerCase().includes(searchTerm.toLowerCase()))
+  const filteredLibrary = (library ?? []).filter((v) => v.title.toLowerCase().includes(searchTerm.toLowerCase()))
+  const filteredFindings = (availableFindings ?? []).filter((v) =>
+    v.finding.title.toLowerCase().includes(searchTerm.toLowerCase()),
+  )
 
   return (
     <div className="flex gap-6">
       <div className="w-1/2 space-y-3">
-        <h3 className="font-semibold text-gray-800">Vulnerability Library</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-gray-800">
+            {source === 'findings' ? 'Scan Findings' : 'Vulnerability Library'}
+          </h3>
+          <div className="flex rounded border border-gray-300 text-xs">
+            <button
+              onClick={() => setSource('findings')}
+              className={`px-2 py-1 ${source === 'findings' ? 'bg-purple-700 text-white' : 'text-gray-600'}`}
+            >
+              From scans ({availableFindings?.length ?? 0})
+            </button>
+            <button
+              onClick={() => setSource('library')}
+              className={`px-2 py-1 ${source === 'library' ? 'bg-purple-700 text-white' : 'text-gray-600'}`}
+            >
+              Library
+            </button>
+          </div>
+        </div>
         <input
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           placeholder="Search…"
           className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
         />
-        <ul className="max-h-[500px] space-y-2 overflow-y-auto">
-          {filtered.map((entry) => (
-            <LibraryEntryRow key={entry.id} entry={entry} versionId={versionId} />
-          ))}
-          {filtered.length === 0 && <p className="text-sm text-gray-400">No library entries yet.</p>}
-        </ul>
+        {source === 'findings' ? (
+          <ul className="max-h-[500px] space-y-2 overflow-y-auto">
+            {filteredFindings.map((item) => (
+              <FindingRow key={item.finding.id} item={item} versionId={versionId} />
+            ))}
+            {filteredFindings.length === 0 && (
+              <p className="text-sm text-gray-400">
+                No scan-confirmed findings yet — run a scan on this version first.
+              </p>
+            )}
+          </ul>
+        ) : (
+          <ul className="max-h-[500px] space-y-2 overflow-y-auto">
+            {filteredLibrary.map((entry) => (
+              <LibraryEntryRow key={entry.id} entry={entry} versionId={versionId} />
+            ))}
+            {filteredLibrary.length === 0 && <p className="text-sm text-gray-400">No library entries yet.</p>}
+          </ul>
+        )}
 
         <details className="rounded border border-gray-200 bg-white p-3">
           <summary className="cursor-pointer text-sm font-medium text-gray-700">+ Add custom vulnerability</summary>

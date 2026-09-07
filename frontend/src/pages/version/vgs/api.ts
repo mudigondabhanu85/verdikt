@@ -45,6 +45,7 @@ export interface VgsReportVulnerabilityOut {
   id: string
   report_draft_id: string
   library_entry_id: string | null
+  source_finding_id: string | null
   order_index: number
   title: string
   severity: Severity
@@ -53,6 +54,32 @@ export interface VgsReportVulnerabilityOut {
   description: string
   recommendation: string
   reference: string
+}
+
+export interface FindingOut {
+  id: string
+  check_id: string
+  title: string
+  severity: Severity
+  owasp_2025_category: string
+  cwe_id: string
+  portswigger_reference_url: string | null
+  cvss_vector: string
+  cvss_score: number
+  affected_endpoints: string[]
+  plain_language_summary: string
+  technical_description: string
+  steps_to_reproduce: string[]
+  remediation: string
+  references: string[]
+  confirmation_status: string
+  retest_status: string
+}
+
+export interface AvailableFindingOut {
+  finding: FindingOut
+  scan_run_id: string
+  already_added: boolean
 }
 
 export interface VgsEvidenceStepOut {
@@ -121,6 +148,11 @@ export const vgsApi = {
     ) => request<VgsReportDraftOut>(`/versions/${versionId}/vgs-report-draft`, { method: 'PATCH', body }),
   },
 
+  availableFindings: {
+    list: (versionId: string) =>
+      request<AvailableFindingOut[]>(`/versions/${versionId}/vgs-report-draft/available-findings`),
+  },
+
   vulnerabilities: {
     list: (versionId: string) =>
       request<VgsReportVulnerabilityOut[]>(`/versions/${versionId}/vgs-report-draft/vulnerabilities`),
@@ -129,6 +161,11 @@ export const vgsApi = {
         method: 'POST',
         body: { library_entry_id: libraryEntryId },
       }),
+    addFromFinding: (versionId: string, findingId: string) =>
+      request<VgsReportVulnerabilityOut>(
+        `/versions/${versionId}/vgs-report-draft/vulnerabilities/from-finding/${findingId}`,
+        { method: 'POST' },
+      ),
     addAdHoc: (
       versionId: string,
       body: { title: string; severity: Severity; cvss_score?: string; cvss_vector?: string; description?: string; recommendation?: string; reference?: string },

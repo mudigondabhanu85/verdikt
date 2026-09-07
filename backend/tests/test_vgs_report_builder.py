@@ -21,8 +21,10 @@ from PIL import Image
 from app.api.routes.vgs_vulnerabilities import draft_router, library_router
 from app.auth.security import create_access_token, hash_password
 from app.db.session import get_db_session
+from app.models.finding import Evidence, Finding
 from app.models.organization import Organization, User
 from app.models.project import Project, Version
+from app.models.scan import AgentJob, ScanRun
 from tests.conftest import db_adapter  # noqa: F401 — reused fixture
 from tests.conftest import session_scope
 
@@ -85,6 +87,51 @@ def _real_png_bytes() -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", (20, 10), color=(200, 0, 0)).save(buf, format="PNG")
     return buf.getvalue()
+
+
+async def _make_finding(
+    db_adapter, version_id, *, retest_status="open", with_screenshot=False
+) -> Finding:
+    async with session_scope(db_adapter) as session:
+        scan_run = ScanRun(version_id=version_id, status="completed", requested_by=uuid.uuid4())
+        session.add(scan_run)
+        await session.flush()
+
+        job = AgentJob(scan_run_id=scan_run.id, agent_type="header_config", status="completed")
+        session.add(job)
+        await session.flush()
+
+        finding = Finding(
+            scan_run_id=scan_run.id,
+            agent_job_id=job.id,
+            check_id="missing-hsts",
+            title="Missing HSTS",
+            severity="Low",
+            owasp_2025_category="A02 Security Misconfiguration",
+            cwe_id="CWE-693",
+            cvss_vector="AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:N",
+            cvss_score=3.0,
+            affected_endpoints=["http://site.test/"],
+            plain_language_summary="summary",
+            technical_description="technical",
+            remediation="remediate",
+            retest_status=retest_status,
+        )
+        session.add(finding)
+        await session.flush()
+
+        if with_screenshot:
+            session.add(
+                Evidence(
+                    finding_id=finding.id,
+                    request_raw="GET / HTTP/1.1",
+                    response_raw="HTTP/1.1 200 OK",
+                    screenshot_refs=["vgs-evidence/fixture-key.png"],
+                )
+            )
+        await session.commit()
+        await session.refresh(finding)
+        return finding
 
 
 async def test_library_crud_and_org_scoping(vgs_client):
@@ -242,3 +289,63 @@ async def test_add_from_library_and_ad_hoc_vulnerabilities_and_generate_docx(vgs
     assert any("Reflected XSS" in h for h in heading_texts)
     assert any("Custom Finding" in h for h in heading_texts)
     assert len(document.inline_shapes) >= 1  # pie chart + evidence screenshot present
+
+
+async def test_available_findings_lists_real_scan_findings_excluding_fixed(vgs_client):
+    client, db_adapter = vgs_client
+    _org, _user, version, headers = await _create_org_admin(db_adapter)
+
+    open_finding = await _make_finding(db_adapter, version.id, with_screenshot=True)
+    await _make_finding(db_adapter, version.id, retest_status="fixed")
+    await _make_finding(db_adapter, version.id, retest_status="false_positive_after_review")
+
+    listed = await client.get(f"/versions/{version.id}/vgs-report-draft/available-findings", headers=headers)
+    assert listed.status_code == 200, listed.text
+    payload = listed.json()
+    assert len(payload) == 1
+    assert payload[0]["finding"]["id"] == str(open_finding.id)
+    assert payload[0]["already_added"] is False
+
+
+async def test_add_from_finding_copies_fields_and_evidence_and_flags_already_added(vgs_client):
+    client, db_adapter = vgs_client
+    _org, _user, version, headers = await _create_org_admin(db_adapter)
+
+    finding = await _make_finding(db_adapter, version.id, with_screenshot=True)
+
+    added = await client.post(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/from-finding/{finding.id}",
+        headers=headers,
+    )
+    assert added.status_code == 201, added.text
+    body = added.json()
+    assert body["title"] == "Missing HSTS"
+    assert body["severity"] == "Low"
+    assert body["source_finding_id"] == str(finding.id)
+    assert body["library_entry_id"] is None
+
+    steps = await client.get(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/{body['id']}/evidence-steps",
+        headers=headers,
+    )
+    assert steps.status_code == 200
+    assert len(steps.json()) == 1
+    assert steps.json()[0]["screenshot_object_keys"] == ["vgs-evidence/fixture-key.png"]
+
+    # The available-findings list now flags it as already added.
+    listed = await client.get(f"/versions/{version.id}/vgs-report-draft/available-findings", headers=headers)
+    assert listed.json()[0]["already_added"] is True
+
+
+async def test_add_from_finding_rejects_a_finding_from_another_version(vgs_client):
+    client, db_adapter = vgs_client
+    _org, _user, version, headers = await _create_org_admin(db_adapter)
+    _org2, _user2, other_version, _headers2 = await _create_org_admin(db_adapter, org_name="OrgB")
+
+    finding = await _make_finding(db_adapter, other_version.id)
+
+    added = await client.post(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/from-finding/{finding.id}",
+        headers=headers,
+    )
+    assert added.status_code == 404

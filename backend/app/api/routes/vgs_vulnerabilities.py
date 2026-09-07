@@ -3,12 +3,15 @@ import uuid
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_version_or_404, write_audit_log
 from app.auth.rbac import require_permission
 from app.db.session import get_db_session
+from app.models.finding import Evidence, Finding
 from app.models.org_branding import OrgBranding
 from app.models.organization import User
+from app.models.scan import ScanRun
 from app.models.vgs_vulnerability import (
     VgsEvidenceStep,
     VgsReportDraft,
@@ -17,7 +20,9 @@ from app.models.vgs_vulnerability import (
 )
 from app.reporting.html_report import BrandingInfo
 from app.reporting.vgs_docx_report import render_vgs_docx_report
+from app.schemas.finding import FindingOut
 from app.schemas.vgs_vulnerability import (
+    AvailableFindingOut,
     VgsEvidenceStepOut,
     VgsEvidenceStepUpdate,
     VgsReportDraftOut,
@@ -247,6 +252,123 @@ async def list_report_vulnerabilities(
         .order_by(VgsReportVulnerability.order_index)
     )
     return list(result.scalars().all())
+
+
+@draft_router.get("/available-findings", response_model=list[AvailableFindingOut])
+async def list_available_findings(
+    version_id: uuid.UUID,
+    user: User = Depends(require_permission("vgs_vulnerability", "read")),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[AvailableFindingOut]:
+    """Every real, scan-confirmed Finding for this Version — across all
+    of its scan runs, not just the latest — so the Vulnerability Picker
+    can offer what the scanner actually found alongside the curated
+    library. Excludes findings already retested as fixed or dismissed as
+    a false positive; a finding already added to this draft is flagged
+    via already_added rather than hidden, so re-adding is a deliberate choice."""
+    await get_version_or_404(session, version_id, user.org_id)
+    draft = await _get_or_create_draft(session, version_id)
+
+    scan_run_ids_result = await session.execute(
+        select(ScanRun.id).where(ScanRun.version_id == version_id)
+    )
+    scan_run_ids = [row[0] for row in scan_run_ids_result.all()]
+    if not scan_run_ids:
+        return []
+
+    findings_result = await session.execute(
+        select(Finding)
+        .options(selectinload(Finding.evidence))
+        .where(
+            Finding.scan_run_id.in_(scan_run_ids),
+            Finding.retest_status.in_(("open", "risk_accepted")),
+        )
+        .order_by(Finding.cvss_score.desc())
+    )
+    findings = list(findings_result.scalars().all())
+
+    added_result = await session.execute(
+        select(VgsReportVulnerability.source_finding_id).where(
+            VgsReportVulnerability.report_draft_id == draft.id,
+            VgsReportVulnerability.source_finding_id.isnot(None),
+        )
+    )
+    already_added_ids = {row[0] for row in added_result.all()}
+
+    return [
+        AvailableFindingOut(
+            finding=FindingOut.model_validate(finding),
+            scan_run_id=finding.scan_run_id,
+            already_added=finding.id in already_added_ids,
+        )
+        for finding in findings
+    ]
+
+
+@draft_router.post(
+    "/vulnerabilities/from-finding/{finding_id}",
+    response_model=VgsReportVulnerabilityOut,
+    status_code=201,
+)
+async def add_report_vulnerability_from_finding(
+    version_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    user: User = Depends(require_permission("vgs_vulnerability", "create")),
+    session: AsyncSession = Depends(get_db_session),
+) -> VgsReportVulnerability:
+    await get_version_or_404(session, version_id, user.org_id)
+    draft = await _get_or_create_draft(session, version_id)
+
+    finding = await session.get(Finding, finding_id)
+    if finding is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Finding not found")
+    scan_run = await session.get(ScanRun, finding.scan_run_id)
+    if scan_run is None or scan_run.version_id != version_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Finding not found")
+
+    count_result = await session.execute(
+        select(VgsReportVulnerability).where(VgsReportVulnerability.report_draft_id == draft.id)
+    )
+    order_index = len(list(count_result.scalars().all()))
+
+    vuln = VgsReportVulnerability(
+        report_draft_id=draft.id,
+        source_finding_id=finding.id,
+        order_index=order_index,
+        title=finding.title,
+        severity=finding.severity,
+        cvss_score=str(finding.cvss_score),
+        cvss_vector=finding.cvss_vector,
+        description=finding.plain_language_summary or finding.technical_description,
+        recommendation=finding.remediation,
+        reference=finding.portswigger_reference_url or "\n".join(finding.references),
+    )
+    session.add(vuln)
+    await session.flush()
+
+    evidence_result = await session.execute(select(Evidence).where(Evidence.finding_id == finding.id))
+    evidence = evidence_result.scalar_one_or_none()
+    if evidence is not None and evidence.screenshot_refs:
+        session.add(
+            VgsEvidenceStep(
+                report_vulnerability_id=vuln.id,
+                step_order=0,
+                comment=evidence.additional_notes or "Captured automatically from the scan finding.",
+                screenshot_object_keys=list(evidence.screenshot_refs),
+            )
+        )
+
+    await write_audit_log(
+        session,
+        user=user,
+        action="vgs_report_vulnerability.add_from_finding",
+        resource_type="version",
+        resource_id=version_id,
+        metadata={"title": vuln.title, "finding_id": str(finding.id)},
+    )
+    await session.commit()
+    await session.refresh(vuln)
+    return vuln
 
 
 async def _get_report_vulnerability_or_404(
