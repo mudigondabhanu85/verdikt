@@ -76,3 +76,36 @@ async def test_hard_delete_removes_project_and_all_dependents_without_fk_errors(
         f"/projects/{project_id}/versions", headers=admin["headers"]
     )
     assert versions_after.status_code == 404
+
+
+async def test_hard_delete_removes_project_with_a_vgs_report_draft(client):
+    """Regression test: vgs_report_drafts.version_id had no ON DELETE
+    CASCADE and _hard_delete_project never cleaned it up, so deleting a
+    project that had a VGS report draft on one of its versions used to
+    fail with a ForeignKeyViolation on `DELETE FROM versions`."""
+    admin = await register_org_admin(client)
+    project_id, version_id = await create_project_and_version(client, admin["headers"])
+
+    draft = await client.get(f"/versions/{version_id}/vgs-report-draft", headers=admin["headers"])
+    assert draft.status_code == 200
+
+    vuln = await client.post(
+        f"/versions/{version_id}/vgs-report-draft/vulnerabilities",
+        json={"title": "Ad-hoc XSS", "severity": "High", "description": "desc"},
+        headers=admin["headers"],
+    )
+    assert vuln.status_code == 201
+    vuln_id = vuln.json()["id"]
+
+    step = await client.post(
+        f"/versions/{version_id}/vgs-report-draft/vulnerabilities/{vuln_id}/evidence-steps",
+        data={"comment": "step 1"},
+        headers=admin["headers"],
+    )
+    assert step.status_code == 201
+
+    deleted = await client.delete(f"/projects/{project_id}", headers=admin["headers"])
+    assert deleted.status_code == 204
+
+    get_after = await client.get(f"/projects/{project_id}", headers=admin["headers"])
+    assert get_after.status_code == 404

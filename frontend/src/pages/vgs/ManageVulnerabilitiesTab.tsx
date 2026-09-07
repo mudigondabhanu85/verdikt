@@ -152,6 +152,7 @@ export function ManageVulnerabilitiesTab() {
   const queryClient = useQueryClient()
   const [showAdd, setShowAdd] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
+  const [portswigerResult, setPortswigerResult] = useState<string | null>(null)
 
   const { data: library } = useQuery({
     queryKey: ['vgs-vulnerability-library'],
@@ -166,24 +167,44 @@ export function ManageVulnerabilitiesTab() {
     },
   })
 
+  const loadFromPortswigerMutation = useMutation({
+    mutationFn: vgsApi.library.loadFromPortswigger,
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['vgs-vulnerability-library'] })
+      setPortswigerResult(`Loaded from PortSwigger: ${result.inserted} added, ${result.updated} updated, ${result.skipped} unchanged.`)
+    },
+    onError: (err) => setPortswigerResult(`Failed to load from PortSwigger: ${(err as Error).message}`),
+  })
+
   const filtered = (library ?? []).filter((v) => v.title.toLowerCase().includes(searchTerm.toLowerCase()))
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-gray-800">Vulnerability Library</h2>
-        <button
-          onClick={() => setShowAdd(!showAdd)}
-          className="rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-800"
-        >
-          {showAdd ? 'Close' : '+ Add vulnerability'}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => loadFromPortswigerMutation.mutate()}
+            disabled={loadFromPortswigerMutation.isPending}
+            className="rounded border border-purple-300 px-3 py-1.5 text-sm font-medium text-purple-700 hover:bg-purple-50 disabled:opacity-50"
+          >
+            {loadFromPortswigerMutation.isPending ? 'Loading…' : 'Load from PortSwigger'}
+          </button>
+          <button
+            onClick={() => setShowAdd(!showAdd)}
+            className="rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-800"
+          >
+            {showAdd ? 'Close' : '+ Add vulnerability'}
+          </button>
+        </div>
       </div>
       <p className="text-sm text-gray-500">
         Reusable vulnerability write-ups (title, severity, CVSS, description, remediation). Anyone building a
         report picks from this library in the Vulnerability Picker tab instead of retyping the same write-up
-        every time.
+        every time. "Load from PortSwigger" pulls in write-ups from PortSwigger's Web Security Academy topic
+        pages, upserted by title.
       </p>
+      {portswigerResult && <p className="text-sm text-gray-600">{portswigerResult}</p>}
 
       {showAdd && (
         <div className="rounded border border-gray-200 bg-white p-3 shadow-sm">

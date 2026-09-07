@@ -1,13 +1,14 @@
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_version_or_404, write_audit_log
 from app.auth.rbac import require_permission
 from app.db.session import get_db_session
+from app.integrations.portswigger.client import PortswigerFetchError, fetch_topics
 from app.models.finding import Evidence, Finding
 from app.models.org_branding import OrgBranding
 from app.models.organization import User
@@ -23,6 +24,7 @@ from app.reporting.vgs_docx_report import render_vgs_docx_report
 from app.schemas.finding import FindingOut
 from app.schemas.vgs_vulnerability import (
     AvailableFindingOut,
+    PortswigerLoadResult,
     VgsEvidenceStepOut,
     VgsEvidenceStepUpdate,
     VgsReportDraftOut,
@@ -123,6 +125,68 @@ async def delete_library_entry(
     )
     await session.delete(entry)
     await session.commit()
+
+
+@library_router.post("/load-from-portswigger", response_model=PortswigerLoadResult)
+async def load_library_from_portswigger(
+    user: User = Depends(require_permission("vgs_vulnerability", "create")),
+    session: AsyncSession = Depends(get_db_session),
+) -> PortswigerLoadResult:
+    """One-click port of the standalone VGS tool's real workflow —
+    scripts/portswigger_to_excel.py scrapes a fixed list of PortSwigger Web
+    Security Academy topic pages into an Excel file, which Manage Vulns'
+    upload_excel/ endpoint then upserts by title. Collapsed here into a
+    single server-side action instead of the scrape-to-Excel-then-upload
+    round trip, with the same upsert-by-title semantics."""
+    try:
+        topics = await fetch_topics()
+    except PortswigerFetchError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    inserted = updated = skipped = 0
+    for topic in topics:
+        if not topic.title:
+            skipped += 1
+            continue
+        existing_result = await session.execute(
+            select(VgsVulnerabilityLibraryEntry).where(
+                VgsVulnerabilityLibraryEntry.org_id == user.org_id,
+                func.lower(VgsVulnerabilityLibraryEntry.title) == topic.title.lower(),
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
+        if existing is not None:
+            if existing.description != topic.description or existing.reference != topic.url:
+                existing.description = topic.description
+                existing.reference = topic.url
+                updated += 1
+            else:
+                skipped += 1
+        else:
+            session.add(
+                VgsVulnerabilityLibraryEntry(
+                    org_id=user.org_id,
+                    title=topic.title,
+                    severity="Medium",
+                    cvss_score="",
+                    cvss_vector="",
+                    description=topic.description,
+                    recommendation="",
+                    reference=topic.url,
+                )
+            )
+            inserted += 1
+
+    await write_audit_log(
+        session,
+        user=user,
+        action="vgs_vulnerability_library.load_from_portswigger",
+        resource_type="organization",
+        resource_id=user.org_id,
+        metadata={"inserted": inserted, "updated": updated, "skipped": skipped},
+    )
+    await session.commit()
+    return PortswigerLoadResult(inserted=inserted, updated=updated, skipped=skipped)
 
 
 # --- Report draft (one per Version) -----------------------------------------
@@ -238,6 +302,85 @@ async def add_report_vulnerability(
     return vuln
 
 
+def _build_vulnerability_from_finding(
+    draft: VgsReportDraft, finding: Finding, order_index: int
+) -> VgsReportVulnerability:
+    return VgsReportVulnerability(
+        report_draft_id=draft.id,
+        source_finding_id=finding.id,
+        order_index=order_index,
+        title=finding.title,
+        severity=finding.severity,
+        cvss_score=str(finding.cvss_score),
+        cvss_vector=finding.cvss_vector,
+        description=finding.plain_language_summary or finding.technical_description,
+        recommendation=finding.remediation,
+        reference=finding.portswigger_reference_url or "\n".join(finding.references),
+    )
+
+
+async def _attach_finding_evidence(session: AsyncSession, vuln: VgsReportVulnerability, finding: Finding) -> None:
+    evidence_result = await session.execute(select(Evidence).where(Evidence.finding_id == finding.id))
+    evidence = evidence_result.scalar_one_or_none()
+    if evidence is not None and evidence.screenshot_refs:
+        session.add(
+            VgsEvidenceStep(
+                report_vulnerability_id=vuln.id,
+                step_order=0,
+                comment=evidence.additional_notes or "Captured automatically from the scan finding.",
+                screenshot_object_keys=list(evidence.screenshot_refs),
+            )
+        )
+
+
+async def _auto_seed_findings_into_draft(
+    session: AsyncSession, version_id: uuid.UUID, draft: VgsReportDraft
+) -> None:
+    """The first time a report draft's Vulnerability Picker is opened,
+    every real open/risk-accepted scan finding for this Version is
+    auto-added — a report starts pre-populated with what the scan actually
+    found, and curation from there is by removing what you don't want.
+    Runs at most once per draft (see findings_auto_seeded)."""
+    scan_run_ids_result = await session.execute(
+        select(ScanRun.id).where(ScanRun.version_id == version_id)
+    )
+    scan_run_ids = [row[0] for row in scan_run_ids_result.all()]
+
+    if scan_run_ids:
+        findings_result = await session.execute(
+            select(Finding).where(
+                Finding.scan_run_id.in_(scan_run_ids),
+                Finding.retest_status.in_(("open", "risk_accepted")),
+            )
+        )
+        findings = list(findings_result.scalars().all())
+
+        already_result = await session.execute(
+            select(VgsReportVulnerability.source_finding_id).where(
+                VgsReportVulnerability.report_draft_id == draft.id,
+                VgsReportVulnerability.source_finding_id.isnot(None),
+            )
+        )
+        already_ids = {row[0] for row in already_result.all()}
+
+        count_result = await session.execute(
+            select(VgsReportVulnerability).where(VgsReportVulnerability.report_draft_id == draft.id)
+        )
+        order_index = len(list(count_result.scalars().all()))
+
+        for finding in findings:
+            if finding.id in already_ids:
+                continue
+            vuln = _build_vulnerability_from_finding(draft, finding, order_index)
+            order_index += 1
+            session.add(vuln)
+            await session.flush()
+            await _attach_finding_evidence(session, vuln, finding)
+
+    draft.findings_auto_seeded = True
+    await session.commit()
+
+
 @draft_router.get("/vulnerabilities", response_model=list[VgsReportVulnerabilityOut])
 async def list_report_vulnerabilities(
     version_id: uuid.UUID,
@@ -246,6 +389,8 @@ async def list_report_vulnerabilities(
 ) -> list[VgsReportVulnerability]:
     await get_version_or_404(session, version_id, user.org_id)
     draft = await _get_or_create_draft(session, version_id)
+    if not draft.findings_auto_seeded:
+        await _auto_seed_findings_into_draft(session, version_id, draft)
     result = await session.execute(
         select(VgsReportVulnerability)
         .where(VgsReportVulnerability.report_draft_id == draft.id)
@@ -331,32 +476,10 @@ async def add_report_vulnerability_from_finding(
     )
     order_index = len(list(count_result.scalars().all()))
 
-    vuln = VgsReportVulnerability(
-        report_draft_id=draft.id,
-        source_finding_id=finding.id,
-        order_index=order_index,
-        title=finding.title,
-        severity=finding.severity,
-        cvss_score=str(finding.cvss_score),
-        cvss_vector=finding.cvss_vector,
-        description=finding.plain_language_summary or finding.technical_description,
-        recommendation=finding.remediation,
-        reference=finding.portswigger_reference_url or "\n".join(finding.references),
-    )
+    vuln = _build_vulnerability_from_finding(draft, finding, order_index)
     session.add(vuln)
     await session.flush()
-
-    evidence_result = await session.execute(select(Evidence).where(Evidence.finding_id == finding.id))
-    evidence = evidence_result.scalar_one_or_none()
-    if evidence is not None and evidence.screenshot_refs:
-        session.add(
-            VgsEvidenceStep(
-                report_vulnerability_id=vuln.id,
-                step_order=0,
-                comment=evidence.additional_notes or "Captured automatically from the scan finding.",
-                screenshot_object_keys=list(evidence.screenshot_refs),
-            )
-        )
+    await _attach_finding_evidence(session, vuln, finding)
 
     await write_audit_log(
         session,
@@ -521,6 +644,43 @@ async def update_evidence_step(
     step = await _get_evidence_step_or_404(session, version_id, vuln_id, step_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(step, field, value)
+    await session.commit()
+    await session.refresh(step)
+    return step
+
+
+@draft_router.post(
+    "/vulnerabilities/{vuln_id}/evidence-steps/{step_id}/screenshots",
+    response_model=VgsEvidenceStepOut,
+    status_code=201,
+)
+async def add_evidence_step_screenshot(
+    version_id: uuid.UUID,
+    vuln_id: uuid.UUID,
+    step_id: uuid.UUID,
+    screenshot: UploadFile = File(...),
+    user: User = Depends(require_permission("vgs_vulnerability", "update")),
+    session: AsyncSession = Depends(get_db_session),
+) -> VgsEvidenceStep:
+    """Appends a screenshot to an existing step — the real VGS
+    EvidenceEditor's per-step 'Add Image' button lets an analyst attach a
+    screenshot to any step at any time, not just when first creating it;
+    the original add_evidence_step endpoint above only covered creation."""
+    await get_version_or_404(session, version_id, user.org_id)
+    step = await _get_evidence_step_or_404(session, version_id, vuln_id, step_id)
+
+    object_key = f"vgs-evidence/{vuln_id}/{uuid.uuid4().hex}-{screenshot.filename}"
+    await get_object_storage().put(object_key, await screenshot.read())
+    step.screenshot_object_keys = [*step.screenshot_object_keys, object_key]
+
+    await write_audit_log(
+        session,
+        user=user,
+        action="vgs_evidence_step.add_screenshot",
+        resource_type="version",
+        resource_id=version_id,
+        metadata={"vuln_id": str(vuln_id), "step_id": str(step_id)},
+    )
     await session.commit()
     await session.refresh(step)
     return step

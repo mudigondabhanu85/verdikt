@@ -18,9 +18,11 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from PIL import Image
 
+import app.api.routes.vgs_vulnerabilities as vgs_routes
 from app.api.routes.vgs_vulnerabilities import draft_router, library_router
 from app.auth.security import create_access_token, hash_password
 from app.db.session import get_db_session
+from app.integrations.portswigger.client import PortswigerFetchError, PortswigerTopic
 from app.models.finding import Evidence, Finding
 from app.models.organization import Organization, User
 from app.models.project import Project, Version
@@ -349,3 +351,174 @@ async def test_add_from_finding_rejects_a_finding_from_another_version(vgs_clien
         headers=headers,
     )
     assert added.status_code == 404
+
+
+async def test_vulnerability_picker_auto_seeds_open_findings_on_first_load(vgs_client):
+    """Regression coverage for the user-reported gap: opening the picker
+    for a version with real scan findings should pre-populate 'Selected
+    for this report' automatically, without a manual Add click per
+    finding. Also proves the seed runs exactly once — deleting the
+    auto-added vulnerability and reloading must not resurrect it."""
+    client, db_adapter = vgs_client
+    _org, _user, version, headers = await _create_org_admin(db_adapter)
+
+    open_finding = await _make_finding(db_adapter, version.id, with_screenshot=True)
+    await _make_finding(db_adapter, version.id, retest_status="fixed")
+
+    listed = await client.get(f"/versions/{version.id}/vgs-report-draft/vulnerabilities", headers=headers)
+    assert listed.status_code == 200
+    body = listed.json()
+    assert len(body) == 1
+    assert body[0]["source_finding_id"] == str(open_finding.id)
+    assert body[0]["title"] == "Missing HSTS"
+
+    # The auto-added evidence screenshot came along too.
+    steps = await client.get(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/{body[0]['id']}/evidence-steps",
+        headers=headers,
+    )
+    assert steps.json()[0]["screenshot_object_keys"] == ["vgs-evidence/fixture-key.png"]
+
+    deleted = await client.delete(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/{body[0]['id']}", headers=headers
+    )
+    assert deleted.status_code == 204
+
+    listed_again = await client.get(f"/versions/{version.id}/vgs-report-draft/vulnerabilities", headers=headers)
+    assert listed_again.json() == []
+
+
+async def test_delete_report_vulnerability_with_evidence_steps_succeeds(vgs_client):
+    """Regression test: vgs_evidence_steps.report_vulnerability_id had no
+    ON DELETE CASCADE, so deleting a selected vulnerability that had any
+    evidence step attached (e.g. any finding-derived one, or one with a
+    manually uploaded screenshot) used to fail with a
+    ForeignKeyViolation — exactly the 'delete doesn't work in Selected
+    for this report' bug the user reported."""
+    client, db_adapter = vgs_client
+    _org, _user, version, headers = await _create_org_admin(db_adapter)
+
+    ad_hoc = await client.post(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities",
+        json={"title": "XSS", "severity": "High"},
+        headers=headers,
+    )
+    vuln_id = ad_hoc.json()["id"]
+
+    files = {"screenshot": ("proof.png", _real_png_bytes(), "image/png")}
+    step = await client.post(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/{vuln_id}/evidence-steps",
+        data={"comment": "step"},
+        files=files,
+        headers=headers,
+    )
+    assert step.status_code == 201
+
+    deleted = await client.delete(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/{vuln_id}", headers=headers
+    )
+    assert deleted.status_code == 204, deleted.text
+
+    listed = await client.get(f"/versions/{version.id}/vgs-report-draft/vulnerabilities", headers=headers)
+    assert listed.json() == []
+
+
+async def test_add_screenshot_to_existing_evidence_step(vgs_client):
+    """The original add_evidence_step endpoint only accepted a screenshot
+    at step-creation time. This covers the new endpoint that lets an
+    analyst attach a screenshot to a step at any later point, and that it
+    appends rather than replaces when called more than once."""
+    client, db_adapter = vgs_client
+    _org, _user, version, headers = await _create_org_admin(db_adapter)
+
+    ad_hoc = await client.post(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities",
+        json={"title": "XSS", "severity": "High"},
+        headers=headers,
+    )
+    vuln_id = ad_hoc.json()["id"]
+
+    step = await client.post(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/{vuln_id}/evidence-steps",
+        data={"comment": "step"},
+        headers=headers,
+    )
+    step_id = step.json()["id"]
+    assert step.json()["screenshot_object_keys"] == []
+
+    files1 = {"screenshot": ("proof1.png", _real_png_bytes(), "image/png")}
+    added1 = await client.post(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/{vuln_id}/evidence-steps/{step_id}/screenshots",
+        files=files1,
+        headers=headers,
+    )
+    assert added1.status_code == 201, added1.text
+    assert len(added1.json()["screenshot_object_keys"]) == 1
+
+    files2 = {"screenshot": ("proof2.png", _real_png_bytes(), "image/png")}
+    added2 = await client.post(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/{vuln_id}/evidence-steps/{step_id}/screenshots",
+        files=files2,
+        headers=headers,
+    )
+    assert added2.status_code == 201
+    assert len(added2.json()["screenshot_object_keys"]) == 2
+
+    listed = await client.get(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/{vuln_id}/evidence-steps", headers=headers
+    )
+    assert len(listed.json()) == 1
+    assert len(listed.json()[0]["screenshot_object_keys"]) == 2
+
+
+async def test_load_from_portswigger_upserts_by_title(vgs_client, monkeypatch):
+    client, db_adapter = vgs_client
+    _org, _user, version, headers = await _create_org_admin(db_adapter)
+
+    async def _fake_fetch_topics(*args, **kwargs):
+        return [
+            PortswigerTopic(title="SQL Injection", description="desc1", url="https://portswigger.net/x1"),
+            PortswigerTopic(title="XSS", description="desc2", url="https://portswigger.net/x2"),
+        ]
+
+    monkeypatch.setattr(vgs_routes, "fetch_topics", _fake_fetch_topics)
+
+    first = await client.post("/vgs-vulnerability-library/load-from-portswigger", headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json() == {"inserted": 2, "updated": 0, "skipped": 0}
+
+    library = await client.get("/vgs-vulnerability-library", headers=headers)
+    titles = {e["title"] for e in library.json()}
+    assert titles == {"SQL Injection", "XSS"}
+    entry = next(e for e in library.json() if e["title"] == "SQL Injection")
+    assert entry["severity"] == "Medium"
+    assert entry["reference"] == "https://portswigger.net/x1"
+
+    # Running again with identical data is fully idempotent.
+    second = await client.post("/vgs-vulnerability-library/load-from-portswigger", headers=headers)
+    assert second.json() == {"inserted": 0, "updated": 0, "skipped": 2}
+
+    # A changed description on a re-run updates the existing entry in place
+    # rather than creating a duplicate.
+    async def _fake_fetch_topics_updated(*args, **kwargs):
+        return [
+            PortswigerTopic(title="SQL Injection", description="new desc", url="https://portswigger.net/x1"),
+        ]
+
+    monkeypatch.setattr(vgs_routes, "fetch_topics", _fake_fetch_topics_updated)
+    third = await client.post("/vgs-vulnerability-library/load-from-portswigger", headers=headers)
+    assert third.json() == {"inserted": 0, "updated": 1, "skipped": 0}
+    library_after = await client.get("/vgs-vulnerability-library", headers=headers)
+    assert len(library_after.json()) == 2
+
+
+async def test_load_from_portswigger_returns_502_on_total_failure(vgs_client, monkeypatch):
+    client, db_adapter = vgs_client
+    _org, _user, version, headers = await _create_org_admin(db_adapter)
+
+    async def _fake_fetch_topics(*args, **kwargs):
+        raise PortswigerFetchError("boom")
+
+    monkeypatch.setattr(vgs_routes, "fetch_topics", _fake_fetch_topics)
+    resp = await client.post("/vgs-vulnerability-library/load-from-portswigger", headers=headers)
+    assert resp.status_code == 502

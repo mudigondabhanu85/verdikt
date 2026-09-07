@@ -39,6 +39,13 @@ export interface VgsReportDraftOut {
   urls: string
   analyst_name: string
   requester_name: string
+  findings_auto_seeded: boolean
+}
+
+export interface PortswigerLoadResult {
+  inserted: number
+  updated: number
+  skipped: number
 }
 
 export interface VgsReportVulnerabilityOut {
@@ -138,6 +145,8 @@ export const vgsApi = {
         body,
       }),
     delete: (id: string) => request<void>(`/vgs-vulnerability-library/${id}`, { method: 'DELETE' }),
+    loadFromPortswigger: () =>
+      request<PortswigerLoadResult>('/vgs-vulnerability-library/load-from-portswigger', { method: 'POST' }),
   },
 
   draft: {
@@ -204,6 +213,14 @@ export const vgsApi = {
         `/versions/${versionId}/vgs-report-draft/vulnerabilities/${vulnId}/evidence-steps/${stepId}`,
         { method: 'PATCH', body },
       ),
+    addScreenshot: (versionId: string, vulnId: string, stepId: string, screenshot: File) => {
+      const formData = new FormData()
+      formData.set('screenshot', screenshot)
+      return request<VgsEvidenceStepOut>(
+        `/versions/${versionId}/vgs-report-draft/vulnerabilities/${vulnId}/evidence-steps/${stepId}/screenshots`,
+        { method: 'POST', formData },
+      )
+    },
     delete: (versionId: string, vulnId: string, stepId: string) =>
       request<void>(
         `/versions/${versionId}/vgs-report-draft/vulnerabilities/${vulnId}/evidence-steps/${stepId}`,

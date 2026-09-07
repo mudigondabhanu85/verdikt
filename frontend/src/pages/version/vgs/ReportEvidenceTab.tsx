@@ -3,6 +3,48 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AuthenticatedImage } from '../../../components/AuthenticatedImage'
 import { vgsApi } from './api'
 
+function StepScreenshotInput({
+  versionId,
+  vulnId,
+  stepId,
+}: {
+  versionId: string
+  vulnId: string
+  stepId: string
+}) {
+  const queryClient = useQueryClient()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const addScreenshotMutation = useMutation({
+    mutationFn: (file: File) => vgsApi.evidenceSteps.addScreenshot(versionId, vulnId, stepId, file),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['vgs-evidence-steps', versionId, vulnId] }),
+  })
+
+  return (
+    <>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) addScreenshotMutation.mutate(file)
+          e.target.value = ''
+        }}
+      />
+      <button
+        onClick={() => fileInputRef.current?.click()}
+        disabled={addScreenshotMutation.isPending}
+        className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+      >
+        + Add screenshot
+      </button>
+    </>
+  )
+}
+
 function StepsPanel({ versionId, vulnId }: { versionId: string; vulnId: string }) {
   const queryClient = useQueryClient()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -57,6 +99,9 @@ function StepsPanel({ versionId, vulnId }: { versionId: string; vulnId: string }
                 className="max-w-xs rounded border"
               />
             ))}
+          </div>
+          <div className="mt-2">
+            <StepScreenshotInput versionId={versionId} vulnId={vulnId} stepId={step.id} />
           </div>
         </div>
       ))}

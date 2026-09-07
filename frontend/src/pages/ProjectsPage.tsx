@@ -45,6 +45,10 @@ export function ProjectsPage() {
       setDeleteConfirmText('')
     },
   })
+  const deleteError =
+    deleteMutation.isError && deleteMutation.variables === deleteConfirmId
+      ? (deleteMutation.error as Error).message
+      : null
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -143,6 +147,7 @@ export function ProjectsPage() {
                       >
                         Cancel
                       </button>
+                      {deleteError && <span className="text-xs text-red-600">{deleteError}</span>}
                     </span>
                   ) : (
                     <button

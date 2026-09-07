@@ -21,6 +21,7 @@ from app.models.review_candidate import ReviewCandidate
 from app.models.scan import AgentJob, ScanRun
 from app.models.target import Target
 from app.models.traffic import TrafficInteraction
+from app.models.vgs_vulnerability import VgsReportDraft
 from app.schemas.project import ProjectCreate, ProjectOut
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -114,6 +115,9 @@ async def _hard_delete_project(session: AsyncSession, project: Project) -> None:
         select(CredentialSet.id).where(CredentialSet.version_id.in_(version_ids)).scalar_subquery()
     )
 
+    # vgs_report_vulnerabilities/vgs_evidence_steps cascade off this delete
+    # at the DB level (migration 0019) — no need to enumerate them here.
+    await session.execute(delete(VgsReportDraft).where(VgsReportDraft.version_id.in_(version_ids)))
     await session.execute(delete(FindingTicket).where(FindingTicket.finding_id.in_(finding_ids)))
     await session.execute(delete(RetestJob).where(RetestJob.finding_id.in_(finding_ids)))
     await session.execute(delete(Evidence).where(Evidence.finding_id.in_(finding_ids)))
