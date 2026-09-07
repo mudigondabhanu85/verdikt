@@ -229,6 +229,17 @@ export const api = {
       versionId: string,
       body: { host: string; port?: number | null; path_pattern?: string | null; in_scope?: boolean },
     ) => request<ScopeEntryOut>(`/versions/${versionId}/scope-entries`, { method: 'POST', body }),
+    updateScopeEntry: (
+      versionId: string,
+      scopeEntryId: string,
+      body: Partial<{ host: string; port: number | null; path_pattern: string | null; in_scope: boolean }>,
+    ) =>
+      request<ScopeEntryOut>(`/versions/${versionId}/scope-entries/${scopeEntryId}`, {
+        method: 'PATCH',
+        body,
+      }),
+    deleteScopeEntry: (versionId: string, scopeEntryId: string) =>
+      request<void>(`/versions/${versionId}/scope-entries/${scopeEntryId}`, { method: 'DELETE' }),
 
     listAuthorizationRecords: (versionId: string) =>
       request<AuthorizationRecordOut[]>(`/versions/${versionId}/authorization`),

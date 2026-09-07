@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from app.schemas.version import (
     AuthorizationRecordOut,
     ScopeEntryCreate,
     ScopeEntryOut,
+    ScopeEntryUpdate,
     VersionCreate,
     VersionOut,
 )
@@ -136,6 +137,61 @@ async def list_scope_entries(
     await get_version_or_404(session, version_id, user.org_id)
     result = await session.execute(select(ScopeEntry).where(ScopeEntry.version_id == version_id))
     return list(result.scalars().all())
+
+
+async def _get_scope_entry_or_404(
+    session: AsyncSession, version_id: uuid.UUID, scope_entry_id: uuid.UUID
+) -> ScopeEntry:
+    entry = await session.get(ScopeEntry, scope_entry_id)
+    if entry is None or entry.version_id != version_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Scope entry not found")
+    return entry
+
+
+@router.patch("/versions/{version_id}/scope-entries/{scope_entry_id}", response_model=ScopeEntryOut)
+async def update_scope_entry(
+    version_id: uuid.UUID,
+    scope_entry_id: uuid.UUID,
+    payload: ScopeEntryUpdate,
+    user: User = Depends(require_permission("version", "update")),
+    session: AsyncSession = Depends(get_db_session),
+) -> ScopeEntry:
+    await get_version_or_404(session, version_id, user.org_id)
+    entry = await _get_scope_entry_or_404(session, version_id, scope_entry_id)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(entry, field, value)
+    await write_audit_log(
+        session,
+        user=user,
+        action="scope_entry.update",
+        resource_type="version",
+        resource_id=version_id,
+        metadata={"scope_entry_id": str(scope_entry_id)},
+    )
+    await session.commit()
+    await session.refresh(entry)
+    return entry
+
+
+@router.delete("/versions/{version_id}/scope-entries/{scope_entry_id}", status_code=204)
+async def delete_scope_entry(
+    version_id: uuid.UUID,
+    scope_entry_id: uuid.UUID,
+    user: User = Depends(require_permission("version", "delete")),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+    await get_version_or_404(session, version_id, user.org_id)
+    entry = await _get_scope_entry_or_404(session, version_id, scope_entry_id)
+    await write_audit_log(
+        session,
+        user=user,
+        action="scope_entry.delete",
+        resource_type="version",
+        resource_id=version_id,
+        metadata={"host": entry.host},
+    )
+    await session.delete(entry)
+    await session.commit()
 
 
 @router.post(

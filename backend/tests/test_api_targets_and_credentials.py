@@ -24,6 +24,43 @@ async def test_target_crud(client):
     assert len(listed_after.json()) == 0
 
 
+async def test_adding_a_target_auto_derives_a_matching_scope_entry(client):
+    """Regression coverage for a real, repeated failure mode: a Target
+    with no matching Scope entry (Scope is an independent, exact
+    host+port allow-list — see app.agents.scope.is_in_scope) makes every
+    agent crawl nothing while still reporting a 'completed' scan. Adding
+    a Target should auto-create its matching in-scope entry so a host
+    only ever has to be typed once."""
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+
+    added = await client.post(
+        f"/versions/{version_id}/targets",
+        json={"host": "app.example.test", "port": 443, "base_url": "https://app.example.test"},
+        headers=admin["headers"],
+    )
+    assert added.status_code == 201
+
+    scope = await client.get(f"/versions/{version_id}/scope-entries", headers=admin["headers"])
+    assert scope.status_code == 200
+    entries = scope.json()
+    assert len(entries) == 1
+    assert entries[0]["host"] == "app.example.test"
+    assert entries[0]["port"] == 443
+    assert entries[0]["in_scope"] is True
+
+    # Adding a second Target for the same host+port must not create a
+    # duplicate scope entry.
+    added_again = await client.post(
+        f"/versions/{version_id}/targets",
+        json={"host": "app.example.test", "port": 443, "base_url": "https://app.example.test/other"},
+        headers=admin["headers"],
+    )
+    assert added_again.status_code == 201
+    scope_after = await client.get(f"/versions/{version_id}/scope-entries", headers=admin["headers"])
+    assert len(scope_after.json()) == 1
+
+
 async def test_credential_set_never_returns_plaintext_secret(client):
     admin = await register_org_admin(client)
     _, version_id = await create_project_and_version(client, admin["headers"])

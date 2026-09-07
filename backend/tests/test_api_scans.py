@@ -298,11 +298,14 @@ async def test_scan_run_rejected_without_a_target(client):
 
 async def test_scan_run_warns_when_scope_mismatch_leaves_nothing_crawled(client, fixture_site):
     """Regression test for the real bug this session traced: a Target
-    configured correctly but a Scope entry whose host doesn't exactly
-    match it (Scope enforces an exact host string, see app.agents.scope)
-    makes every agent 'complete' having crawled nothing — status looks
-    identical to a real, thorough scan with a clean result. The new
-    warning field must flag this instead of leaving it silent."""
+    whose Scope entry doesn't exactly match it (Scope enforces an exact
+    host string, see app.agents.scope) makes every agent 'complete'
+    having crawled nothing — status looks identical to a real, thorough
+    scan with a clean result. Adding a Target now auto-derives its
+    matching Scope entry (closing off the easy way to hit this), so this
+    reproduces the mismatch the way it'd still happen in practice: by
+    editing the auto-derived entry afterward. The new warning field must
+    flag the resulting empty crawl instead of leaving it silent."""
     host, port = fixture_site
     admin = await register_org_admin(client)
     _, version_id = await create_project_and_version(client, admin["headers"])
@@ -311,10 +314,13 @@ async def test_scan_run_warns_when_scope_mismatch_leaves_nothing_crawled(client,
         json={"host": host, "port": port, "base_url": f"http://{host}:{port}/"},
         headers=admin["headers"],
     )
-    # Deliberately wrong host — the exact mismatch that caused the real bug.
-    await client.post(
-        f"/versions/{version_id}/scope-entries",
-        json={"host": "not-the-real-host", "port": port, "in_scope": True},
+    scope = await client.get(f"/versions/{version_id}/scope-entries", headers=admin["headers"])
+    scope_entry_id = scope.json()[0]["id"]
+    # Deliberately break the auto-derived entry's host — the exact
+    # mismatch that caused the real bug.
+    await client.patch(
+        f"/versions/{version_id}/scope-entries/{scope_entry_id}",
+        json={"host": "not-the-real-host"},
         headers=admin["headers"],
     )
 

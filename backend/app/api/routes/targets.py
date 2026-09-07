@@ -4,10 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_version_or_404
+from app.api.deps import get_version_or_404, write_audit_log
 from app.auth.rbac import require_permission
 from app.db.session import get_db_session
 from app.models.organization import User
+from app.models.project import ScopeEntry
 from app.models.target import Target
 from app.schemas.target import TargetCreate, TargetOut
 
@@ -24,6 +25,34 @@ async def add_target(
     await get_version_or_404(session, version_id, user.org_id)
     target = Target(version_id=version_id, **payload.model_dump())
     session.add(target)
+
+    # Scope is enforced as a hard, independent allow-list (see
+    # app.agents.scope.is_in_scope) checked on every request regardless
+    # of what a Target says — a Target alone never grants anything
+    # crawlable. Without this, adding a Target that has no matching
+    # Scope entry (an exact host+port string match) makes every agent
+    # crawl nothing while still reporting status=completed, with no
+    # indication anything was misconfigured — a real, repeated failure
+    # mode. Auto-deriving one matching in-scope entry here means a host
+    # only ever has to be typed once.
+    existing_scope = await session.execute(
+        select(ScopeEntry).where(
+            ScopeEntry.version_id == version_id,
+            ScopeEntry.host == target.host,
+            ScopeEntry.port == target.port,
+        )
+    )
+    if existing_scope.scalar_one_or_none() is None:
+        session.add(ScopeEntry(version_id=version_id, host=target.host, port=target.port, in_scope=True))
+
+    await write_audit_log(
+        session,
+        user=user,
+        action="target.create",
+        resource_type="version",
+        resource_id=version_id,
+        metadata={"host": target.host, "port": target.port},
+    )
     await session.commit()
     await session.refresh(target)
     return target

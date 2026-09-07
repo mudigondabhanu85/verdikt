@@ -25,6 +25,13 @@ class ScopeEntryCreate(BaseModel):
     in_scope: bool = True
 
 
+class ScopeEntryUpdate(BaseModel):
+    host: str | None = None
+    port: int | None = None
+    path_pattern: str | None = None
+    in_scope: bool | None = None
+
+
 class ScopeEntryOut(BaseModel):
     id: uuid.UUID
     version_id: uuid.UUID

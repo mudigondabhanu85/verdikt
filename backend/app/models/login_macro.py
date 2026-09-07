@@ -17,5 +17,7 @@ class LoginMacro(Base):
     __tablename__ = "login_macros"
 
     version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("versions.id"))
-    credential_set_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("credential_sets.id"))
+    credential_set_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("credential_sets.id", ondelete="CASCADE")
+    )
     steps: Mapped[list] = mapped_column(JSON)

@@ -461,7 +461,33 @@ def build_graph(
             )
         )
 
-        await _finish_job(job, status="completed", stats={"endpoints_discovered": len(endpoints)})
+        # Same site_map shape as recon_node's — previously only the bare
+        # *count* survived here, so the UI's "Discovered endpoints" view
+        # only ever showed the pre-login crawl's handful of pages even
+        # when the authenticated crawl (the one that actually sees the
+        # app's real surface) found far more.
+        site_map = {
+            "endpoints": [
+                {"url": url, "status": agent.discovered_responses[url].status_code}
+                for url in endpoints
+                if url in agent.discovered_responses
+            ],
+            "forms": [
+                {
+                    "action_url": form.action_url,
+                    "method": form.method,
+                    "fields": [f.name for f in form.fields],
+                }
+                for form in agent.discovered_forms
+            ],
+            "parameters": [{"url": p.url, "name": p.name} for p in agent.discovered_parameters],
+        }
+
+        await _finish_job(
+            job,
+            status="completed",
+            stats={"endpoints_discovered": len(endpoints), "site_map": site_map},
+        )
         return {
             "discovered_endpoints": merged_endpoints,
             "discovered_parameters": state.get("discovered_parameters", []) + agent.discovered_parameters,

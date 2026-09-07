@@ -1,7 +1,115 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../api/client'
+import type { ScopeEntryOut } from '../../api/types'
 import { useAuth, canWrite } from '../../auth/AuthContext'
+
+function ScopeEntryRow({ entry, versionId }: { entry: ScopeEntryOut; versionId: string }) {
+  const queryClient = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [host, setHost] = useState(entry.host)
+  const [port, setPort] = useState(entry.port?.toString() ?? '')
+  const [pathPattern, setPathPattern] = useState(entry.path_pattern ?? '')
+  const [inScope, setInScope] = useState(entry.in_scope)
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['versions', versionId, 'scope-entries'] })
+
+  const updateMutation = useMutation({
+    mutationFn: () =>
+      api.versions.updateScopeEntry(versionId, entry.id, {
+        host,
+        port: port ? Number(port) : null,
+        path_pattern: pathPattern || null,
+        in_scope: inScope,
+      }),
+    onSuccess: () => {
+      invalidate()
+      setEditing(false)
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: () => api.versions.deleteScopeEntry(versionId, entry.id),
+    onSuccess: invalidate,
+  })
+
+  if (editing) {
+    return (
+      <tr className="border-b border-gray-100">
+        <td className="py-2 pr-2">
+          <input
+            value={host}
+            onChange={(e) => setHost(e.target.value)}
+            className="w-full rounded border border-gray-300 px-2 py-1 text-sm"
+          />
+        </td>
+        <td className="py-2 pr-2">
+          <input
+            value={port}
+            onChange={(e) => setPort(e.target.value)}
+            placeholder="any"
+            className="w-20 rounded border border-gray-300 px-2 py-1 text-sm"
+          />
+        </td>
+        <td className="py-2 pr-2">
+          <input
+            value={pathPattern}
+            onChange={(e) => setPathPattern(e.target.value)}
+            placeholder="*"
+            className="w-full rounded border border-gray-300 px-2 py-1 text-sm"
+          />
+        </td>
+        <td className="py-2 pr-2">
+          <select
+            value={inScope ? 'yes' : 'no'}
+            onChange={(e) => setInScope(e.target.value === 'yes')}
+            className="rounded border border-gray-300 px-2 py-1 text-sm"
+          >
+            <option value="yes">yes</option>
+            <option value="no">no (excluded)</option>
+          </select>
+        </td>
+        <td className="py-2">
+          <span className="flex gap-2">
+            <button
+              onClick={() => updateMutation.mutate()}
+              disabled={!host.trim() || updateMutation.isPending}
+              className="text-xs font-medium text-purple-700 hover:underline disabled:opacity-40"
+            >
+              Save
+            </button>
+            <button onClick={() => setEditing(false)} className="text-xs text-gray-500 hover:underline">
+              Cancel
+            </button>
+          </span>
+        </td>
+      </tr>
+    )
+  }
+
+  return (
+    <tr className="border-b border-gray-100">
+      <td className="py-2">{entry.host}</td>
+      <td className="py-2">{entry.port ?? 'any'}</td>
+      <td className="py-2">{entry.path_pattern ?? '*'}</td>
+      <td className="py-2">{entry.in_scope ? 'yes' : 'no (excluded)'}</td>
+      <td className="py-2">
+        <span className="flex gap-2">
+          <button onClick={() => setEditing(true)} className="text-xs text-purple-700 hover:underline">
+            Edit
+          </button>
+          <button
+            onClick={() => deleteMutation.mutate()}
+            disabled={deleteMutation.isPending}
+            className="text-xs text-red-600 hover:underline disabled:opacity-40"
+          >
+            Delete
+          </button>
+        </span>
+      </td>
+    </tr>
+  )
+}
 
 export function ScopeTab({ versionId }: { versionId: string }) {
   const { user } = useAuth()
@@ -39,7 +147,9 @@ export function ScopeTab({ versionId }: { versionId: string }) {
   return (
     <div>
       <p className="mb-4 text-sm text-gray-500">
-        The technical allow-list every agent enforces on every request — nothing outside this list is ever touched.
+        The technical allow-list every agent enforces on every request — nothing outside this list is ever
+        touched. Adding a Target under the Targets tab auto-creates its matching entry here, so you usually
+        won't need to add one by hand.
       </p>
       {canWrite(user?.role) && (
         <form onSubmit={handleSubmit} className="mb-6 flex flex-wrap gap-2">
@@ -79,17 +189,22 @@ export function ScopeTab({ versionId }: { versionId: string }) {
             <th className="py-2">Port</th>
             <th className="py-2">Path pattern</th>
             <th className="py-2">In scope</th>
+            {canWrite(user?.role) && <th className="py-2">Actions</th>}
           </tr>
         </thead>
         <tbody>
-          {entries?.map((entry) => (
-            <tr key={entry.id} className="border-b border-gray-100">
-              <td className="py-2">{entry.host}</td>
-              <td className="py-2">{entry.port ?? 'any'}</td>
-              <td className="py-2">{entry.path_pattern ?? '*'}</td>
-              <td className="py-2">{entry.in_scope ? 'yes' : 'no (excluded)'}</td>
-            </tr>
-          ))}
+          {entries?.map((entry) =>
+            canWrite(user?.role) ? (
+              <ScopeEntryRow key={entry.id} entry={entry} versionId={versionId} />
+            ) : (
+              <tr key={entry.id} className="border-b border-gray-100">
+                <td className="py-2">{entry.host}</td>
+                <td className="py-2">{entry.port ?? 'any'}</td>
+                <td className="py-2">{entry.path_pattern ?? '*'}</td>
+                <td className="py-2">{entry.in_scope ? 'yes' : 'no (excluded)'}</td>
+              </tr>
+            ),
+          )}
         </tbody>
       </table>
     </div>
