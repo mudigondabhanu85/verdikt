@@ -63,6 +63,12 @@ async def test_hard_delete_removes_project_and_all_dependents_without_fk_errors(
         headers=admin["headers"],
     )
     assert cred.status_code == 201
+    target = await client.post(
+        f"/versions/{version_id}/targets",
+        json={"host": "example.test", "base_url": "http://example.test/"},
+        headers=admin["headers"],
+    )
+    assert target.status_code == 201
     scan = await client.post(f"/versions/{version_id}/scan-runs", json={}, headers=admin["headers"])
     assert scan.status_code == 201
 

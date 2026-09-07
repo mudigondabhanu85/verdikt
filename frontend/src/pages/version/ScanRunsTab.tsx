@@ -50,13 +50,18 @@ export function ScanRunsTab({ versionId, isAuthorized }: { versionId: string; is
       )}
 
       {canWrite(user?.role) && (
-        <button
-          onClick={() => startMutation.mutate()}
-          disabled={!isAuthorized || startMutation.isPending}
-          className="mb-6 rounded bg-purple-700 px-4 py-2 text-sm font-medium text-white hover:bg-purple-800 disabled:opacity-50"
-        >
-          {startMutation.isPending ? 'Starting…' : 'Start new scan'}
-        </button>
+        <div className="mb-6">
+          <button
+            onClick={() => startMutation.mutate()}
+            disabled={!isAuthorized || startMutation.isPending}
+            className="rounded bg-purple-700 px-4 py-2 text-sm font-medium text-white hover:bg-purple-800 disabled:opacity-50"
+          >
+            {startMutation.isPending ? 'Starting…' : 'Start new scan'}
+          </button>
+          {startMutation.isError && (
+            <p className="mt-2 text-sm text-red-600">{(startMutation.error as Error).message}</p>
+          )}
+        </div>
       )}
 
       {isLoading && <p className="text-gray-500">Loading…</p>}

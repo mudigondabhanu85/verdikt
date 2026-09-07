@@ -269,6 +269,24 @@ async def test_scan_run_rejected_without_authorization(client):
     assert resp.status_code == 403
 
 
+async def test_scan_run_rejected_without_a_target(client):
+    """Regression test: a Version with authorization but no Target used
+    to let a scan through — every agent 'completed' having crawled
+    nothing, looking like a successful-but-empty scan rather than a
+    misconfigured one. Now caught up front with a clear 400."""
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+    await client.post(
+        f"/versions/{version_id}/authorization",
+        data={"approver_name": "Self", "attestation_text": "no target on purpose"},
+        headers=admin["headers"],
+    )
+
+    resp = await client.post(f"/versions/{version_id}/scan-runs", headers=admin["headers"])
+    assert resp.status_code == 400
+    assert "target" in resp.json()["detail"].lower()
+
+
 async def test_scan_run_rejects_unknown_ai_provider_config(client, fixture_site):
     host, port = fixture_site
     admin = await register_org_admin(client)

@@ -19,6 +19,7 @@ from app.models.vgs_vulnerability import (
     VgsReportVulnerability,
     VgsVulnerabilityLibraryEntry,
 )
+from app.reporting.grouping import FindingGroup, group_findings
 from app.reporting.html_report import BrandingInfo
 from app.reporting.vgs_docx_report import render_vgs_docx_report
 from app.schemas.finding import FindingOut
@@ -302,20 +303,43 @@ async def add_report_vulnerability(
     return vuln
 
 
-def _build_vulnerability_from_finding(
-    draft: VgsReportDraft, finding: Finding, order_index: int
+_MAX_LISTED_ENDPOINTS = 20
+
+
+def _build_vulnerability_from_group(
+    draft: VgsReportDraft, group: FindingGroup, order_index: int
 ) -> VgsReportVulnerability:
+    """One report vulnerability per (check_id, title) group, not per raw
+    Finding row — a scan confirms the same vulnerability class across
+    every crawled endpoint, and app.reporting.grouping.group_findings is
+    the codebase's existing fix for exactly this ("a real 291-finding
+    scan produced a 629-page PDF"), already relied on by the DOCX/PDF/HTML
+    reports. Reused here instead of reinvented so the VGS report doesn't
+    get one entry per endpoint instance (thousands of near-duplicate rows
+    for a single vulnerability class)."""
+    representative = group.shared
+    endpoints = sorted({ep for finding in group.instances for ep in finding.affected_endpoints})
+
+    description = representative.plain_language_summary or representative.technical_description
+    if len(endpoints) > 1:
+        shown = endpoints[:_MAX_LISTED_ENDPOINTS]
+        endpoint_block = "\n".join(f"- {endpoint}" for endpoint in shown)
+        remainder = len(endpoints) - len(shown)
+        if remainder > 0:
+            endpoint_block += f"\n...and {remainder} more"
+        description = f"{description}\n\nAffected endpoints ({len(endpoints)}):\n{endpoint_block}"
+
     return VgsReportVulnerability(
         report_draft_id=draft.id,
-        source_finding_id=finding.id,
+        source_finding_id=representative.id,
         order_index=order_index,
-        title=finding.title,
-        severity=finding.severity,
-        cvss_score=str(finding.cvss_score),
-        cvss_vector=finding.cvss_vector,
-        description=finding.plain_language_summary or finding.technical_description,
-        recommendation=finding.remediation,
-        reference=finding.portswigger_reference_url or "\n".join(finding.references),
+        title=representative.title,
+        severity=representative.severity,
+        cvss_score=str(representative.cvss_score),
+        cvss_vector=representative.cvss_vector,
+        description=description,
+        recommendation=representative.remediation,
+        reference=representative.portswigger_reference_url or "\n".join(representative.references),
     )
 
 
@@ -333,28 +357,38 @@ async def _attach_finding_evidence(session: AsyncSession, vuln: VgsReportVulnera
         )
 
 
+async def _group_open_findings_for_version(session: AsyncSession, version_id: uuid.UUID) -> list[FindingGroup]:
+    scan_run_ids_result = await session.execute(
+        select(ScanRun.id).where(ScanRun.version_id == version_id)
+    )
+    scan_run_ids = [row[0] for row in scan_run_ids_result.all()]
+    if not scan_run_ids:
+        return []
+    findings_result = await session.execute(
+        select(Finding)
+        .options(selectinload(Finding.evidence))
+        .where(
+            Finding.scan_run_id.in_(scan_run_ids),
+            Finding.retest_status.in_(("open", "risk_accepted")),
+        )
+        .order_by(Finding.cvss_score.desc())
+    )
+    return group_findings(list(findings_result.scalars().all()))
+
+
 async def _auto_seed_findings_into_draft(
     session: AsyncSession, version_id: uuid.UUID, draft: VgsReportDraft
 ) -> None:
     """The first time a report draft's Vulnerability Picker is opened,
     every real open/risk-accepted scan finding for this Version is
-    auto-added — a report starts pre-populated with what the scan actually
-    found, and curation from there is by removing what you don't want.
-    Runs at most once per draft (see findings_auto_seeded)."""
-    scan_run_ids_result = await session.execute(
-        select(ScanRun.id).where(ScanRun.version_id == version_id)
-    )
-    scan_run_ids = [row[0] for row in scan_run_ids_result.all()]
+    auto-added — one report vulnerability per (check_id, title) group,
+    not per raw Finding row (see _build_vulnerability_from_group) — so a
+    report starts pre-populated with what the scan actually found, and
+    curation from there is by removing what you don't want. Runs at most
+    once per draft (see findings_auto_seeded)."""
+    groups = await _group_open_findings_for_version(session, version_id)
 
-    if scan_run_ids:
-        findings_result = await session.execute(
-            select(Finding).where(
-                Finding.scan_run_id.in_(scan_run_ids),
-                Finding.retest_status.in_(("open", "risk_accepted")),
-            )
-        )
-        findings = list(findings_result.scalars().all())
-
+    if groups:
         already_result = await session.execute(
             select(VgsReportVulnerability.source_finding_id).where(
                 VgsReportVulnerability.report_draft_id == draft.id,
@@ -368,14 +402,14 @@ async def _auto_seed_findings_into_draft(
         )
         order_index = len(list(count_result.scalars().all()))
 
-        for finding in findings:
-            if finding.id in already_ids:
+        for group in groups:
+            if any(finding.id in already_ids for finding in group.instances):
                 continue
-            vuln = _build_vulnerability_from_finding(draft, finding, order_index)
+            vuln = _build_vulnerability_from_group(draft, group, order_index)
             order_index += 1
             session.add(vuln)
             await session.flush()
-            await _attach_finding_evidence(session, vuln, finding)
+            await _attach_finding_evidence(session, vuln, group.shared)
 
     draft.findings_auto_seeded = True
     await session.commit()
@@ -405,32 +439,23 @@ async def list_available_findings(
     user: User = Depends(require_permission("vgs_vulnerability", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[AvailableFindingOut]:
-    """Every real, scan-confirmed Finding for this Version — across all
-    of its scan runs, not just the latest — so the Vulnerability Picker
-    can offer what the scanner actually found alongside the curated
-    library. Excludes findings already retested as fixed or dismissed as
-    a false positive; a finding already added to this draft is flagged
-    via already_added rather than hidden, so re-adding is a deliberate choice."""
+    """Every real, scan-confirmed vulnerability class for this Version —
+    across all of its scan runs, not just the latest — so the
+    Vulnerability Picker can offer what the scanner actually found
+    alongside the curated library. One row per (check_id, title) group,
+    not per raw Finding instance (see _group_open_findings_for_version) —
+    a check confirmed on hundreds of endpoints is one entry here, with
+    every affected endpoint folded into affected_endpoints, not hundreds
+    of near-duplicate rows. Excludes findings already retested as fixed
+    or dismissed as a false positive; a group already added to this draft
+    is flagged via already_added rather than hidden, so re-adding is a
+    deliberate choice."""
     await get_version_or_404(session, version_id, user.org_id)
     draft = await _get_or_create_draft(session, version_id)
 
-    scan_run_ids_result = await session.execute(
-        select(ScanRun.id).where(ScanRun.version_id == version_id)
-    )
-    scan_run_ids = [row[0] for row in scan_run_ids_result.all()]
-    if not scan_run_ids:
+    groups = await _group_open_findings_for_version(session, version_id)
+    if not groups:
         return []
-
-    findings_result = await session.execute(
-        select(Finding)
-        .options(selectinload(Finding.evidence))
-        .where(
-            Finding.scan_run_id.in_(scan_run_ids),
-            Finding.retest_status.in_(("open", "risk_accepted")),
-        )
-        .order_by(Finding.cvss_score.desc())
-    )
-    findings = list(findings_result.scalars().all())
 
     added_result = await session.execute(
         select(VgsReportVulnerability.source_finding_id).where(
@@ -440,14 +465,21 @@ async def list_available_findings(
     )
     already_added_ids = {row[0] for row in added_result.all()}
 
-    return [
-        AvailableFindingOut(
-            finding=FindingOut.model_validate(finding),
-            scan_run_id=finding.scan_run_id,
-            already_added=finding.id in already_added_ids,
+    result = []
+    for group in groups:
+        representative = group.shared
+        all_endpoints = sorted({ep for finding in group.instances for ep in finding.affected_endpoints})
+        finding_out = FindingOut.model_validate(representative).model_copy(
+            update={"affected_endpoints": all_endpoints}
         )
-        for finding in findings
-    ]
+        result.append(
+            AvailableFindingOut(
+                finding=finding_out,
+                scan_run_id=representative.scan_run_id,
+                already_added=any(finding.id in already_added_ids for finding in group.instances),
+            )
+        )
+    return result
 
 
 @draft_router.post(
@@ -471,15 +503,30 @@ async def add_report_vulnerability_from_finding(
     if scan_run is None or scan_run.version_id != version_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Finding not found")
 
+    # The picker offers one row per (check_id, title) group (see
+    # list_available_findings) — resolve finding_id (the group's
+    # representative id) back to its full group so every affected
+    # endpoint is captured, not just this one instance. Falls back to a
+    # single-instance group if the finding fell out of the open/
+    # risk-accepted set between listing and adding.
+    groups = await _group_open_findings_for_version(session, version_id)
+    group = next(
+        (g for g in groups if any(instance.id == finding.id for instance in g.instances)), None
+    )
+    if group is None:
+        group = FindingGroup(
+            check_id=finding.check_id, title=finding.title, severity=finding.severity, instances=[finding]
+        )
+
     count_result = await session.execute(
         select(VgsReportVulnerability).where(VgsReportVulnerability.report_draft_id == draft.id)
     )
     order_index = len(list(count_result.scalars().all()))
 
-    vuln = _build_vulnerability_from_finding(draft, finding, order_index)
+    vuln = _build_vulnerability_from_group(draft, group, order_index)
     session.add(vuln)
     await session.flush()
-    await _attach_finding_evidence(session, vuln, finding)
+    await _attach_finding_evidence(session, vuln, group.shared)
 
     await write_audit_log(
         session,

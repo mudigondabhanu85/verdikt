@@ -23,6 +23,7 @@ from app.models.finding import Finding
 from app.models.organization import User
 from app.models.project import Version
 from app.models.scan import AgentJob, ScanRun
+from app.models.target import Target
 from app.reporting.csv_report import render_csv_report
 from app.reporting.docx_report import render_docx_report
 from app.reporting.executive_summary import generate_executive_summary
@@ -46,6 +47,19 @@ async def _require_authorized_version(session: AsyncSession, version_id: uuid.UU
             "requires at least one before any agent can run against its targets.",
         )
     return version
+
+
+async def _require_at_least_one_target(session: AsyncSession, version_id: uuid.UUID) -> None:
+    """Without a Target, recon has nothing to crawl and every agent
+    'completes' near-instantly having done nothing — a scan that looks
+    successful (status=completed) but found almost nothing, with no
+    indication anything was misconfigured. Catch it up front instead."""
+    target_result = await session.execute(select(Target.id).where(Target.version_id == version_id).limit(1))
+    if target_result.first() is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "This Version has no target configured — add at least one target URL before running a scan.",
+        )
 
 
 async def _run_scan_cancellable(scan_run_id: uuid.UUID) -> None:
@@ -90,6 +104,7 @@ async def create_scan_run(
     session: AsyncSession = Depends(get_db_session),
 ) -> ScanRun:
     await _require_authorized_version(session, version_id, user.org_id)
+    await _require_at_least_one_target(session, version_id)
     ai_provider_config_id = await _resolve_ai_provider_config_id(session, user.org_id, payload)
 
     scan_run = ScanRun(
@@ -135,6 +150,7 @@ async def retest_scan_run(
     to silently override a human decision. See app.agents.retest.
     """
     await _require_authorized_version(session, version_id, user.org_id)
+    await _require_at_least_one_target(session, version_id)
     prior = await get_scan_run_or_404(session, prior_scan_run_id, user.org_id)
     if prior.version_id != version_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Prior scan run not found for this version")

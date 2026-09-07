@@ -339,6 +339,83 @@ async def test_add_from_finding_copies_fields_and_evidence_and_flags_already_add
     assert listed.json()[0]["already_added"] is True
 
 
+async def _make_findings_sharing_check_id(db_adapter, version_id, endpoints: list[str]) -> list[Finding]:
+    """Simulates what a real scan actually produces: the same
+    vulnerability check (check_id/title identical) confirmed across many
+    crawled endpoints — one Finding row per endpoint, same as
+    header_config.py/injection.py's real per-hit persistence."""
+    async with session_scope(db_adapter) as session:
+        scan_run = ScanRun(version_id=version_id, status="completed", requested_by=uuid.uuid4())
+        session.add(scan_run)
+        await session.flush()
+        job = AgentJob(scan_run_id=scan_run.id, agent_type="header_config", status="completed")
+        session.add(job)
+        await session.flush()
+
+        findings = []
+        for endpoint in endpoints:
+            finding = Finding(
+                scan_run_id=scan_run.id,
+                agent_job_id=job.id,
+                check_id="missing-csp",
+                title="Missing Content-Security-Policy",
+                severity="Medium",
+                owasp_2025_category="A02 Security Misconfiguration",
+                cwe_id="CWE-693",
+                cvss_vector="AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+                cvss_score=5.0,
+                affected_endpoints=[endpoint],
+                plain_language_summary="Missing CSP header allows XSS to be more impactful.",
+                technical_description="technical",
+                remediation="Add a Content-Security-Policy header.",
+                retest_status="open",
+            )
+            session.add(finding)
+            findings.append(finding)
+        await session.commit()
+        for finding in findings:
+            await session.refresh(finding)
+        return findings
+
+
+async def test_available_findings_and_auto_seed_group_by_check_id_not_one_row_per_endpoint(vgs_client):
+    """Regression test for the user-reported '6400 vulns' report bloat:
+    a single vulnerability class confirmed on many endpoints (the normal
+    shape of a real scan — see header_config.py/injection.py, one Finding
+    row per endpoint) must collapse into ONE picker entry / ONE
+    auto-seeded report vulnerability, with every endpoint folded into
+    affected_endpoints, not one row per endpoint."""
+    client, db_adapter = vgs_client
+    _org, _user, version, headers = await _create_org_admin(db_adapter)
+
+    endpoints = [f"http://site.test/page{i}" for i in range(50)]
+    instances = await _make_findings_sharing_check_id(db_adapter, version.id, endpoints)
+
+    available = await client.get(f"/versions/{version.id}/vgs-report-draft/available-findings", headers=headers)
+    assert available.status_code == 200, available.text
+    payload = available.json()
+    assert len(payload) == 1
+    assert payload[0]["finding"]["title"] == "Missing Content-Security-Policy"
+    assert sorted(payload[0]["finding"]["affected_endpoints"]) == sorted(endpoints)
+
+    # Opening the picker auto-seeds ONE report vulnerability, not 50.
+    seeded = await client.get(f"/versions/{version.id}/vgs-report-draft/vulnerabilities", headers=headers)
+    assert seeded.status_code == 200
+    body = seeded.json()
+    assert len(body) == 1
+    assert body[0]["title"] == "Missing Content-Security-Policy"
+    assert body[0]["source_finding_id"] in [str(f.id) for f in instances]
+    # The full endpoint list is preserved in the description, just not as
+    # separate report-vulnerability rows.
+    assert "Affected endpoints (50)" in body[0]["description"]
+
+    # The picker now flags it as already added.
+    available_again = await client.get(
+        f"/versions/{version.id}/vgs-report-draft/available-findings", headers=headers
+    )
+    assert available_again.json()[0]["already_added"] is True
+
+
 async def test_add_from_finding_rejects_a_finding_from_another_version(vgs_client):
     client, db_adapter = vgs_client
     _org, _user, version, headers = await _create_org_admin(db_adapter)
