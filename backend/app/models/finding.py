@@ -15,8 +15,8 @@ RETEST_STATUSES = ("open", "fixed", "risk_accepted", "false_positive_after_revie
 class Finding(Base):
     __tablename__ = "findings"
 
-    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scan_runs.id"))
-    agent_job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agent_jobs.id"))
+    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scan_runs.id", ondelete="CASCADE"))
+    agent_job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agent_jobs.id", ondelete="CASCADE"))
     check_id: Mapped[str] = mapped_column(String(100))
 
     title: Mapped[str] = mapped_column(String(255))
@@ -43,7 +43,7 @@ class Finding(Base):
 class Evidence(Base):
     __tablename__ = "evidence"
 
-    finding_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("findings.id"))
+    finding_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("findings.id", ondelete="CASCADE"))
     request_raw: Mapped[str] = mapped_column(Text)
     response_raw: Mapped[str] = mapped_column(Text)
     # Populated by Phase 5's Playwright evidence-capture subsystem; always

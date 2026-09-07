@@ -16,7 +16,7 @@ class FindingTicket(Base):
 
     __tablename__ = "finding_tickets"
 
-    finding_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("findings.id"))
+    finding_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("findings.id", ondelete="CASCADE"))
     ticketing_config_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ticketing_configs.id"))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     external_key: Mapped[str] = mapped_column(String(50))

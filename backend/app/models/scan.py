@@ -7,7 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
-SCAN_RUN_STATUSES = ("pending", "running", "completed", "failed")
+SCAN_RUN_STATUSES = ("pending", "running", "completed", "failed", "cancelled")
 # "skipped" (§10.5): the §2 budget guardrail stopped this agent before it
 # ran, not a failure — see app/ai/budget.py.
 AGENT_JOB_STATUSES = ("pending", "running", "completed", "failed", "skipped")
@@ -42,7 +42,7 @@ class ScanRun(Base):
 class AgentJob(Base):
     __tablename__ = "agent_jobs"
 
-    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scan_runs.id"))
+    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scan_runs.id", ondelete="CASCADE"))
     agent_type: Mapped[str] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(16), default="pending")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -18,7 +18,7 @@ class AttackChain(Base):
 
     __tablename__ = "attack_chains"
 
-    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scan_runs.id"))
+    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scan_runs.id", ondelete="CASCADE"))
     title: Mapped[str] = mapped_column(String(255))
     severity: Mapped[str] = mapped_column(String(16))
     # Ordered list of Finding UUIDs (as strings) this chain links, in the
@@ -44,7 +44,7 @@ class AttackChainEvidence(Base):
 
     __tablename__ = "attack_chain_evidence"
 
-    attack_chain_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("attack_chains.id"))
+    attack_chain_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("attack_chains.id", ondelete="CASCADE"))
     request_raw: Mapped[str] = mapped_column(Text)
     response_raw: Mapped[str] = mapped_column(Text)
     screenshot_refs: Mapped[list] = mapped_column(JSON, default=list)

@@ -422,3 +422,74 @@ async def test_full_scan_flow_completes_and_produces_report(client, fixture_site
     traffic = await client.get(f"/versions/{version_id}/traffic", headers=admin["headers"])
     agent_traffic = [t for t in traffic.json() if t["source"] == "agent"]
     assert len(agent_traffic) > 0
+
+
+async def test_cancel_on_an_already_completed_scan_is_rejected(client, fixture_site):
+    host, port = fixture_site
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+    await _authorize_and_target(client, admin["headers"], version_id, host, port)
+
+    created = await client.post(f"/versions/{version_id}/scan-runs", headers=admin["headers"])
+    scan_run_id = created.json()["id"]
+    # Same ASGITransport guarantee as test_full_scan_flow_completes_and_produces_report:
+    # the scan has already finished by the time the POST above returns.
+
+    cancel = await client.post(f"/scan-runs/{scan_run_id}/cancel", headers=admin["headers"])
+    assert cancel.status_code == 409
+
+
+async def test_delete_completed_scan_cascades_its_findings(client, fixture_site):
+    host, port = fixture_site
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+    await _authorize_and_target(client, admin["headers"], version_id, host, port)
+
+    created = await client.post(f"/versions/{version_id}/scan-runs", headers=admin["headers"])
+    scan_run_id = created.json()["id"]
+
+    delete = await client.delete(f"/scan-runs/{scan_run_id}", headers=admin["headers"])
+    assert delete.status_code == 204
+
+    detail = await client.get(f"/scan-runs/{scan_run_id}", headers=admin["headers"])
+    assert detail.status_code == 404
+
+    remaining = await client.get(f"/versions/{version_id}/scan-runs", headers=admin["headers"])
+    assert scan_run_id not in {s["id"] for s in remaining.json()}
+
+
+async def test_delete_a_running_scan_is_blocked_until_cancelled(client, fixture_site, db_adapter):
+    # ASGITransport always runs the scan to completion synchronously, so a
+    # genuinely in-flight "running" row is simulated directly rather than
+    # raced against — this is exercising delete_scan_run's own guard, not
+    # the background execution itself.
+    import uuid as uuid_module
+
+    from app.models.scan import ScanRun
+    from tests.conftest import session_scope
+
+    host, port = fixture_site
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+    await _authorize_and_target(client, admin["headers"], version_id, host, port)
+
+    async with session_scope(db_adapter) as session:
+        scan_run = ScanRun(
+            version_id=uuid_module.UUID(version_id),
+            status="running",
+            requested_by=uuid_module.uuid4(),
+        )
+        session.add(scan_run)
+        await session.commit()
+        await session.refresh(scan_run)
+        scan_run_id = str(scan_run.id)
+
+    delete = await client.delete(f"/scan-runs/{scan_run_id}", headers=admin["headers"])
+    assert delete.status_code == 409
+
+    cancel = await client.post(f"/scan-runs/{scan_run_id}/cancel", headers=admin["headers"])
+    assert cancel.status_code == 200
+    assert cancel.json()["status"] == "cancelled"
+
+    delete_again = await client.delete(f"/scan-runs/{scan_run_id}", headers=admin["headers"])
+    assert delete_again.status_code == 204

@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
@@ -8,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.agents import task_registry
 from app.agents.retest import _match_key, execute_retest
 from app.agents.runner import execute_scan_run
 from app.ai.budget import BudgetGuard
@@ -44,6 +46,28 @@ async def _require_authorized_version(session: AsyncSession, version_id: uuid.UU
             "requires at least one before any agent can run against its targets.",
         )
     return version
+
+
+async def _run_scan_cancellable(scan_run_id: uuid.UUID) -> None:
+    # Registers *this* task (whichever one BackgroundTasks is actually
+    # awaiting it in — real Starlette/Uvicorn runs it inside the same
+    # task that handled the request; httpx's ASGITransport under test
+    # awaits it directly too, deterministically before the POST call
+    # returns) so app.agents.task_registry's cancel() can reach it. A
+    # plain asyncio.create_task() instead of going through BackgroundTasks
+    # was tried and reverted — it broke exactly that "already finished by
+    # the time the POST returns" guarantee several tests rely on.
+    task = asyncio.current_task()
+    if task is not None:
+        task_registry.register(scan_run_id, task)
+    await execute_scan_run(scan_run_id)
+
+
+async def _run_retest_cancellable(scan_run_id: uuid.UUID, prior_scan_run_id: uuid.UUID) -> None:
+    task = asyncio.current_task()
+    if task is not None:
+        task_registry.register(scan_run_id, task)
+    await execute_retest(scan_run_id, prior_scan_run_id)
 
 
 async def _resolve_ai_provider_config_id(
@@ -85,7 +109,7 @@ async def create_scan_run(
     await session.commit()
     await session.refresh(scan_run)
 
-    background_tasks.add_task(execute_scan_run, scan_run.id)
+    background_tasks.add_task(_run_scan_cancellable, scan_run.id)
     return scan_run
 
 
@@ -135,7 +159,7 @@ async def retest_scan_run(
     await session.commit()
     await session.refresh(scan_run)
 
-    background_tasks.add_task(execute_retest, scan_run.id, prior_scan_run_id)
+    background_tasks.add_task(_run_retest_cancellable, scan_run.id, prior_scan_run_id)
     return scan_run
 
 
@@ -186,6 +210,65 @@ async def get_scan_run(
 ) -> ScanRunDetail:
     scan_run = await get_scan_run_or_404(session, scan_run_id, user.org_id)
     return await _scan_run_detail(session, scan_run)
+
+
+@router.post("/scan-runs/{scan_run_id}/cancel", response_model=ScanRunOut)
+async def cancel_scan_run(
+    scan_run_id: uuid.UUID,
+    user: User = Depends(require_permission("scan", "update")),
+    session: AsyncSession = Depends(get_db_session),
+) -> ScanRun:
+    scan_run = await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    if scan_run.status not in ("pending", "running"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Scan run is already {scan_run.status} — nothing to cancel.",
+        )
+
+    # Best-effort reach into the actual running task (see
+    # app.agents.task_registry) — if the backend restarted since this
+    # scan started, there's no in-process task left to cancel, but the
+    # row itself is still stuck showing "running" and should still be
+    # markable as cancelled directly.
+    task_registry.cancel(scan_run_id)
+    scan_run.status = "cancelled"
+    scan_run.completed_at = datetime.now(timezone.utc)
+    await write_audit_log(
+        session,
+        user=user,
+        action="scan.cancel",
+        resource_type="scan_run",
+        resource_id=scan_run_id,
+    )
+    await session.commit()
+    await session.refresh(scan_run)
+    return scan_run
+
+
+@router.delete("/scan-runs/{scan_run_id}", status_code=204)
+async def delete_scan_run(
+    scan_run_id: uuid.UUID,
+    user: User = Depends(require_permission("scan", "delete")),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+    scan_run = await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    if scan_run.status in ("pending", "running"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Cancel this scan run before deleting it.",
+        )
+    await write_audit_log(
+        session,
+        user=user,
+        action="scan.delete",
+        resource_type="scan_run",
+        resource_id=scan_run_id,
+    )
+    # Every dependent row (agent jobs, findings, evidence, review
+    # candidates, attack chains, ...) cascades at the database level —
+    # see alembic/versions/0018_scan_delete_cascade_and_vgs_finding_link.py.
+    await session.delete(scan_run)
+    await session.commit()
 
 
 async def _list_findings(session: AsyncSession, scan_run_id: uuid.UUID) -> list[Finding]:

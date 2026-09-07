@@ -15,8 +15,8 @@ REVIEW_CANDIDATE_STATUSES = ("pending", "promoted", "dismissed")
 class ReviewCandidate(Base):
     __tablename__ = "review_candidates"
 
-    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scan_runs.id"))
-    agent_job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agent_jobs.id"))
+    scan_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scan_runs.id", ondelete="CASCADE"))
+    agent_job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agent_jobs.id", ondelete="CASCADE"))
     check_type: Mapped[str] = mapped_column(String(100))
     title: Mapped[str] = mapped_column(String(255))
     severity_guess: Mapped[str] = mapped_column(String(16))

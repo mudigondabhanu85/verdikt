@@ -152,6 +152,14 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
             )
 
             scan_run.status = "completed"
+        except asyncio.CancelledError:
+            # A user-requested cancel (app.api.routes.scans' cancel
+            # endpoint, via app.agents.task_registry) reaches this task
+            # as a real asyncio cancellation at its next await point —
+            # record it as a distinct outcome, not a failure, then
+            # re-raise: never silently swallow CancelledError.
+            scan_run.status = "cancelled"
+            raise
         except Exception as exc:  # noqa: BLE001 — surfaced on the ScanRun, not swallowed
             scan_run.status = "failed"
             scan_run.error = str(exc)

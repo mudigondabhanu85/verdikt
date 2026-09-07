@@ -22,7 +22,7 @@ RETEST_RESULTS = ("still_vulnerable", "fixed", "not_supported", "error")
 class RetestJob(Base):
     __tablename__ = "retest_jobs"
 
-    finding_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("findings.id"))
+    finding_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("findings.id", ondelete="CASCADE"))
     requested_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     status: Mapped[str] = mapped_column(String(20), default="pending")
     result: Mapped[str | None] = mapped_column(String(30), nullable=True)

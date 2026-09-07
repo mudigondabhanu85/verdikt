@@ -332,6 +332,8 @@ export const api = {
     findings: (scanRunId: string) => request<FindingOut[]>(`/scan-runs/${scanRunId}/findings`),
     diff: (laterScanRunId: string, earlierScanRunId: string) =>
       request<ScanRunDiffOut>(`/scan-runs/${laterScanRunId}/diff/${earlierScanRunId}`),
+    cancel: (scanRunId: string) => request<ScanRunOut>(`/scan-runs/${scanRunId}/cancel`, { method: 'POST' }),
+    delete: (scanRunId: string) => request<void>(`/scan-runs/${scanRunId}`, { method: 'DELETE' }),
   },
 
   retestJobs: {
