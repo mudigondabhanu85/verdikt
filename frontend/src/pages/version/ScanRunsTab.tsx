@@ -5,7 +5,7 @@ import { api } from '../../api/client'
 import { useAuth, canWrite } from '../../auth/AuthContext'
 import { StatusBadge } from '../../components/Badges'
 
-export function ScanRunsTab({ versionId, isAuthorized }: { versionId: string; isAuthorized: boolean }) {
+export function ScanRunsTab({ versionId }: { versionId: string }) {
   const { user } = useAuth()
   const queryClient = useQueryClient()
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
@@ -43,17 +43,11 @@ export function ScanRunsTab({ versionId, isAuthorized }: { versionId: string; is
 
   return (
     <div>
-      {!isAuthorized && (
-        <p className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          This version has no authorization record yet — add one under the Authorization tab before starting a scan.
-        </p>
-      )}
-
       {canWrite(user?.role) && (
         <div className="mb-6">
           <button
             onClick={() => startMutation.mutate()}
-            disabled={!isAuthorized || startMutation.isPending}
+            disabled={startMutation.isPending}
             className="rounded bg-purple-700 px-4 py-2 text-sm font-medium text-white hover:bg-purple-800 disabled:opacity-50"
           >
             {startMutation.isPending ? 'Starting…' : 'Start new scan'}

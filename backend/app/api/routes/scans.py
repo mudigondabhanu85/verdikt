@@ -21,7 +21,6 @@ from app.models.ai_provider_config import AIProviderConfig
 from app.models.attack_chain import AttackChain
 from app.models.finding import Finding
 from app.models.organization import User
-from app.models.project import Version
 from app.models.scan import AgentJob, ScanRun
 from app.models.target import Target
 from app.reporting.csv_report import render_csv_report
@@ -35,18 +34,6 @@ from app.schemas.finding import FindingOut
 from app.schemas.scan import AgentJobOut, ScanRunCreate, ScanRunDetail, ScanRunDiffOut, ScanRunOut
 
 router = APIRouter(tags=["scans"])
-
-
-async def _require_authorized_version(session: AsyncSession, version_id: uuid.UUID, org_id: uuid.UUID) -> Version:
-    version = await get_version_or_404(session, version_id, org_id)
-    await session.refresh(version, attribute_names=["authorization_records"])
-    if not version.is_authorized:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "This Version has no authorization record — the §1 authorization gate "
-            "requires at least one before any agent can run against its targets.",
-        )
-    return version
 
 
 async def _require_at_least_one_target(session: AsyncSession, version_id: uuid.UUID) -> None:
@@ -103,7 +90,7 @@ async def create_scan_run(
     user: User = Depends(require_permission("scan", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScanRun:
-    await _require_authorized_version(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user.org_id)
     await _require_at_least_one_target(session, version_id)
     ai_provider_config_id = await _resolve_ai_provider_config_id(session, user.org_id, payload)
 
@@ -149,7 +136,7 @@ async def retest_scan_run(
     "false_positive_after_review" are left alone — a rescan doesn't get
     to silently override a human decision. See app.agents.retest.
     """
-    await _require_authorized_version(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user.org_id)
     await _require_at_least_one_target(session, version_id)
     prior = await get_scan_run_or_404(session, prior_scan_run_id, user.org_id)
     if prior.version_id != version_id:

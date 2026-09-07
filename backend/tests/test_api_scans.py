@@ -261,12 +261,21 @@ async def test_retest_rejects_prior_scan_run_from_another_version(client, mutabl
     assert retest.status_code == 404
 
 
-async def test_scan_run_rejected_without_authorization(client):
+async def test_scan_run_no_longer_requires_authorization(client, fixture_site):
+    """The §1 authorization gate was removed from scan creation per user
+    request — a Version with a Target but no authorization record must
+    be allowed to scan (only the target guardrail below still applies)."""
+    host, port = fixture_site
     admin = await register_org_admin(client)
     _, version_id = await create_project_and_version(client, admin["headers"])
+    await client.post(
+        f"/versions/{version_id}/targets",
+        json={"host": host, "port": port, "base_url": f"http://{host}:{port}/"},
+        headers=admin["headers"],
+    )
 
     resp = await client.post(f"/versions/{version_id}/scan-runs", headers=admin["headers"])
-    assert resp.status_code == 403
+    assert resp.status_code == 201, resp.text
 
 
 async def test_scan_run_rejected_without_a_target(client):

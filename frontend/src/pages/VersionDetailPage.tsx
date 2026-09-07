@@ -41,7 +41,7 @@ export function VersionDetailPage() {
 
       <Tabs
         tabs={[
-          { key: 'scan-runs', label: 'Scan Runs', content: <ScanRunsTab versionId={versionId} isAuthorized={!!version?.is_authorized} /> },
+          { key: 'scan-runs', label: 'Scan Runs', content: <ScanRunsTab versionId={versionId} /> },
           { key: 'scope', label: 'Scope', content: <ScopeTab versionId={versionId} /> },
           { key: 'targets', label: 'Targets', content: <TargetsTab versionId={versionId} /> },
           { key: 'credentials', label: 'Credentials', content: <CredentialsTab versionId={versionId} /> },
