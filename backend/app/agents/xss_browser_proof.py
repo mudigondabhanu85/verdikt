@@ -33,6 +33,12 @@ from app.agents.probing import ProbeTarget, build_request
 class BrowserProofResult:
     executed: bool
     screenshot_png: bytes | None
+    # Which of _xss_execution_payloads actually executed — None when
+    # executed=False. Callers cite this in a Finding's reproduction
+    # steps instead of assuming the plain <script> variant, since a
+    # filter that strips "script" (DVWA Medium/High, and plenty of real
+    # apps) is exactly the case the second payload exists to survive.
+    payload: str | None = None
 
 
 def _proof_marker() -> str:
@@ -57,7 +63,7 @@ def visible_proof_banner_js(marker: str) -> str:
     Built with plain createElement/textContent, not innerHTML, and using
     only double quotes throughout — this same string also gets embedded
     inside a single-quoted `onerror='...'` HTML attribute value
-    elsewhere (_dom_xss_payloads below), and a stray single quote here
+    elsewhere (_xss_execution_payloads below), and a stray single quote here
     would prematurely terminate that attribute and corrupt the payload.
     """
     return (
@@ -87,24 +93,41 @@ def visible_proof_banner_js(marker: str) -> str:
     )
 
 
-def _payload_for(marker: str) -> str:
-    return f'<script>window["{marker}"]=true;{visible_proof_banner_js(marker)}</script>'
+# Paired with the real, banner-JS-carrying payloads below purely for
+# reporting: a Finding's reproduction steps should read as a normal
+# proof-of-concept an analyst can act on, not our internal window-flag +
+# on-page-banner plumbing verbatim.
+_DISPLAY_PAYLOADS = (
+    "<script>alert(1)</script>",
+    "<img src=x onerror=alert(1)>",
+)
 
 
-# DOM-based XSS payloads, tried via the URL *fragment* (app.agents.dom_xss)
-# — the fragment is never sent to the server (only client-side JS ever
-# sees it via location.hash), so execution here is definitive proof of a
-# purely client-side sink (e.g. `el.innerHTML = location.hash`), distinct
-# from the server-reflection case attempt_browser_proof above covers. Two
-# variants since a <script> tag inserted via innerHTML does NOT execute
-# per the HTML spec, but an event-handler-bearing element (onerror) does
-# — different sinks call for different proof payloads.
-def _dom_xss_payloads(marker: str) -> list[str]:
+# Shared by both proof functions below. Two variants because a naive
+# <script> tag is exactly what the weakest real-world filters strip —
+# DVWA Medium's reflected-XSS filter is a literal `str_replace('<script>',
+# '', $input)`, and DVWA High's is a regex matching "s.c.r.i.p.t" — both
+# defeat a plain <script> payload while leaving the underlying reflection
+# genuinely exploitable via a payload that never contains that substring.
+# A real, live-found gap: DVWA Medium's reflected XSS was confirmed
+# reflected (raw HTTP probe) but never browser-execution-confirmed, so it
+# fell back to a ReviewCandidate every time even though this second
+# payload proves it's a real, auto-confirmable Finding. Also used by
+# attempt_dom_xss_fragment_proof below, since a <script> tag inserted via
+# innerHTML does NOT execute per the HTML spec but an event-handler-
+# bearing element (onerror) does — different sinks, same two payloads
+# happen to cover both.
+#
+# Returns (real_payload, display_payload) pairs — real_payload is what's
+# actually sent/navigated to (carries the proof banner + window flag);
+# display_payload is what a Finding's write-up should cite instead.
+def _xss_execution_payloads(marker: str) -> list[tuple[str, str]]:
     banner_js = visible_proof_banner_js(marker)
-    return [
+    real_payloads = (
         f'<script>window["{marker}"]=true;{banner_js}</script>',
         f'<img src=x onerror=\'window["{marker}"]=true;{banner_js}\'>',
-    ]
+    )
+    return list(zip(real_payloads, _DISPLAY_PAYLOADS))
 
 
 _NAVIGATION_TIMEOUT_MS = 10_000
@@ -131,36 +154,43 @@ async def attempt_browser_proof(
     screenshot.
     """
     marker = _proof_marker()
-    payload = _payload_for(marker)
-    url, _body, _content_type = build_request(target, payload)
 
     executed = False
     screenshot = None
+    winning_payload: str | None = None
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=headless)
         context = await browser.new_context()
-        if session is not None and session.cookies:
-            await context.add_cookies(
-                [{"name": name, "value": value, "url": url} for name, value in session.cookies.items()]
-            )
         page = await context.new_page()
         if session is not None and session.bearer_token:
             await page.set_extra_http_headers({"Authorization": f"Bearer {session.bearer_token}"})
         try:
-            # "networkidle" (the Playwright-recommended default) never
-            # fires against a real single-page app that keeps a
-            # persistent WebSocket connection open (socket.io, live
-            # reload, etc.) or polls in the background — confirmed via
-            # §14 live validation against OWASP Juice Shop, where this
-            # combination made every navigation eat the full default
-            # 30s timeout. "load" waits for the page's own resources
-            # (including deferred/module <script> tags) without waiting
-            # for *ongoing* network activity to quiesce, and the
-            # explicit timeout keeps a single slow/unreachable page from
-            # ever stalling the whole scan.
-            await page.goto(url, wait_until="load", timeout=_NAVIGATION_TIMEOUT_MS)
-            executed = bool(await page.evaluate(f'window["{marker}"] === true'))
+            for payload, display_payload in _xss_execution_payloads(marker):
+                url, _body, _content_type = build_request(target, payload)
+                if session is not None and session.cookies:
+                    await context.add_cookies(
+                        [
+                            {"name": name, "value": value, "url": url}
+                            for name, value in session.cookies.items()
+                        ]
+                    )
+                # "networkidle" (the Playwright-recommended default) never
+                # fires against a real single-page app that keeps a
+                # persistent WebSocket connection open (socket.io, live
+                # reload, etc.) or polls in the background — confirmed via
+                # §14 live validation against OWASP Juice Shop, where this
+                # combination made every navigation eat the full default
+                # 30s timeout. "load" waits for the page's own resources
+                # (including deferred/module <script> tags) without waiting
+                # for *ongoing* network activity to quiesce, and the
+                # explicit timeout keeps a single slow/unreachable page from
+                # ever stalling the whole scan.
+                await page.goto(url, wait_until="load", timeout=_NAVIGATION_TIMEOUT_MS)
+                executed = bool(await page.evaluate(f'window["{marker}"] === true'))
+                if executed:
+                    winning_payload = display_payload
+                    break
             screenshot = await page.screenshot(full_page=True) if executed else None
         except PlaywrightError:
             # Target unreachable from a real browser (DNS, TLS, timeout,
@@ -170,10 +200,11 @@ async def attempt_browser_proof(
             # The caller falls back to queuing a ReviewCandidate instead.
             executed = False
             screenshot = None
+            winning_payload = None
         finally:
             await browser.close()
 
-    return BrowserProofResult(executed=executed, screenshot_png=screenshot)
+    return BrowserProofResult(executed=executed, screenshot_png=screenshot, payload=winning_payload)
 
 
 async def attempt_dom_xss_fragment_proof(
@@ -192,6 +223,7 @@ async def attempt_dom_xss_fragment_proof(
     marker = _proof_marker()
     executed = False
     screenshot = None
+    winning_payload: str | None = None
 
     try:
         async with async_playwright() as playwright:
@@ -204,7 +236,7 @@ async def attempt_dom_xss_fragment_proof(
             page = await context.new_page()
             if session is not None and session.bearer_token:
                 await page.set_extra_http_headers({"Authorization": f"Bearer {session.bearer_token}"})
-            for payload in _dom_xss_payloads(marker):
+            for payload, display_payload in _xss_execution_payloads(marker):
                 # A navigation that changes only the fragment is treated
                 # by the browser as same-document (fires "hashchange",
                 # no reload) — the page's own <script> block, which is
@@ -215,6 +247,7 @@ async def attempt_dom_xss_fragment_proof(
                 await page.goto(f"{url}#{payload}", wait_until="load", timeout=_NAVIGATION_TIMEOUT_MS)
                 executed = bool(await page.evaluate(f'window["{marker}"] === true'))
                 if executed:
+                    winning_payload = display_payload
                     break
             screenshot = await page.screenshot(full_page=True) if executed else None
             await browser.close()
@@ -224,4 +257,4 @@ async def attempt_dom_xss_fragment_proof(
         # obtained", not a vulnerability claim and not a crash.
         return BrowserProofResult(executed=False, screenshot_png=None)
 
-    return BrowserProofResult(executed=executed, screenshot_png=screenshot)
+    return BrowserProofResult(executed=executed, screenshot_png=screenshot, payload=winning_payload)

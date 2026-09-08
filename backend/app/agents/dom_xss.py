@@ -100,7 +100,7 @@ class DomXssAgent:
                 "document.write, or eval) without sanitization."
             ),
             steps_to_reproduce=[
-                f"1. Open {url}#<img src=x onerror=alert(1)> in a browser — the fragment is "
+                f"1. Open {url}#{result.payload} in a browser — the fragment is "
                 "never transmitted to the server, so no server-side reflection is needed.",
                 "2. Observe the injected script executes — verified here by an automated "
                 "headless-browser check, with a screenshot captured as evidence.",

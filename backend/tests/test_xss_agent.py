@@ -246,6 +246,96 @@ async def test_xss_agent_auto_confirms_finding_with_real_browser_proof(db_adapte
         thread.join(timeout=2)
 
 
+class _ScriptStrippingFixtureHandler(BaseHTTPRequestHandler):
+    """Mirrors DVWA Medium's real reflected-XSS filter exactly (confirmed
+    live this session): a literal, case-sensitive
+    str_replace('<script>', '', $input) — DVWA High's is a
+    "s.c.r.i.p.t" regex, different mechanism, same effect. Detection
+    (_probe_reflected_xss's custom-tag marker) is unaffected either way,
+    but a <script>-only browser-proof payload gets silently defeated
+    even though the underlying reflection is genuinely exploitable via
+    an event-handler payload with no "script" substring at all.
+    """
+
+    def do_GET(self):  # noqa: N802
+        parsed = urlsplit(self.path)
+        term = parse_qs(parsed.query).get("q", [""])[0]
+        term = term.replace("<script>", "")
+        if parsed.path == "/search":
+            body = f"<p>Results for: {term}</p>".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):  # noqa: A002
+        pass
+
+
+async def test_xss_agent_auto_confirms_finding_when_script_tag_stripped_but_event_handler_survives(
+    db_adapter,
+):
+    """Regression test for the real gap this session found live against
+    DVWA Medium/High: their filters strip a literal <script> tag but
+    never touch an event-handler-based payload. Before this fix,
+    attempt_browser_proof only ever tried the <script> variant, so a
+    genuinely exploitable reflection like this always fell back to a
+    ReviewCandidate instead of an auto-confirmed Finding."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _ScriptStrippingFixtureHandler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        async with session_scope(db_adapter) as session:
+            provider = ScriptedAIProviderAdapter.from_responses(
+                '{"vulnerable": true, "confidence": "high", "reasoning": "unescaped reflection in HTML body"}'
+            )
+            scan_run = ScanRun(version_id=uuid.uuid4(), status="running", requested_by=uuid.uuid4())
+            session.add(scan_run)
+            await session.commit()
+            await session.refresh(scan_run)
+
+            client = ScopedHttpClient(
+                version_id=uuid.uuid4(),
+                scope_entries=[ScopeEntry(host=host, port=port, in_scope=True)],
+                db_session=session,
+            )
+            guard = BudgetGuard(scan_run, session, provider)
+            agent = XSSAgent(
+                client,
+                scan_run_id=scan_run.id,
+                agent_job_id=uuid.uuid4(),
+                db_session=session,
+                budget_guard=guard,
+                ai_model="fake-model",
+            )
+
+            parameters = [
+                DiscoveredParameter(url=f"http://{host}:{port}/search?q=x", method="GET", name="q")
+            ]
+            candidates = await agent.run(parameters, [])
+
+            # The <script> variant was stripped, but the img/onerror
+            # fallback survived and executed — straight to a Finding.
+            assert candidates == []
+            assert len(agent.findings) == 1
+            finding = agent.findings[0]
+            assert finding.confirmation_status == "ai_confirmed"
+            assert "onerror" in finding.technical_description
+
+            stored_candidates = (await session.execute(select(ReviewCandidate))).scalars().all()
+            assert stored_candidates == []
+
+            await client.aclose()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
 async def test_browser_proof_reaches_login_gated_page_with_a_session(db_adapter):
     """The real bug this closes: attempt_browser_proof launched a fresh,
     cookie-less Playwright context, so a login-gated reflected-XSS page

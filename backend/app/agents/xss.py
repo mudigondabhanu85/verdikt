@@ -211,14 +211,14 @@ class XSSAgent:
             technical_description=(
                 f"The parameter {reproduced.target.param_name!r} on "
                 f"{reproduced.target.url} is reflected unescaped into the HTML "
-                f"response. A headless browser loaded a request containing an "
-                f"injected <script> payload and the payload executed, which is "
-                f"direct proof of exploitability rather than just string reflection. "
+                f"response. A headless browser loaded a request containing the "
+                f"payload {proof.payload!r} and it executed, which is direct proof "
+                f"of exploitability rather than just string reflection. "
                 f"LLM triage reasoning: {verdict.reasoning}"
             ),
             steps_to_reproduce=[
                 f"1. Send an HTTP GET request to {reproduced.target.url} with "
-                f"{reproduced.target.param_name}=<script>alert(1)</script> "
+                f"{reproduced.target.param_name}={proof.payload} "
                 "(or open it directly in a browser).",
                 "2. The injected script executes on page load — verified here by an "
                 "automated headless-browser check, with a screenshot captured as "
