@@ -1,0 +1,9 @@
+flowchart LR
+    A["Deterministic probe<br/>(HTTP-level signal)"] -->|"no signal"| X1["discarded"]
+    A -->|"signal found"| B["LLM triage<br/>(classify: vulnerable?)"]
+    B -->|"not vulnerable"| X2["discarded"]
+    B -->|"vulnerable"| C["Deterministic<br/>re-execution"]
+    C -->|"doesn't reproduce"| X3["discarded"]
+    C -->|"reproduces"| D{"Can prove real-world<br/>impact automatically?<br/>(browser execution,<br/>OOB callback, etc.)"}
+    D -->|"yes"| E["Finding<br/>(confirmed, with evidence)"]
+    D -->|"no — needs human judgment"| F["ReviewCandidate<br/>(pending promotion)"]

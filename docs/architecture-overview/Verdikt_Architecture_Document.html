@@ -1,0 +1,1482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verdikt — Architecture &amp; Product Overview</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1c1e21;
+    --muted: #5b6270;
+    --accent: #6d28d9;
+    --accent-soft: #f3eefb;
+    --border: #e3e5e9;
+    --code-bg: #f5f5f7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+  }
+  .layout {
+    display: flex;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  nav.toc {
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    width: 260px;
+    flex-shrink: 0;
+    padding: 32px 16px 32px 24px;
+    height: 100vh;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    font-size: 13px;
+  }
+  nav.toc a {
+    color: var(--muted);
+    text-decoration: none;
+    display: block;
+    padding: 3px 0;
+  }
+  nav.toc a:hover { color: var(--accent); }
+  nav.toc ul { list-style: none; padding-left: 14px; margin: 0; }
+  nav.toc > ul { padding-left: 0; }
+  main {
+    flex: 1;
+    min-width: 0;
+    padding: 48px 56px 96px;
+  }
+  h1, h2, h3, h4 {
+    font-weight: 700;
+    line-height: 1.25;
+    scroll-margin-top: 16px;
+  }
+  h1 { font-size: 34px; margin: 0 0 6px; }
+  h2 {
+    font-size: 24px;
+    margin: 48px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--accent-soft);
+    color: var(--accent);
+  }
+  h3 { font-size: 18px; margin: 28px 0 10px; }
+  p { margin: 12px 0; }
+  blockquote {
+    margin: 16px 0;
+    padding: 10px 20px;
+    background: var(--accent-soft);
+    border-left: 4px solid var(--accent);
+    border-radius: 4px;
+  }
+  code {
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; }
+  pre.mermaid {
+    background: #ffffff;
+    text-align: center;
+    overflow-x: auto;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 16px 0;
+    font-size: 14px;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--accent-soft); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+  .cover {
+    padding: 64px 0 32px;
+  }
+  .cover .kicker {
+    color: var(--accent);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 13px;
+  }
+  .cover .sub {
+    color: var(--muted);
+    font-size: 18px;
+    margin-top: 4px;
+  }
+  @media (max-width: 900px) {
+    nav.toc { display: none; }
+    main { padding: 24px; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav class="toc">
+    <strong style="color:var(--fg);">Contents</strong>
+    <div class="toc">
+<ul>
+<li><a href="#verdikt">Verdikt</a><ul>
+<li><a href="#ai-multi-agent-web-application-api-security-testing-platform">AI Multi-Agent Web Application &amp; API Security Testing Platform</a></li>
+<li><a href="#1-executive-summary">1. Executive Summary</a></li>
+<li><a href="#2-the-problem">2. The Problem</a><ul>
+<li><a href="#21-smart-scan-whats-actually-built-vs-originally-envisioned">2.1 Smart Scan — what's actually built vs. originally envisioned</a></li>
+</ul>
+</li>
+<li><a href="#3-high-level-architecture">3. High-Level Architecture</a></li>
+<li><a href="#4-core-data-model">4. Core Data Model</a></li>
+<li><a href="#5-the-multi-agent-scanning-engine">5. The Multi-Agent Scanning Engine</a><ul>
+<li><a href="#51-scan-lifecycle-the-real-verified-24-node-dag">5.1 Scan lifecycle — the real, verified 24-node DAG</a></li>
+<li><a href="#52-whats-in-appagents-beyond-the-24-graph-nodes">5.2 What's in app/agents/ beyond the 24 graph nodes</a></li>
+<li><a href="#53-confirmed-only-findings-pipeline">5.3 Confirmed-Only Findings pipeline</a></li>
+<li><a href="#54-a-concrete-hard-won-example-reflected-xss-payload-diversity">5.4 A concrete, hard-won example: reflected XSS payload diversity</a></li>
+</ul>
+</li>
+<li><a href="#6-ai-provider-abstraction-any-llm-configured-once">6. AI Provider Abstraction — Any LLM, Configured Once</a><ul>
+<li><a href="#61-cost-governance-the-real-enforced-number">6.1 Cost governance — the real, enforced number</a></li>
+</ul>
+</li>
+<li><a href="#7-vulnerability-coverage">7. Vulnerability Coverage</a></li>
+<li><a href="#8-retest-rescan-attack-chain-analysis">8. Retest, Rescan &amp; Attack Chain Analysis</a></li>
+<li><a href="#9-reporting">9. Reporting</a></li>
+<li><a href="#10-vgs-integration-two-complementary-modes-both-built">10. VGS Integration — Two Complementary Modes, Both Built</a></li>
+<li><a href="#11-enterprise-hardening">11. Enterprise Hardening</a></li>
+<li><a href="#12-security-model">12. Security Model</a></li>
+<li><a href="#13-deployment">13. Deployment</a></li>
+<li><a href="#14-testing-quality-discipline">14. Testing &amp; Quality Discipline</a></li>
+<li><a href="#15-appendix-full-data-model-reference">15. Appendix — Full Data Model Reference</a></li>
+<li><a href="#16-appendix-full-api-route-reference-28-modules">16. Appendix — Full API Route Reference (28 modules)</a></li>
+<li><a href="#17-appendix-full-check-catalog-34-static-ids-dynamic-ids">17. Appendix — Full Check Catalog (34 static IDs + dynamic IDs)</a></li>
+<li><a href="#18-appendix-spec-vs-reality-the-complete-honest-delta">18. Appendix — Spec vs. Reality: The Complete, Honest Delta</a></li>
+<li><a href="#19-appendix-ai-provider-configuration-reference">19. Appendix — AI Provider &amp; Configuration Reference</a></li>
+<li><a href="#20-appendix-migration-history-24-files-one-linear-chain">20. Appendix — Migration History (24 files, one linear chain)</a></li>
+<li><a href="#21-appendix-rbac-matrix">21. Appendix — RBAC Matrix</a></li>
+<li><a href="#22-appendix-frontend-route-page-map">22. Appendix — Frontend Route &amp; Page Map</a></li>
+<li><a href="#23-whats-next">23. What's Next</a></li>
+</ul>
+</li>
+</ul>
+</div>
+
+  </nav>
+  <main>
+    <div class="cover">
+      <div class="kicker">Architecture &amp; Product Overview</div>
+    </div>
+    <h1 id="verdikt">Verdikt</h1>
+<h2 id="ai-multi-agent-web-application-api-security-testing-platform">AI Multi-Agent Web Application &amp; API Security Testing Platform</h2>
+<p><strong>Architecture &amp; Product Overview — Full Technical Reference</strong></p>
+<p><em>Every fact in this document, including the reference appendices, was verified
+directly against the codebase at the time of writing (not reconstructed from
+memory or prior documentation). Section 18 documents where the current build
+diverges from the original design specification — honestly, both where the
+build fell short and where it went further.</em></p>
+<hr />
+<h2 id="1-executive-summary">1. Executive Summary</h2>
+<p>Verdikt is an AI-assisted, multi-agent DAST (Dynamic Application Security
+Testing) platform that performs manual-assessment-quality web and API
+penetration testing at automated speed. A single scan run executes a
+<strong>24-node LangGraph DAG</strong> covering the OWASP Top 10 (2025) and the full
+PortSwigger Web Security Academy topic list, followed by a 25th
+cross-cutting attack-chain-composition step — each detection agent combining
+deterministic, re-executable HTTP-level probing with LLM-assisted triage and
+adversarial validation. The result is a report an experienced penetration
+tester would recognize as their own work: confirmed findings only, real
+evidence (request/response pairs, browser screenshots), plain-language and
+technical write-ups side by side, and a remediation path for every issue.</p>
+<p>The system is explicitly designed so <strong>no single AI vendor is load-
+bearing</strong>. Every LLM-dependent agent talks to a pluggable <code>AIProviderAdapter</code>
+interface — Claude, OpenAI, Gemini, Grok, or any self-hosted/in-house model
+that speaks the OpenAI chat-completions protocol. Swapping providers is a
+configuration action in the UI, not a code change.</p>
+<p><strong>Current state, verified against the running codebase:</strong> 41 files under
+<code>app/agents/</code> (24 of them wired into the scan graph, the rest shared
+infrastructure and support modules), 28 API route modules, ~30 persisted
+data models, 9 external integrations, 14 YAML check catalogs (34 statically
+defined check IDs, plus a further dozen dynamically-generated ones), 24
+Alembic migrations, 19 RBAC resources, and a backend test suite of <strong>99
+files / 527 collected tests</strong> — all figures confirmed by direct inspection
+and by running the test collector, not estimated. Full reference tables for
+every one of these are in the appendices (§13–§22).</p>
+<hr />
+<h2 id="2-the-problem">2. The Problem</h2>
+<p>Manual web/API penetration testing is thorough but doesn't scale: a
+competent tester takes days per application, and demand for testing far
+outpaces the supply of qualified testers. Existing DAST scanners scale but
+don't produce trustworthy results — they're notorious for high false-
+positive rates, shallow coverage of business logic and access control
+issues, and reports nobody can act on without re-verifying every line by
+hand.</p>
+<p>Verdikt's design goal (from the original build specification) is concrete
+and measurable:</p>
+<blockquote>
+<p>Scan a mid-size web app (50–150 endpoints, one auth role, one business
+workflow) and produce a report with <strong>zero false positives</strong> and
+<strong>manual-assessment-equivalent finding depth</strong>, in <strong>under a day of
+wall-clock time</strong>, for <strong>under $20 of LLM spend</strong>.</p>
+</blockquote>
+<p>Two architectural decisions follow directly from that goal, and are fully
+built and enforced in the running system today:</p>
+<ol>
+<li><strong>Multi-agent, not one big prompt.</strong> Twenty-four narrow, purpose-built
+   detection agents each own one vulnerability class, run as parallel nodes
+   in a LangGraph DAG, and use the cheapest technique that reliably confirms
+   that class (a deterministic HTTP diff for SQL injection; a real
+   headless-browser execution proof for XSS; a live out-of-band callback for
+   SSRF). This keeps LLM usage focused on judgment calls — triage and
+   adversarial validation — not busywork.</li>
+<li><strong>Confirmed-Only Findings.</strong> Nothing becomes a <code>Finding</code> on a hunch. A
+   candidate must survive deterministic re-execution <em>and</em> an adversarial
+   LLM validation pass that actively tries to argue the finding is a false
+   positive. Anything that survives detection but can't be auto-confirmed
+   becomes a <code>ReviewCandidate</code> for a human to promote or dismiss — never
+   silently discarded, never silently over-claimed.</li>
+</ol>
+<p>A third idea from the original design — <strong>tech-stack fingerprinting to
+narrow the test plan before it runs, for cost savings</strong> — was scoped more
+modestly than originally envisioned. See §2.1.</p>
+<h3 id="21-smart-scan-whats-actually-built-vs-originally-envisioned">2.1 Smart Scan — what's actually built vs. originally envisioned</h3>
+<p><code>fingerprint.py</code> runs a real, deterministic tech-stack fingerprint inline
+inside the <code>recon</code> node (header/cookie/HTML-marker/error-signature
+matching, zero extra requests) and the result is persisted and surfaced in
+reports and the API (<code>scan_run.tech_stack_fingerprint</code>). What the original
+design additionally called for — using that fingerprint to skip scheduling
+entire categories of irrelevant checks, described in the spec as "likely
+the single biggest token-savings lever available" — <strong>is not built as
+general graph-level routing</strong>. The 24-node LangGraph DAG has zero
+conditional edges; every node always runs regardless of the detected stack.
+The one narrow exception that <em>is</em> built: SSTI probing inside <code>injection.py</code>
+skips itself when no template-rendering signal was observed during recon.
+This is called out explicitly (not glossed over) because it is the single
+largest gap between the original cost-optimization design and the current
+implementation — see §18 for the complete list of such deltas.</p>
+<hr />
+<h2 id="3-high-level-architecture">3. High-Level Architecture</h2>
+<pre class="mermaid">
+flowchart TB
+    subgraph Client["Browser"]
+        FE["React + TypeScript SPA<br/>(Vite, TanStack Query, Tailwind)"]
+    end
+
+    subgraph Backend["Verdikt Backend — FastAPI (Python)"]
+        API["REST API — 28 route modules<br/>JWT bearer auth, RBAC-enforced"]
+        ORCH["Multi-Agent Orchestrator<br/>(LangGraph, 24-node DAG)"]
+        AIABS["AI Provider Abstraction<br/>Claude / OpenAI / Gemini / Grok / Custom"]
+        RPT["Reporting Engine<br/>HTML / PDF (reportlab) / DOCX / CSV / JSON"]
+        VAULT["Credential Vault<br/>(envelope encryption, pluggable KMS)"]
+    end
+
+    subgraph Data["Persistence"]
+        PG[("PostgreSQL<br/>~30 models")]
+        OBJ[("Object Storage<br/>(screenshots, uploads, letters)")]
+    end
+
+    subgraph External["External Systems"]
+        TARGET["Target Application<br/>(the system under test)"]
+        LLM["LLM Provider<br/>Claude / OpenAI / Gemini / Grok /<br/>Any in-house OpenAI-compatible gateway"]
+        JIRA["Jira"]
+        SLACK["Slack"]
+        TEAMS["Microsoft Teams<br/>(+ conversational bot)"]
+        OUTLOOK["Outlook"]
+        VGS["VGS<br/>(DAST governance tool)"]
+        BURP["Burp Suite Professional"]
+        IDP["SSO: SAML / OIDC"]
+        CMDB["CMDB<br/>(generic REST asset lookup)"]
+        PSWIG["PortSwigger Web<br/>Security Academy"]
+    end
+
+    FE <-->|"HTTPS / JWT"| API
+    API --> ORCH
+    API --> RPT
+    API --> VAULT
+    ORCH --> AIABS
+    AIABS <-->|"chat completions"| LLM
+    ORCH <-->|"scoped, allow-listed<br/>HTTP requests"| TARGET
+    API <--> PG
+    API <--> OBJ
+    API -->|"ticket create/sync"| JIRA
+    API -->|"scan complete"| SLACK
+    API -->|"scan complete"| TEAMS
+    API -->|"scan complete"| OUTLOOK
+    API -->|"push confirmed findings"| VGS
+    API <-->|"trigger / import"| BURP
+    API <-->|"authn"| IDP
+    API -->|"asset lookup"| CMDB
+    API -->|"scrape topic write-ups"| PSWIG
+
+</pre>
+<p><strong>Backend:</strong> Python, FastAPI, SQLAlchemy 2.0 (async), Alembic migrations
+(24 files, one linear chain), PostgreSQL. Dialect-agnostic ORM layer, so
+the test suite runs against ephemeral SQLite with zero external services
+(with one deliberately-accepted limitation: SQLite doesn't enforce
+<code>ON DELETE CASCADE</code>, so cascade behavior is verified live against the real
+Postgres, not by the unit suite).</p>
+<p><strong>Frontend:</strong> Vite + React + TypeScript, TanStack Query for server state,
+React Router, Tailwind CSS. A hand-written typed fetch client
+(<code>src/api/client.ts</code>, 23 namespaced sub-objects, 62 exported types in
+<code>src/api/types.ts</code>) mirrors the backend's Pydantic schemas.</p>
+<p><strong>Agent orchestration:</strong> LangGraph builds a 24-node directed graph per scan
+run, with genuine parallel fan-out where checks don't depend on each other
+(12 nodes off <code>recon</code>, 10 more off <code>authenticated_recon</code>), and explicit
+sequencing where they do (every authenticated check waits on <code>login</code>
+succeeding). <code>chain_analysis</code> is deliberately <em>not</em> a graph node — it runs
+as a separate step in <code>runner.py</code> after <code>graph.ainvoke()</code> completes, since
+it needs the full, final set of findings from every other agent as its
+input.</p>
+<p><strong>Storage:</strong> PostgreSQL for all structured data; a pluggable
+<code>ObjectStorageAdapter</code> (local disk by default, S3-compatible for
+production) for screenshots, uploaded authorization letters, and uploaded
+traffic files.</p>
+<hr />
+<h2 id="4-core-data-model">4. Core Data Model</h2>
+<p>Every engagement is modeled as a hierarchy that mirrors how a real pentest
+is scoped and re-run over time. This is a simplified view for readability —
+the full field-level reference for all ~30 models is in <strong>Appendix
+§15</strong>.</p>
+<pre class="mermaid">
+erDiagram
+    ORGANIZATION ||--o{ PROJECT : owns
+    ORGANIZATION ||--o{ USER : has
+    PROJECT ||--o{ VERSION : "has engagements"
+    VERSION ||--o{ SCOPE_ENTRY : "allow-lists"
+    VERSION ||--o{ TARGET : "points at"
+    VERSION ||--o{ CREDENTIAL_SET : "authenticates via"
+    VERSION ||--o{ BUSINESS_RULE : "declares"
+    VERSION ||--o{ TRAFFIC_INTERACTION : "seeds from"
+    VERSION ||--o{ SCAN_RUN : "is scanned by"
+    SCAN_RUN ||--o{ AGENT_JOB : "runs"
+    AGENT_JOB ||--o{ FINDING : "confirms"
+    AGENT_JOB ||--o{ REVIEW_CANDIDATE : "queues"
+    FINDING ||--o| EVIDENCE : "is proven by"
+    FINDING ||--o{ FINDING_TICKET : "tracked as"
+    FINDING ||--o{ RETEST_JOB : "re-verified by"
+    SCAN_RUN ||--o{ ATTACK_CHAIN : "composes into"
+    ATTACK_CHAIN ||--o{ ATTACK_CHAIN_EVIDENCE : "cites"
+    TARGET ||--o| SCOPE_ENTRY : "auto-derives"
+
+</pre>
+<p>Key design points, each verified against real migration/model code:</p>
+<ul>
+<li><strong>Scope is a real technical control, not a UI reminder.</strong> <code>ScopedHttpClient</code>
+  (<code>app/agents/http_client.py</code>) checks every single outbound request against
+  the Version's <code>ScopeEntry</code> allow-list before sending it — an agent
+  structurally cannot reach a host outside scope (<code>is_in_scope()</code> in
+  <code>app/agents/scope.py</code>). Adding a <code>Target</code> automatically derives its
+  matching <code>ScopeEntry</code>.</li>
+<li><strong>Cascading deletes are explicit and real database-level behavior</strong>, not
+  application-level cleanup: <code>Finding.scan_run_id</code>/<code>agent_job_id</code>,
+  <code>Evidence.finding_id</code>, <code>AttackChain.scan_run_id</code>,
+  <code>AttackChainEvidence.attack_chain_id</code>, <code>AgentJob.scan_run_id</code>,
+  <code>FindingTicket.finding_id</code>, <code>RetestJob.finding_id</code>,
+  <code>ReviewCandidate.scan_run_id</code>/<code>agent_job_id</code>, <code>LoginMacro.credential_set_id</code>,
+  and <code>VgsReportVulnerability.report_draft_id</code> /
+  <code>VgsEvidenceStep.report_vulnerability_id</code> all carry real <code>ON DELETE
+  CASCADE</code>. <code>TrafficInteraction.credential_set_id</code> and
+  <code>VgsReportVulnerability.source_finding_id</code> use <code>SET NULL</code> instead —
+  deleting the credential set or the source finding doesn't delete imported
+  traffic history or a report entry that was copied from it, it just
+  detaches the reference.</li>
+<li><strong>Findings vs. Review Candidates.</strong> A <code>Finding</code> is a confirmed
+  vulnerability with the full evidentiary bar met. A <code>ReviewCandidate</code> is a
+  signal that survived detection but couldn't be auto-confirmed. Both are
+  first-class, queryable, and reportable.</li>
+<li><strong>Credential secrets are envelope-encrypted</strong> via a pluggable
+  <code>KMSAdapter</code> (local Fernet key for dev, AWS KMS for production) before
+  ever touching the database — this pattern is reused verbatim across
+  <code>CredentialSet</code>, <code>AIProviderConfig</code>, <code>CMDBConfig</code>, <code>NotificationConfig</code>,
+  <code>TicketingConfig</code>, <code>OidcProviderConfig</code>, and <code>VGSConfig</code> — every one of
+  them stores <code>encrypted_*</code> + <code>masked_reference</code> and never returns
+  plaintext.</li>
+</ul>
+<hr />
+<h2 id="5-the-multi-agent-scanning-engine">5. The Multi-Agent Scanning Engine</h2>
+<h3 id="51-scan-lifecycle-the-real-verified-24-node-dag">5.1 Scan lifecycle — the real, verified 24-node DAG</h3>
+<pre class="mermaid">
+flowchart LR
+    A["POST /versions/{id}/scan-runs"] --> B["recon<br/>(unauthenticated crawl +<br/>inline tech-stack fingerprint)"]
+    B --> U1["header_config"]
+    B --> U2["host_header"]
+    B --> U3["cors"]
+    B --> U4["clickjacking"]
+    B --> U5["xxe"]
+    B --> U6["graphql"]
+    B --> U7["deserialization"]
+    B --> U8["ssrf"]
+    B --> U9["prototype_pollution"]
+    B --> U10["request_smuggling"]
+    B --> U11["oauth"]
+    B --> U12["cache_poisoning"]
+    B --> L["login<br/>(per credential set)"]
+    L --> E["authenticated_recon<br/>(full-depth authenticated crawl)"]
+    E --> A1["dom_xss"]
+    E --> A2["injection<br/>(SQLi / cmd-inj / SSTI /<br/>path traversal / NoSQLi)"]
+    E --> A3["xss"]
+    E --> A4["auth<br/>(JWT / session)"]
+    E --> A5["access_control"]
+    E --> A6["business_logic"]
+    E --> A7["csrf"]
+    E --> A8["stored_xss"]
+    E --> A9["file_upload"]
+    E --> A10["websocket"]
+    U1 & U2 & U3 & U4 & U5 & U6 & U7 & U8 & U9 & U10 & U11 & U12 --> G
+    A1 & A2 & A3 & A4 & A5 & A6 & A7 & A8 & A9 & A10 --> G["chain_analysis<br/>(25th step, runs after the graph —<br/>composes multi-finding attack chains)"]
+    G --> H["Report generation<br/>(HTML / PDF / DOCX / CSV / JSON)"]
+    H --> I["Best-effort notify:<br/>Slack / Teams / VGS webhook"]
+
+</pre>
+<p>There are genuinely <strong>no conditional edges anywhere in this graph</strong> —
+<code>add_conditional_edges</code> is never called. Every node listed always runs.
+Recon deliberately runs twice: once unauthenticated (all a purely anonymous
+visitor would ever see — usually just a login form), and once fully
+authenticated after <code>login</code> succeeds. This was a real, live-found gap
+during development — a pre-login-only crawl against DVWA discovered
+exactly one form (the login form itself), leaving every other agent with
+nothing to test.</p>
+<h3 id="52-whats-in-appagents-beyond-the-24-graph-nodes">5.2 What's in <code>app/agents/</code> beyond the 24 graph nodes</h3>
+<p>The <code>agents/</code> directory holds <strong>41 files total</strong>. Besides the 24 wired into
+the graph (plus <code>chain_analysis.py</code> as the 25th, post-graph step), the
+remaining ~16 files are shared infrastructure the detection agents are
+built on top of, not standalone checks:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>http_client.py</code></td>
+<td><code>ScopedHttpClient</code> — the scope-enforcement mechanism every other agent's requests pass through</td>
+</tr>
+<tr>
+<td><code>scope.py</code></td>
+<td><code>is_in_scope()</code> allow-list matcher</td>
+</tr>
+<tr>
+<td><code>matrix.py</code></td>
+<td>Credential/privilege matrix engine (<code>Identity</code>, <code>MatrixEntry</code>) used by access-control and business-logic</td>
+</tr>
+<tr>
+<td><code>idor.py</code></td>
+<td>Shared numeric-ID substitution helpers</td>
+</tr>
+<tr>
+<td><code>probing.py</code></td>
+<td>Shared parameter-probing plumbing used by injection and XSS</td>
+</tr>
+<tr>
+<td><code>evidence.py</code> / <code>evidence_screenshot.py</code></td>
+<td>Raw HTTP evidence formatting; universal screenshot capture for non-browser-observable findings</td>
+</tr>
+<tr>
+<td><code>raw_http.py</code></td>
+<td>Raw-socket HTTP/1.1 primitives for wire-format-level checks (smuggling, WebSocket handshakes)</td>
+</tr>
+<tr>
+<td><code>clickjacking_proof.py</code> / <code>xss_browser_proof.py</code></td>
+<td>Real headless-browser proof mechanisms</td>
+</tr>
+<tr>
+<td><code>checks.py</code></td>
+<td>Deterministic, unit-testable Phase-1 header/config detection logic</td>
+</tr>
+<tr>
+<td><code>fingerprint.py</code></td>
+<td>Inline tech-stack fingerprinting (§2.1)</td>
+</tr>
+<tr>
+<td><code>login.py</code> / <code>macro.py</code></td>
+<td>Login form automation and Playwright-backed macro recording</td>
+</tr>
+<tr>
+<td><code>ssrf_callback.py</code></td>
+<td>The real local out-of-band callback listener SSRF confirmation depends on</td>
+</tr>
+<tr>
+<td><code>recon.py</code></td>
+<td>Crawler + form/parameter extraction</td>
+</tr>
+<tr>
+<td><code>retest.py</code> / <code>retest_registry.py</code></td>
+<td>Rescan/diff workflow and per-finding retest (reusing each check's own original detection logic)</td>
+</tr>
+<tr>
+<td><code>runner.py</code></td>
+<td><code>execute_scan_run()</code> — the top-level entry point</td>
+</tr>
+<tr>
+<td><code>task_registry.py</code></td>
+<td>Tracks in-flight <code>asyncio.Task</code>s so cancellation actually reaches a running scan</td>
+</tr>
+<tr>
+<td><code>traffic_seed.py</code></td>
+<td>Seeds endpoint discovery from imported HAR/Burp/Zest/manual traffic for SPAs a plain crawl can't see</td>
+</tr>
+</tbody>
+</table>
+<h3 id="53-confirmed-only-findings-pipeline">5.3 Confirmed-Only Findings pipeline</h3>
+<pre class="mermaid">
+flowchart LR
+    A["Deterministic probe<br/>(HTTP-level signal)"] -->|"no signal"| X1["discarded"]
+    A -->|"signal found"| B["LLM triage<br/>(classify: vulnerable?)"]
+    B -->|"not vulnerable"| X2["discarded"]
+    B -->|"vulnerable"| C["Deterministic<br/>re-execution"]
+    C -->|"doesn't reproduce"| X3["discarded"]
+    C -->|"reproduces"| D{"Can prove real-world<br/>impact automatically?<br/>(browser execution,<br/>OOB callback, etc.)"}
+    D -->|"yes"| E["Finding<br/>(confirmed, with evidence)"]
+    D -->|"no — needs human judgment"| F["ReviewCandidate<br/>(pending promotion)"]
+
+</pre>
+<p>Every step is genuinely re-executable: a Finding's "steps to reproduce" are
+the exact request that was actually sent, not a templated example. Where
+automatable, the strongest possible proof is used — a real headless
+Chromium browser (Playwright) actually executing an injected script for
+XSS, a real out-of-band callback for SSRF, a real second file upload and
+fetch-back for file-upload vulnerabilities. Two categories are deliberately
+<strong>passive/detection-only, never actively exploited</strong>, and this is a
+documented design choice, not an oversight:</p>
+<ul>
+<li><code>deserialization.py</code> only scans for recognizable serialized-object
+  signatures (Java, PHP, .NET ViewState) — gadget chains are target-specific
+  and attempting one live can crash the target.</li>
+<li><code>request_smuggling.py</code> uses PortSwigger's documented <em>timing-based-only</em>
+  methodology — it deliberately never actually smuggles a second request
+  onto the wire, since doing so on a shared target risks corrupting or
+  intercepting a real user's traffic.</li>
+</ul>
+<h3 id="54-a-concrete-hard-won-example-reflected-xss-payload-diversity">5.4 A concrete, hard-won example: reflected XSS payload diversity</h3>
+<p>Early in development, the browser-execution proof for reflected XSS only
+ever tried a plain <code>&lt;script&gt;alert(1)&lt;/script&gt;</code> payload — which is precisely
+what even the <em>weakest</em> real-world filters strip. A genuinely exploitable
+reflection was being correctly detected but never auto-confirmed, because
+the confirmation step's own payload was the one thing guaranteed to get
+filtered. The fix — trying a <code>&lt;script&gt;</code> tag first, then an
+<code>&lt;img src=x onerror=...&gt;</code> fallback with no "script" substring at all — was
+verified live against a real DVWA instance across all four of its security
+levels before being considered done.</p>
+<hr />
+<h2 id="6-ai-provider-abstraction-any-llm-configured-once">6. AI Provider Abstraction — Any LLM, Configured Once</h2>
+<p>Every LLM-dependent agent goes through one interface
+(<code>app.ai.adapters.base.AIProviderAdapter</code>), and which real model answers is
+a runtime configuration choice, resolved in this <strong>exact, code-verified
+order</strong> for every scan (<code>resolve_provider_and_model()</code> in
+<code>app/ai/provider.py</code>):</p>
+<pre class="mermaid">
+flowchart TD
+    A["Scan run starts"] --> B{"scan_run.ai_provider_config_id<br/>set and not deleted?"}
+    B -->|"yes"| C["Use that AIProviderConfig"]
+    B -->|"no"| D{"Org has an AIProviderConfig<br/>with is_default = True?<br/>(looked up via Project.org_id,<br/>joined through Version)"}
+    D -->|"yes"| E["Use the org default"]
+    D -->|"no"| F["Fall back to get_ai_provider()<br/>— the deployment's AI_PROVIDER<br/>.env setting + settings.ai_model"]
+    C --> G["AIProviderAdapter.complete()"]
+    E --> G
+    F --> G
+    G --> H["ClaudeAdapter / OpenAIAdapter / GeminiAdapter /<br/>GrokAdapter / GenericOpenAIAdapter<br/>(any OpenAI-chat-completions-compatible endpoint)"]
+
+</pre>
+<p><strong>Six adapter classes exist</strong> (<code>app/ai/adapters/</code>): <code>ClaudeAdapter</code>,
+<code>OpenAIAdapter</code>, <code>GeminiAdapter</code>, <code>GrokAdapter</code> (a subclass of
+<code>GenericOpenAIAdapter</code>), <code>GenericOpenAIAdapter</code> itself (any OpenAI
+chat-completions-compatible endpoint — self-hosted or an internal
+enterprise gateway), and <code>NullAIProviderAdapter</code> (a genuine no-op, used
+when <code>AI_PROVIDER=fake</code>, the framework's own default). Only Claude, OpenAI,
+and <code>custom</code> are reachable as the deployment-wide <code>.env</code> default —
+<strong>Gemini and Grok are only reachable through a per-org <code>AIProviderConfig</code>
+in the UI</strong>, never via <code>.env</code>.</p>
+<p><strong>Configuration is entirely UI-driven</strong> for the per-org path: from the
+Account page, an org registers an <code>AIProviderConfig</code> and marks it
+"Default" (<code>is_default</code>, at most one per org, enforced by a database
+constraint). From that point on, every scan that doesn't explicitly pick a
+different provider routes through it automatically — no <code>.env</code> editing, no
+redeploy, no code change. This directly answers a real deployment
+constraint: an organization that can't or won't send data to a third-party
+LLM vendor can point Verdikt at its own internal model and get identical
+scanning behavior.</p>
+<h3 id="61-cost-governance-the-real-enforced-number">6.1 Cost governance — the real, enforced number</h3>
+<p><code>app/ai/budget.py</code>'s <code>BudgetGuard</code> enforces <code>settings.max_llm_cost_usd_per_scan</code>
+per <code>ScanRun</code>, atomically via a shared <code>asyncio.Lock</code>, and raises
+<code>BudgetExceededError</code> once <code>scan_run.llm_cost_usd</code> reaches the cap — callers
+catch this and mark the affected <code>AgentJob</code> as skipped, never silently
+truncated. <strong>The configured default cap is $2.00 per scan</strong>, not the
+original spec's $20 target figure — the spec's number was a top-line
+product goal for total scan cost, while <code>MAX_LLM_COST_USD_PER_SCAN</code> is
+the hard technical safety rail underneath it, and it is deliberately
+tighter than the goal to leave headroom.</p>
+<hr />
+<h2 id="7-vulnerability-coverage">7. Vulnerability Coverage</h2>
+<p>Coverage maps to the OWASP Top 10 (2025) and the PortSwigger Web Security
+Academy topic list. The full, exact list of every check ID, its severity,
+and its CWE is in <strong>Appendix §17</strong> (34 YAML-defined checks across 14
+catalog files, plus a further ~13 dynamically-generated check IDs emitted
+directly by agent code for parameterized findings like <code>sqli-error</code> /
+<code>access-control-{comparison_type}</code>). By category:</p>
+<ul>
+<li><strong>Injection</strong> — SQL injection (error- and boolean-based), OS command
+  injection, server-side template injection, NoSQL injection, path
+  traversal</li>
+<li><strong>Broken access control</strong> — IDOR, vertical/horizontal privilege
+  escalation</li>
+<li><strong>Session &amp; auth failures</strong> — JWT alg-none/alg-confusion/weak-secret,
+  missing expiration, weak session token entropy, session not invalidated
+  on logout</li>
+<li><strong>Cross-site scripting</strong> — reflected/DOM/stored, with real
+  headless-browser execution proof</li>
+<li><strong>Security misconfiguration</strong> — 15 separate header/cookie/TLS/disclosure
+  checks in the Phase-1 catalog alone (HSTS, CSP, X-Frame-Options, cookie
+  flags, server-version disclosure, directory listing, weak TLS, etc.)</li>
+<li><strong>SSRF</strong> — real out-of-band callback-verified, via a genuine local
+  listener the scanner controls</li>
+<li><strong>OAuth</strong> — <code>redirect_uri</code> allow-list bypass detection</li>
+<li><strong>Software &amp; data integrity</strong> — passive insecure-deserialization
+  signature detection, client-side prototype pollution (verified in a real
+  browser)</li>
+<li><strong>XXE, GraphQL introspection, cache poisoning/deception</strong></li>
+<li><strong>File upload</strong> — dangerous-extension acceptance, plus an
+  image-polyglot bypass technique for endpoints that do enforce a
+  getimagesize()-style content check</li>
+<li><strong>CSRF, CORS misconfiguration, clickjacking</strong> — clickjacking is
+  confirmed by a real headless-browser framing attempt, not just a
+  missing-header inference</li>
+<li><strong>HTTP request smuggling</strong> — timing-based detection only, by design</li>
+<li><strong>WebSocket security</strong> — cross-site WebSocket hijacking via
+  Origin-validation bypass</li>
+<li><strong>Business logic</strong> — analyst-declared rules covering resource isolation
+  (IDOR), workflow-order bypass, price/quantity tampering, and race
+  conditions</li>
+</ul>
+<hr />
+<h2 id="8-retest-rescan-attack-chain-analysis">8. Retest, Rescan &amp; Attack Chain Analysis</h2>
+<ul>
+<li><strong>Rescan</strong> (<code>retest.py</code>) — a full re-run of every agent against the
+  current state of the target, diffed against the prior run: new findings,
+  <code>still_open</code>, and <code>fixed</code>. A human's prior <code>risk_accepted</code>/
+  <code>false_positive_after_review</code> decision is never silently overridden.</li>
+<li><strong>Retest</strong> (<code>retest_registry.py</code>, <code>POST /findings/{id}/retest</code>) — a
+  targeted, single-finding re-verification that deliberately reuses each
+  check's own original detection logic (including its "private" helper
+  functions) so a retest can never drift from the exact logic that earned
+  the finding its original confirmation.</li>
+<li><strong>Attack Chain Analysis</strong> (<code>chain_analysis.py</code>) — runs after every graph
+  node completes, looking for standalone findings that compose into a more
+  severe, realistic attack path (e.g. reflected XSS plus a missing CSRF
+  token chaining into account takeover). Chains go through the same
+  adversarial-validation discipline as individual findings.</li>
+</ul>
+<hr />
+<h2 id="9-reporting">9. Reporting</h2>
+<p>One dataset, multiple audiences, generated by 8 modules under
+<code>app/reporting/</code>:</p>
+<ul>
+<li><strong>HTML / PDF / DOCX / CSV / JSON</strong> exports, all generated from the same
+  underlying <code>Finding</code> records. <strong>PDF generation uses <code>reportlab</code></strong>, a
+  pure-Python library with no native dependency — the original design
+  suggested WeasyPrint, but its Pango/Cairo native dependency wasn't
+  satisfiable in the build environment, so reportlab was substituted as a
+  documented, deliberate implementation choice (same content: executive
+  summary, severity table, per-finding sections).</li>
+<li><strong>Finding grouping</strong> (<code>grouping.py</code>) — <code>group_findings()</code> groups raw
+  <code>Finding</code> rows by <code>(check_id, title)</code>, capping detailed evidence at 5
+  instances per group with the rest summarized by endpoint only. Reused by
+  both the standard report pipeline and the VGS report-builder's
+  auto-seed/available-findings logic.</li>
+<li><strong>Executive summary</strong> (<code>executive_summary.py</code>) — an LLM-generated
+  plain-language narrative for non-technical stakeholders, generated once
+  per scan run and cached on <code>scan_run.executive_summary</code> (never re-spends
+  budget on repeated report requests).</li>
+<li><strong>Org branding</strong> (<code>org_branding.py</code> model + routes) — logo and primary
+  color on every generated report.</li>
+<li><strong>VGS-shaped DOCX</strong> (<code>vgs_docx_report.py</code>) — matches the original
+  standalone VGS tool's report format (pie chart, version-history table).</li>
+</ul>
+<hr />
+<h2 id="10-vgs-integration-two-complementary-modes-both-built">10. VGS Integration — Two Complementary Modes, Both Built</h2>
+<ol>
+<li><strong>Decoupled webhook push</strong> (<code>app/integrations/vgs/client.py</code>'s
+   <code>VGSClient</code>, <code>VGSConfig</code> model, <code>push_findings_to_vgs</code> trigger) — on scan
+   completion, Verdikt POSTs structured findings to VGS's own ingestion
+   webhook, tagged <code>source: ai-multi-agent</code>. Best-effort by design — one
+   broken/unreachable webhook config never fails the scan itself.</li>
+<li><strong>Native report-builder port</strong> — VGS's own manual report-building
+   workflow ported natively into Verdikt as its own top-level workspace
+   (<code>/vgs</code>, <code>/vgs/:versionId</code> routes; <code>vgs_vulnerabilities.py</code>'s
+   <code>library_router</code> and <code>draft_router</code>; <code>VgsReportDraft</code> /
+   <code>VgsReportVulnerability</code> / <code>VgsEvidenceStep</code> / <code>VgsVulnerabilityLibraryEntry</code>
+   models):</li>
+<li>The <strong>Vulnerability Picker</strong> offers real, scan-confirmed findings
+     grouped by vulnerability type (via the same <code>group_findings()</code> used by
+     standard reports), auto-seeded into a new report draft.</li>
+<li><strong>Manage Vulnerabilities</strong> includes a one-click <strong>"Load from
+     PortSwigger"</strong> action (<code>app/integrations/portswigger/client.py</code>'s
+     <code>fetch_topics()</code>, 13 real seeded Web Security Academy URLs) — a native
+     port of the original standalone VGS tool's scrape-to-Excel workflow,
+     collapsed into a single server-side action.</li>
+<li><strong>Evidence</strong> supports numbered steps, each with one or more
+     screenshots addable at any time, not just at step creation.</li>
+<li><strong>Generate Report</strong> (<code>GET /versions/{id}/vgs-report-draft/report.docx</code>)
+     produces the same DOCX shape as the original VGS tool.</li>
+</ol>
+<p>This is notably <strong>more</strong> than the original design called for — the spec
+recommended starting with the webhook path alone; the native report-builder
+port was built in addition, as its own complete workspace.</p>
+<hr />
+<h2 id="11-enterprise-hardening">11. Enterprise Hardening</h2>
+<ul>
+<li><strong>RBAC</strong> — a real DB-backed <code>role_permissions</code> table across <strong>19
+  resources × 4 actions</strong> (76 grantable permission cells), not hardcoded
+  role checks. Full matrix in <strong>Appendix §21</strong>.</li>
+<li><strong>SSO</strong> — SAML and OIDC, per-org, each with configurable default role
+  assignment for federated sign-ins. (Note: these live under <code>app/auth/</code>,
+  not <code>app/integrations/</code> — they're treated as part of the authentication
+  core, not an optional integration.)</li>
+<li><strong>Ticketing &amp; notifications</strong> — Jira ticket creation directly from a
+  Finding; Slack, Microsoft Teams, and Outlook notifications on scan
+  completion; a genuine conversational <strong>Microsoft Teams bot</strong>
+  (<code>app/integrations/teams_bot/</code>) with real command classes (<code>ScanCommand</code>,
+  <code>StatusCommand</code>, <code>NewProjectCommand</code>) for triggering/checking scans from
+  chat — built beyond what the original design specified (which called for
+  a generic notification adapter only, not an interactive bot).</li>
+<li><strong>CMDB integration</strong> — a generic, configurable REST client (<code>CMDBClient</code>:
+  URL template, auth header, dot-path JSON field mappings) rather than an
+  abstract per-vendor interface, a deliberate choice since there's no
+  single real CMDB API to build and test against honestly.</li>
+<li><strong>API keys</strong> — long-lived, revocable tokens for CI/automation clients.</li>
+<li><strong>Audit log</strong> — every state-changing action recorded with actor, action,
+  resource, and metadata (secrets always excluded).</li>
+<li><strong>Cost governor</strong> — see §6.1.</li>
+</ul>
+<hr />
+<h2 id="12-security-model">12. Security Model</h2>
+<ul>
+<li><strong>Technical scope enforcement</strong> — <code>ScopedHttpClient</code> checks every single
+  outbound request against the Version's scope allow-list before it's sent.</li>
+<li><strong>Credential envelope encryption</strong> — every stored secret is encrypted via
+  a pluggable <code>KMSAdapter</code> before touching the database; API responses only
+  ever include a masked reference.</li>
+<li><strong>Safe-by-default agent behavior</strong> — the File Upload agent never actually
+  executes an uploaded payload; the SSRF agent uses only a scanner-controlled
+  callback target; the deserialization and request-smuggling agents are
+  deliberately passive/detection-only (§5.3) to avoid target-corrupting or
+  traffic-intercepting side effects.</li>
+<li><strong>What the original design called for but is not built</strong>: a
+  pre-scan <strong>authorization gate</strong> (requiring an uploaded authorization
+  letter/attestation before any active testing could run) was built and
+  then <strong>fully removed</strong> — the model, its table, and every reference to it
+  were deleted (migration <code>0022_drop_authorization_records.py</code>). Scope
+  enforcement remains and is real; the authorization-letter half of that
+  original guardrail does not exist in the system today. Configurable
+  <strong>human-in-the-loop approval checkpoints</strong> before injection payloads or
+  state-changing business-logic tests were also specified but never built.
+  See §18 for the full delta list.</li>
+</ul>
+<hr />
+<h2 id="13-deployment">13. Deployment</h2>
+<p><strong>Docker Compose</strong> brings up the full stack — PostgreSQL, backend, and
+frontend — from a single command, verified end-to-end against a completely
+fresh environment:</p>
+<pre class="mermaid">
+flowchart TB
+    subgraph Host["Host Machine (macOS / Linux / Windows)"]
+        subgraph Compose["docker compose up --build"]
+            DB[("db<br/>postgres:16-alpine<br/>named volume: verdikt_pgdata<br/>host port 5433 (avoids native-Postgres collision)")]
+            BE["backend<br/>python:3.12-slim + Playwright/Chromium<br/>(installed at BUILD time)<br/>runs `alembic upgrade head`<br/>then uvicorn --loop asyncio"]
+            FEC["frontend<br/>node:22-slim, real Vite dev server<br/>npm run dev -- --host 0.0.0.0"]
+        end
+        Browser["Browser<br/>localhost:5173"]
+    end
+    BE -->|"db:5432"| DB
+    Browser -->|"HTTP"| FEC
+    Browser -->|"HTTP :8000"| BE
+
+</pre>
+<ul>
+<li><strong><code>--loop asyncio</code> is not a stylistic choice</strong> — uvicorn's default
+  <code>--loop auto</code> silently selects <code>uvloop</code>, which is incompatible with
+  Playwright's async browser launch and hangs forever with no error
+  message. This was found by actually running the container against a
+  live Juice Shop target, not by reading documentation.</li>
+<li>Migrations run automatically on container start (a no-op once already
+  current) — a fresh database gets its schema with zero manual steps.</li>
+<li>The backend's build-time virtualenv is protected from the dev bind-mount
+  via a masking Docker volume (<code>backend_venv:/app/.venv</code>), so the container
+  never silently inherits a host's binary-incompatible Python environment;
+  the frontend uses the equivalent <code>node_modules</code> mask.</li>
+<li>The frontend Dockerfile runs the real Vite dev server (with HMR), not a
+  production build — its own comment notes a production multi-stage/nginx
+  build is a reasonable follow-up once there's an actual deployment target.</li>
+<li><code>.gitattributes</code> (<code>* text=auto eol=lf</code>) normalizes line endings across
+  macOS/Linux/Windows checkouts.</li>
+</ul>
+<hr />
+<h2 id="14-testing-quality-discipline">14. Testing &amp; Quality Discipline</h2>
+<ul>
+<li><strong>99 test files, 527 collected tests</strong> — confirmed by running
+  <code>pytest --collect-only</code>, not estimated.</li>
+<li>Real fixtures over mocks wherever practically possible: real local HTTP
+  servers standing in for a target application, a real headless browser
+  for execution proofs, real cryptographic round-trips for the credential
+  vault.</li>
+<li><strong>Live-validated</strong>, not just unit-tested: run against a real, running
+  OWASP Juice Shop instance and a real DVWA instance across all four of its
+  security levels (Low, Medium, High, Impossible), with results manually
+  cross-checked against what's actually exploitable at each level.</li>
+<li>Every bug fix in this system's history was root-caused against a real
+  target, not inferred from a stack trace alone.</li>
+</ul>
+<hr />
+<h2 id="15-appendix-full-data-model-reference">15. Appendix — Full Data Model Reference</h2>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Table</th>
+<th>Key columns / FKs (ondelete)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AIProviderConfig</code></td>
+<td><code>ai_provider_configs</code></td>
+<td><code>org_id</code>, <code>provider</code>, <code>model</code>, <code>base_url</code>, <code>auth_type</code>, <code>encrypted_api_key</code>, <code>masked_reference</code>, <code>is_default</code></td>
+</tr>
+<tr>
+<td><code>ApiKey</code></td>
+<td><code>api_keys</code></td>
+<td><code>org_id</code>, <code>user_id</code>, <code>label</code>, <code>key_prefix</code>, <code>hashed_key</code> (unique), <code>last_used_at</code>, <code>revoked_at</code></td>
+</tr>
+<tr>
+<td><code>AttackChain</code></td>
+<td><code>attack_chains</code></td>
+<td><code>scan_run_id</code>→scan_runs <strong>CASCADE</strong>, <code>title</code>, <code>severity</code>, <code>finding_ids</code> (JSON), <code>plain_language_summary</code>, <code>narrative</code>, <code>confirmation_status</code></td>
+</tr>
+<tr>
+<td><code>AttackChainEvidence</code></td>
+<td><code>attack_chain_evidence</code></td>
+<td><code>attack_chain_id</code>→attack_chains <strong>CASCADE</strong></td>
+</tr>
+<tr>
+<td><code>AuditLogEntry</code></td>
+<td><code>audit_log_entries</code></td>
+<td><code>org_id</code>, <code>user_id</code> (nullable), <code>action</code>, <code>resource_type</code>, <code>resource_id</code>, <code>entry_metadata</code> (JSON)</td>
+</tr>
+<tr>
+<td><code>BusinessRule</code></td>
+<td><code>business_rules</code></td>
+<td><code>version_id</code>, <code>rule_type</code>, <code>title</code>, <code>config</code> (JSON), <code>created_by</code></td>
+</tr>
+<tr>
+<td><code>CMDBConfig</code></td>
+<td><code>cmdb_configs</code></td>
+<td><code>org_id</code>, <code>lookup_url_template</code>, <code>auth_header_name</code>, <code>encrypted_auth_header_value</code>, <code>owner_json_path</code>, <code>criticality_json_path</code></td>
+</tr>
+<tr>
+<td><code>CredentialSet</code></td>
+<td><code>credential_sets</code></td>
+<td><code>version_id</code>, <code>credential_type</code>, <code>encrypted_secret</code>, <code>login_endpoint</code>, <code>login_body_template</code>, <code>token_response_path</code>, <code>extra_cookies</code> (JSON)</td>
+</tr>
+<tr>
+<td><code>FindingTicket</code></td>
+<td><code>finding_tickets</code></td>
+<td><code>finding_id</code>→findings <strong>CASCADE</strong>, <code>ticketing_config_id</code>, <code>external_key</code>, <code>external_url</code></td>
+</tr>
+<tr>
+<td><code>Finding</code></td>
+<td><code>findings</code></td>
+<td><code>scan_run_id</code>→scan_runs <strong>CASCADE</strong>, <code>agent_job_id</code>→agent_jobs <strong>CASCADE</strong>, <code>check_id</code>, <code>severity</code>, <code>owasp_2025_category</code>, <code>cwe_id</code>, <code>cvss_vector</code>/<code>cvss_score</code>, <code>affected_endpoints</code> (JSON), <code>confirmation_status</code>, <code>retest_status</code></td>
+</tr>
+<tr>
+<td><code>Evidence</code></td>
+<td><code>evidence</code></td>
+<td><code>finding_id</code>→findings <strong>CASCADE</strong>, <code>request_raw</code>, <code>response_raw</code>, <code>screenshot_refs</code></td>
+</tr>
+<tr>
+<td><code>LoginMacro</code></td>
+<td><code>login_macros</code></td>
+<td><code>version_id</code>, <code>credential_set_id</code>→credential_sets <strong>CASCADE</strong>, <code>steps</code> (JSON)</td>
+</tr>
+<tr>
+<td><code>NotificationConfig</code></td>
+<td><code>notification_configs</code></td>
+<td><code>org_id</code>, <code>provider</code>, <code>encrypted_webhook_url</code>, <code>notify_on_scan_completed</code></td>
+</tr>
+<tr>
+<td><code>OidcProviderConfig</code></td>
+<td><code>oidc_provider_configs</code></td>
+<td><code>org_id</code>, <code>issuer</code>, <code>client_id</code>, <code>encrypted_client_secret</code>, <code>redirect_uri</code>, <code>default_role</code></td>
+</tr>
+<tr>
+<td><code>OrgBranding</code></td>
+<td><code>org_branding</code></td>
+<td><code>org_id</code> (unique), <code>logo_object_key</code>, <code>company_name</code>, <code>primary_color_hex</code></td>
+</tr>
+<tr>
+<td><code>Organization</code></td>
+<td><code>organizations</code></td>
+<td><code>name</code> (unique)</td>
+</tr>
+<tr>
+<td><code>User</code></td>
+<td><code>users</code></td>
+<td><code>org_id</code>, <code>email</code> (unique), <code>hashed_password</code>, <code>role</code>, <code>is_active</code>, <code>oidc_subject</code>, <code>invite_token</code></td>
+</tr>
+<tr>
+<td><code>Project</code></td>
+<td><code>projects</code></td>
+<td><code>org_id</code>, <code>name</code>, <code>created_by</code>, <code>archived_at</code></td>
+</tr>
+<tr>
+<td><code>Version</code></td>
+<td><code>versions</code></td>
+<td><code>project_id</code>, <code>name</code>, <code>created_by</code></td>
+</tr>
+<tr>
+<td><code>ScopeEntry</code></td>
+<td><code>scope_entries</code></td>
+<td><code>version_id</code>, <code>host</code>, <code>port</code>, <code>path_pattern</code>, <code>in_scope</code></td>
+</tr>
+<tr>
+<td><code>RolePermission</code></td>
+<td><code>role_permissions</code></td>
+<td><code>role</code>, <code>resource</code>, <code>action</code>, <code>allowed</code></td>
+</tr>
+<tr>
+<td><code>RetestJob</code></td>
+<td><code>retest_jobs</code></td>
+<td><code>finding_id</code>→findings <strong>CASCADE</strong>, <code>requested_by</code>, <code>status</code>, <code>result</code>, <code>request_raw</code>/<code>response_raw</code></td>
+</tr>
+<tr>
+<td><code>ReviewCandidate</code></td>
+<td><code>review_candidates</code></td>
+<td><code>scan_run_id</code>→scan_runs <strong>CASCADE</strong>, <code>agent_job_id</code>→agent_jobs <strong>CASCADE</strong>, <code>check_type</code>, <code>severity_guess</code>, <code>llm_reasoning</code>, <code>llm_confidence</code>, <code>status</code></td>
+</tr>
+<tr>
+<td><code>SamlConfig</code></td>
+<td><code>saml_configs</code></td>
+<td><code>org_id</code>, <code>idp_metadata_xml</code>, <code>idp_sso_url</code>, <code>idp_entity_id</code>, <code>idp_x509_cert</code></td>
+</tr>
+<tr>
+<td><code>ScanRun</code></td>
+<td><code>scan_runs</code></td>
+<td><code>version_id</code>, <code>status</code>, <code>requested_by</code>, <code>error</code>, <code>warning</code>, <code>llm_cost_usd</code> (Numeric 10,4), <code>executive_summary</code>, <code>ai_provider_config_id</code> (nullable), <code>tech_stack_fingerprint</code> (JSON)</td>
+</tr>
+<tr>
+<td><code>AgentJob</code></td>
+<td><code>agent_jobs</code></td>
+<td><code>scan_run_id</code>→scan_runs <strong>CASCADE</strong>, <code>agent_type</code>, <code>status</code>, <code>stats</code> (JSON)</td>
+</tr>
+<tr>
+<td><code>Target</code></td>
+<td><code>targets</code></td>
+<td><code>version_id</code>, <code>host</code>, <code>port</code>, <code>base_url</code></td>
+</tr>
+<tr>
+<td><code>TicketingConfig</code></td>
+<td><code>ticketing_configs</code></td>
+<td><code>org_id</code>, <code>provider</code>, <code>base_url</code>, <code>encrypted_api_token</code>, <code>project_key</code>, <code>issue_type</code></td>
+</tr>
+<tr>
+<td><code>TrafficInteraction</code></td>
+<td><code>traffic_interactions</code></td>
+<td><code>version_id</code>, <code>credential_set_id</code>→credential_sets <strong>SET NULL</strong>, <code>source</code>, request/response fields, <code>timing_ms</code></td>
+</tr>
+<tr>
+<td><code>VGSConfig</code></td>
+<td><code>vgs_configs</code></td>
+<td><code>org_id</code>, <code>encrypted_webhook_url</code>, <code>push_on_scan_completed</code>, <code>auth_type</code> (nullable), <code>encrypted_auth_value</code> (nullable)</td>
+</tr>
+<tr>
+<td><code>VgsVulnerabilityLibraryEntry</code></td>
+<td><code>vgs_vulnerability_library</code></td>
+<td><code>org_id</code>, <code>title</code>, <code>severity</code>, <code>cvss_score</code>/<code>vector</code>, <code>description</code>, <code>recommendation</code></td>
+</tr>
+<tr>
+<td><code>VgsReportDraft</code></td>
+<td><code>vgs_report_drafts</code></td>
+<td><code>version_id</code> (unique), <code>app_title</code>, <code>scope</code>, <code>urls</code>, <code>findings_auto_seeded</code></td>
+</tr>
+<tr>
+<td><code>VgsReportVulnerability</code></td>
+<td><code>vgs_report_vulnerabilities</code></td>
+<td><code>report_draft_id</code>→vgs_report_drafts <strong>CASCADE</strong>, <code>library_entry_id</code> (nullable), <code>source_finding_id</code>→findings <strong>SET NULL</strong>, <code>order_index</code></td>
+</tr>
+<tr>
+<td><code>VgsEvidenceStep</code></td>
+<td><code>vgs_evidence_steps</code></td>
+<td><code>report_vulnerability_id</code>→vgs_report_vulnerabilities <strong>CASCADE</strong>, <code>step_order</code>, <code>screenshot_object_keys</code> (JSON)</td>
+</tr>
+</tbody>
+</table>
+<p><strong><code>AuthorizationRecord</code>, referenced in the original design's guardrail #1,
+does not exist in the current model set</strong> — confirmed removed (§18).</p>
+<hr />
+<h2 id="16-appendix-full-api-route-reference-28-modules">16. Appendix — Full API Route Reference (28 modules)</h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Endpoints</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ai_provider_configs.py</code></td>
+<td><code>POST /ai-provider-configs</code>, <code>GET /ai-provider-configs</code>, <code>POST /ai-provider-configs/{id}/set-default</code>, <code>DELETE /ai-provider-configs/{id}</code></td>
+</tr>
+<tr>
+<td><code>api_keys.py</code></td>
+<td><code>POST /api-keys</code>, <code>GET /api-keys</code>, <code>POST /api-keys/{id}/revoke</code></td>
+</tr>
+<tr>
+<td><code>attack_chains.py</code></td>
+<td><code>GET /scan-runs/{scan_run_id}/attack-chains</code></td>
+</tr>
+<tr>
+<td><code>auth.py</code></td>
+<td><code>POST /auth/register</code>, <code>POST /auth/login</code>, <code>GET /auth/me</code></td>
+</tr>
+<tr>
+<td><code>burp.py</code></td>
+<td><code>POST /burp/scans</code>, <code>POST /burp/scans/{task_id}/import</code></td>
+</tr>
+<tr>
+<td><code>business_rules.py</code></td>
+<td><code>POST /business-rules</code>, <code>GET /business-rules</code>, <code>DELETE /business-rules/{id}</code></td>
+</tr>
+<tr>
+<td><code>cmdb_configs.py</code></td>
+<td><code>POST /cmdb-configs</code>, <code>GET /cmdb-configs</code>, <code>DELETE /cmdb-configs/{id}</code>, <code>POST /cmdb-configs/{id}/lookup</code></td>
+</tr>
+<tr>
+<td><code>credentials.py</code></td>
+<td><code>POST /credentials</code>, <code>GET /credentials</code>, <code>PATCH /credentials/{id}</code>, <code>DELETE /credentials/{id}</code>, <code>POST /credentials/{id}/record-macro</code>, <code>GET /credentials/{id}/macros</code></td>
+</tr>
+<tr>
+<td><code>dashboard.py</code></td>
+<td><code>GET /organizations/me/dashboard</code></td>
+</tr>
+<tr>
+<td><code>finding_tickets.py</code></td>
+<td><code>POST /findings/{id}/tickets</code>, <code>GET /findings/{id}/tickets</code></td>
+</tr>
+<tr>
+<td><code>macro_upload.py</code></td>
+<td><code>POST /credentials/{credential_id}/macros/upload</code></td>
+</tr>
+<tr>
+<td><code>notification_configs.py</code></td>
+<td><code>POST /notification-configs</code>, <code>GET /notification-configs</code>, <code>DELETE /notification-configs/{id}</code>, <code>POST /notification-configs/{id}/test</code></td>
+</tr>
+<tr>
+<td><code>objects.py</code></td>
+<td><code>GET /objects/{key:path}</code></td>
+</tr>
+<tr>
+<td><code>oidc.py</code></td>
+<td><code>POST /oidc-provider-configs</code>, <code>GET /oidc-provider-configs</code>, <code>DELETE /oidc-provider-configs/{id}</code>, <code>GET /auth/oidc/{id}/login</code>, <code>GET /auth/oidc/callback</code></td>
+</tr>
+<tr>
+<td><code>org_branding.py</code></td>
+<td><code>GET /org-branding</code>, <code>PUT /org-branding</code>, <code>POST /org-branding/logo</code>, <code>DELETE /org-branding/logo</code></td>
+</tr>
+<tr>
+<td><code>organizations.py</code></td>
+<td><code>GET /organizations/me</code></td>
+</tr>
+<tr>
+<td><code>projects.py</code></td>
+<td><code>POST /projects</code>, <code>GET /projects</code>, <code>GET /projects/{id}</code>, <code>POST /projects/{id}/archive</code>, <code>POST /projects/{id}/unarchive</code>, <code>DELETE /projects/{id}</code></td>
+</tr>
+<tr>
+<td><code>retest_jobs.py</code></td>
+<td><code>POST /findings/{id}/retest</code>, <code>GET /findings/{id}/retest-jobs</code></td>
+</tr>
+<tr>
+<td><code>review_candidates.py</code></td>
+<td><code>GET /scan-runs/{id}/review-candidates</code>, <code>POST /review-candidates/{id}/promote</code>, <code>POST /review-candidates/{id}/dismiss</code></td>
+</tr>
+<tr>
+<td><code>saml.py</code></td>
+<td><code>POST /saml-configs</code>, <code>GET /saml-configs</code>, <code>DELETE /saml-configs/{id}</code>, <code>GET /saml-configs/{id}/metadata.xml</code>, <code>POST /saml-configs/{id}/idp-metadata</code></td>
+</tr>
+<tr>
+<td><code>scans.py</code></td>
+<td><code>POST /versions/{id}/scan-runs</code>, <code>POST /versions/{v}/scan-runs/{prior}/retest</code>, <code>GET /versions/{id}/scan-runs</code>, <code>GET /scan-runs/{id}</code>, <code>POST /scan-runs/{id}/cancel</code>, <code>DELETE /scan-runs/{id}</code>, <code>GET /scan-runs/{id}/findings</code>, <code>GET /scan-runs/{id}/report.{json,html,pdf,docx,csv}</code>, <code>GET /scan-runs/{later}/diff/{earlier}</code></td>
+</tr>
+<tr>
+<td><code>targets.py</code></td>
+<td><code>POST /targets</code>, <code>GET /targets</code>, <code>DELETE /targets/{id}</code></td>
+</tr>
+<tr>
+<td><code>ticketing_configs.py</code></td>
+<td><code>POST /ticketing-configs</code>, <code>GET /ticketing-configs</code>, <code>DELETE /ticketing-configs/{id}</code></td>
+</tr>
+<tr>
+<td><code>traffic_import.py</code></td>
+<td><code>POST /traffic/import</code>, <code>POST /traffic/manual</code>, <code>GET /traffic</code></td>
+</tr>
+<tr>
+<td><code>users.py</code></td>
+<td><code>POST /users/invite</code>, <code>GET /users</code>, <code>POST /users/accept-invite</code>, <code>POST /users/{id}/deactivate</code>, <code>POST /users/{id}/reactivate</code></td>
+</tr>
+<tr>
+<td><code>versions.py</code></td>
+<td><code>POST /projects/{id}/versions</code>, <code>GET /projects/{id}/versions</code>, <code>GET /versions/{id}</code>, <code>POST /versions/{id}/scope-entries</code>, <code>GET /versions/{id}/scope-entries</code>, <code>PATCH /versions/{id}/scope-entries/{entry_id}</code>, <code>DELETE /versions/{id}/scope-entries/{entry_id}</code></td>
+</tr>
+<tr>
+<td><code>vgs_configs.py</code></td>
+<td><code>POST /vgs-configs</code>, <code>GET /vgs-configs</code>, <code>DELETE /vgs-configs/{id}</code>, <code>POST /vgs-configs/{id}/test</code></td>
+</tr>
+<tr>
+<td><code>vgs_vulnerabilities.py</code></td>
+<td><strong>library_router</strong> (<code>/vgs-vulnerability-library</code>): <code>POST</code>, <code>GET</code>, <code>PATCH /{id}</code>, <code>DELETE /{id}</code>, <code>POST /load-from-portswigger</code>. <strong>draft_router</strong> (<code>/versions/{id}/vgs-report-draft</code>): <code>GET</code>, <code>PATCH</code>, <code>POST /vulnerabilities</code>, <code>GET /vulnerabilities</code>, <code>GET /available-findings</code>, <code>POST /vulnerabilities/from-finding/{id}</code>, <code>PATCH /vulnerabilities/{id}</code>, <code>DELETE /vulnerabilities/{id}</code>, <code>POST/GET/PATCH/DELETE /vulnerabilities/{id}/evidence-steps[/{step_id}]</code>, <code>POST .../screenshots</code>, <code>GET /report.docx</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="17-appendix-full-check-catalog-34-static-ids-dynamic-ids">17. Appendix — Full Check Catalog (34 static IDs + dynamic IDs)</h2>
+<table>
+<thead>
+<tr>
+<th>Catalog file</th>
+<th>Check IDs (severity / CWE)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>catalog.yaml</code> (15 checks)</td>
+<td><code>missing-hsts</code> (Low/319), <code>missing-csp</code> (Low/693), <code>missing-x-frame-options</code> (Medium/1021), <code>missing-x-content-type-options</code> (Low/693), <code>missing-referrer-policy</code> (Low/200), <code>missing-permissions-policy</code> (Low/693), <code>cookie-missing-secure</code> (Medium/614), <code>cookie-missing-httponly</code> (Medium/1004), <code>cookie-missing-samesite</code> (Low/1275), <code>server-version-disclosure</code> (Low/200), <code>verbose-error-stack-trace</code> (Medium/209), <code>directory-listing-enabled</code> (Medium/548), <code>plaintext-http</code> (High/319), <code>weak-tls-version</code> (Medium/326), <code>autocomplete-enabled-password-field</code> (Low/522)</td>
+</tr>
+<tr>
+<td><code>auth_catalog.yaml</code></td>
+<td><code>session-not-invalidated-on-logout</code> (High/613), <code>jwt-alg-none</code> (Critical/347), <code>jwt-missing-expiration</code> (Medium/613), <code>jwt-alg-confusion</code> (Critical/347), <code>jwt-weak-signing-secret</code> (Critical/330), <code>weak-session-token-entropy</code> (Medium/330)</td>
+</tr>
+<tr>
+<td><code>cache_poisoning_catalog.yaml</code></td>
+<td><code>web-cache-poisoning-unkeyed-input</code> (High/441), <code>web-cache-deception</code> (High/524)</td>
+</tr>
+<tr>
+<td><code>clickjacking_catalog.yaml</code></td>
+<td><code>clickjacking-confirmed</code> (Medium/1021)</td>
+</tr>
+<tr>
+<td><code>cors_catalog.yaml</code></td>
+<td><code>cors-reflected-origin-with-credentials</code> (Critical/942), <code>cors-wildcard-origin</code> (Low/942)</td>
+</tr>
+<tr>
+<td><code>csrf_catalog.yaml</code></td>
+<td><code>csrf-missing-protection</code> (High/352)</td>
+</tr>
+<tr>
+<td><code>file_upload_catalog.yaml</code></td>
+<td><code>file-upload-insufficient-validation</code> (High/434), <code>file-upload-image-polyglot-bypass</code> (Medium/434)</td>
+</tr>
+<tr>
+<td><code>graphql_catalog.yaml</code></td>
+<td><code>graphql-introspection-enabled</code> (Medium/200)</td>
+</tr>
+<tr>
+<td><code>host_header_catalog.yaml</code></td>
+<td><code>host-header-injection</code> (Medium/346)</td>
+</tr>
+<tr>
+<td><code>oauth_catalog.yaml</code></td>
+<td><code>oauth-redirect-uri-validation-bypass</code> (Critical/601)</td>
+</tr>
+<tr>
+<td><code>request_smuggling_catalog.yaml</code></td>
+<td><code>potential-http-request-smuggling</code> (High/444)</td>
+</tr>
+<tr>
+<td><code>ssrf_catalog.yaml</code></td>
+<td><code>ssrf-confirmed</code> (Critical/918)</td>
+</tr>
+<tr>
+<td><code>websocket_catalog.yaml</code></td>
+<td><code>websocket-missing-origin-validation</code> (High/346)</td>
+</tr>
+<tr>
+<td><code>xxe_catalog.yaml</code></td>
+<td><code>xxe-file-disclosure</code> (High/611)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Dynamically-generated check IDs</strong> (emitted directly by agent code, not
+YAML-backed): <code>sqli-error</code>, <code>sqli-boolean</code>, <code>command-injection</code>, <code>ssti</code>,
+<code>path-traversal</code>, <code>nosql-injection</code> (<code>injection.py</code>); <code>xss-reflected</code>
+(<code>xss.py</code>); <code>dom-xss-fragment</code> (<code>dom_xss.py</code>); <code>xss-stored</code>
+(<code>stored_xss.py</code>); <code>client-side-prototype-pollution</code>
+(<code>prototype_pollution.py</code>); <code>potential-insecure-deserialization</code>
+(<code>deserialization.py</code>); <code>access-control-{comparison_type}</code>
+(<code>access_control.py</code>); <code>business-logic-{rule_type}</code> (<code>business_logic.py</code>).</p>
+<hr />
+<h2 id="18-appendix-spec-vs-reality-the-complete-honest-delta">18. Appendix — Spec vs. Reality: The Complete, Honest Delta</h2>
+<p>Read against the original <code>docs/BUILD_SPEC.md</code> in full. This is not a
+list of bugs — it's an honest accounting of where deliberate build
+decisions diverged from the original design, in both directions.</p>
+<p><strong>Built less than originally specified:</strong></p>
+<ol>
+<li><strong>Authorization gate — removed entirely.</strong> The spec's guardrail #1
+   required a recorded authorization (uploaded letter/attestation) before
+   any active testing could run. <code>AuthorizationRecord</code> was built, then
+   fully removed (migration <code>0022_drop_authorization_records.py</code>) — no
+   model, route, or frontend tab references it today. Scope enforcement
+   (the other half of that guardrail) remains fully real and enforced.</li>
+<li><strong>Human-in-the-loop approval checkpoints — not built.</strong> No code exists
+   for configurable manual-approval gates before injection payloads or
+   state-changing business-logic tests run.</li>
+<li><strong>Smart Scan cost-optimization routing — only one narrow case built.</strong>
+   See §2.1: the fingerprint is computed and shown, but doesn't gate
+   scheduling anywhere except one SSTI check.</li>
+<li><strong>Per-task-type model routing — not built.</strong> The spec called for cheap
+   models on recon/header checks and frontier models reserved for
+   business-logic reasoning. Every agent in a scan run uses the single
+   model resolved once via <code>resolve_provider_and_model()</code>.</li>
+<li><strong>Depth slider (Quick/Standard/Deep/Deep-Paranoid) — not built.</strong> No
+   such setting, enum, or UI control exists anywhere in the codebase.</li>
+<li><strong>Cross-credential-set result caching — not built.</strong> The spec called for
+   deduplicating identical endpoint+parameter tests across credential sets.
+   The dedup that does exist (clickjacking, cache_poisoning, dom_xss,
+   prototype_pollution) is narrower — one check per distinct host within a
+   single run, not across credential sets.</li>
+<li><strong>Orchestration engine — LangGraph, not Temporal.io.</strong> The spec offered
+   both, with Temporal.io as the primary recommendation; the lighter-weight
+   LangGraph option was the one actually built. No Temporal references
+   exist anywhere in the codebase.</li>
+</ol>
+<p><strong>Built beyond what was originally specified:</strong></p>
+<ol>
+<li><strong>VGS integration — both spec-recommended paths, plus a full native
+   workspace.</strong> The spec recommended starting with webhook push alone; the
+   native report-builder port (its own top-level frontend workspace) was
+   built in addition.</li>
+<li><strong>The image-polyglot file-upload bypass technique</strong> — not mentioned in
+   the spec at all.</li>
+<li><strong>The PortSwigger Web Security Academy scraper</strong> ("Load from
+    PortSwigger") — not in the spec.</li>
+<li><strong>UI-only, per-org default AI provider configuration</strong>
+    (<code>AIProviderConfig.is_default</code> + the Account-page "Set as default"
+    control) — the spec described the adapter interface but not a
+    UI-driven default-selection mechanism.</li>
+<li><strong>A genuine conversational Microsoft Teams bot</strong> — the spec's
+    integration section called for a generic notification adapter only,
+    not an interactive bot with real command parsing.</li>
+</ol>
+<p><strong>Matches the spec closely:</strong></p>
+<ol>
+<li>The AI Provider Abstraction itself, including the exact
+    <code>CustomEndpointAdapter</code> concept the spec named by placeholder
+    (implemented as <code>GenericOpenAIAdapter</code>).</li>
+<li>RBAC roles (Org Admin / Project Lead / Analyst / Client-Viewer) match
+    the spec exactly, modeled as a real permission-matrix table as the
+    spec explicitly instructed, not hardcoded checks.</li>
+<li>CMDB integration exists, implemented as a single concrete,
+    vendor-agnostic REST client rather than the spec's sketched abstract
+    per-vendor interface — a deliberate substitution, since there's no one
+    real CMDB API to build and test against honestly.</li>
+</ol>
+<hr />
+<h2 id="19-appendix-ai-provider-configuration-reference">19. Appendix — AI Provider &amp; Configuration Reference</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>database_url</code></td>
+<td><code>postgresql+psycopg://verdikt:verdikt@localhost:5432/verdikt</code></td>
+<td>Postgres connection</td>
+</tr>
+<tr>
+<td><code>frontend_origin</code></td>
+<td><code>http://localhost:5173</code></td>
+<td>CORS allow-list origin</td>
+</tr>
+<tr>
+<td><code>jwt_secret</code> / <code>jwt_algorithm</code> / <code>jwt_expire_minutes</code></td>
+<td>— / <code>HS256</code> / 720</td>
+<td>Auth token config</td>
+</tr>
+<tr>
+<td><code>vault_master_key</code></td>
+<td>dev placeholder</td>
+<td>Fernet key for <code>LocalKMSAdapter</code></td>
+</tr>
+<tr>
+<td><code>kms_provider</code></td>
+<td><code>local</code></td>
+<td><code>local</code> or <code>aws</code></td>
+</tr>
+<tr>
+<td><code>object_storage_root</code> / <code>object_storage_provider</code></td>
+<td><code>./data/objects</code> / <code>local</code></td>
+<td>Local disk or <code>s3</code></td>
+</tr>
+<tr>
+<td><code>ai_provider</code></td>
+<td><code>fake</code></td>
+<td>Deployment-wide default: <code>claude</code> / <code>openai</code> / <code>custom</code> / <code>fake</code></td>
+</tr>
+<tr>
+<td><code>ai_model</code></td>
+<td><code>claude-haiku-4-5</code></td>
+<td>Deployment-wide default model</td>
+</tr>
+<tr>
+<td><code>anthropic_api_key</code> / <code>openai_api_key</code></td>
+<td>None</td>
+<td>Named-provider API keys</td>
+</tr>
+<tr>
+<td><code>custom_llm_base_url</code> / <code>custom_llm_api_key</code> / <code>custom_llm_auth_type</code></td>
+<td>None / None / <code>bearer_token</code></td>
+<td>In-house/self-hosted LLM config</td>
+</tr>
+<tr>
+<td><code>max_llm_cost_usd_per_scan</code></td>
+<td><strong>2.00</strong></td>
+<td>Hard per-scan LLM spend cap (§6.1)</td>
+</tr>
+<tr>
+<td><code>ssrf_callback_host</code></td>
+<td>None (auto-detect)</td>
+<td>Host the target calls back to for SSRF OOB proof</td>
+</tr>
+</tbody>
+</table>
+<p>Note: Gemini and Grok have <strong>no</strong> <code>.env</code> settings — reachable only via a
+per-org <code>AIProviderConfig</code> in the UI.</p>
+<hr />
+<h2 id="20-appendix-migration-history-24-files-one-linear-chain">20. Appendix — Migration History (24 files, one linear chain)</h2>
+<p><code>0001_initial_schema</code> → <code>0001b_widen_alembic_version_column</code> (widens
+<code>alembic_version.version_num</code> for this project's long revision slugs) →
+<code>0002_scan_findings_and_permissions</code> → <code>0003_phase2_review_candidates_and_login_config</code>
+→ <code>0004_phase3_business_rules</code> → <code>0005_phase4_login_macros</code> →
+<code>0006_phase5_executive_summary</code> → <code>0007_phase6_ai_provider_configs</code> →
+<code>0008_phase6b_oidc_sso</code> → <code>0009_phase6c_api_keys</code> →
+<code>0010_phase8_retest_jobs</code> → <code>0011_phase9_ticketing_and_notifications</code> →
+<code>0012_phase10_cmdb_and_vgs</code> → <code>0013_credential_extra_cookies</code> →
+<code>0014_phase11_extensibility_and_lifecycle</code> → <code>0015_saml_org_config</code> →
+<code>0016_org_branding</code> → <code>0017_vgs_report_builder</code> →
+<code>0018_scan_delete_cascade_and_vgs_finding_link</code> →
+<code>0019_vgs_evidence_cascade_and_auto_seed</code> → <code>0020_scan_run_warning</code> →
+<code>0021_credential_set_delete_cascade</code> → <code>0022_drop_authorization_records</code>
+(drops the table entirely) → <code>0023_ai_provider_config_default</code>.</p>
+<hr />
+<h2 id="21-appendix-rbac-matrix">21. Appendix — RBAC Matrix</h2>
+<p><strong>19 resources</strong>: <code>organization</code>, <code>project</code>, <code>version</code>, <code>target</code>,
+<code>credential</code>, <code>traffic</code>, <code>scan</code>, <code>review_candidate</code>, <code>business_rule</code>,
+<code>ai_provider_config</code>, <code>oidc_provider_config</code>, <code>notification_config</code>,
+<code>ticketing_config</code>, <code>cmdb_config</code>, <code>vgs_config</code>, <code>user</code>, <code>org_branding</code>,
+<code>saml_config</code>, <code>vgs_vulnerability</code> — each with <code>create</code>/<code>read</code>/<code>update</code>/<code>delete</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Role</th>
+<th>Access pattern</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>org_admin</code></td>
+<td>Full CRUD on all 19 resources</td>
+</tr>
+<tr>
+<td><code>project_lead</code></td>
+<td>Full CRUD on engagement resources; read-only on <code>organization</code>; no access to <code>user</code> management</td>
+</tr>
+<tr>
+<td><code>analyst</code></td>
+<td>Read on everything, plus <code>create</code> on <code>traffic</code>/<code>scan</code>/<code>business_rule</code>, <code>update</code> on <code>review_candidate</code></td>
+</tr>
+<tr>
+<td><code>viewer</code></td>
+<td>Read-only on everything</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="22-appendix-frontend-route-page-map">22. Appendix — Frontend Route &amp; Page Map</h2>
+<pre><code>/login, /register, /accept-invite, /oidc-callback   (public)
+Protected (behind Layout):
+  /                          → ProjectsPage
+  /dashboard                 → DashboardPage
+  /projects/:projectId       → ProjectDetailPage
+  /versions/:versionId       → VersionDetailPage
+  /scan-runs/:scanRunId      → ScanRunDetailPage
+  /vgs                       → VgsLandingPage
+  /vgs/:versionId            → VgsWorkspacePage
+  /account                   → AccountPage
+</code></pre>
+<ul>
+<li><strong>Account page sections</strong> (own file each): Branding, CMDB Configs,
+  Notification Configs, SAML Configs, Ticketing Configs, Users, VGS
+  Configs. (AI Provider Configs remains inline in <code>AccountPage.tsx</code>.)</li>
+<li><strong>Scan Run detail tabs</strong>: Agent Jobs, Diff, Findings, Reports, Review
+  Candidates, Site Map, Ticket.</li>
+<li><strong>Version detail tabs</strong>: Burp, Business Rules, Credentials, Macro
+  Recording, Scan Runs, Scope, Targets, Traffic — plus dedicated
+  business-rule sub-forms (Credential Select, HTTP Method Select,
+  Price/Quantity Tampering, Race Condition, Resource Isolation, Workflow
+  Order) and VGS report sub-tabs (Evidence, Generate, Project Info,
+  Vulnerabilities).</li>
+<li><strong>API client</strong>: <code>src/api/client.ts</code> exposes 23 namespaced sub-objects
+  (auth, organizations, projects, users, versions, targets, credentials,
+  businessRules, scanRuns, retestJobs, reviewCandidates, apiKeys,
+  aiProviderConfigs, traffic, burp, notificationConfigs, ticketingConfigs,
+  findingTickets, cmdbConfigs, vgsConfigs, samlConfigs, orgBranding,
+  attackChains, oidcProviderConfigs); <code>src/api/types.ts</code> defines 62
+  exported types.</li>
+</ul>
+<hr />
+<h2 id="23-whats-next">23. What's Next</h2>
+<p>Natural next steps, informed directly by the delta in §18:</p>
+<ul>
+<li>Building out the Smart Scan graph-level routing the original design
+  called for — using the tech-stack fingerprint to actually skip
+  irrelevant node scheduling, not just display it.</li>
+<li>A depth/intensity profile (Quick/Standard/Deep) as a scan-trigger option.</li>
+<li>Per-task-type model routing, now that the AI provider layer already
+  supports arbitrary per-scan provider selection.</li>
+<li>A more sophisticated file-upload bypass technique (JPEG polyglot, or
+  chaining an accepted upload with a discovered local-file-inclusion
+  vector for standalone RCE proof).</li>
+<li>Configurable human-in-the-loop approval checkpoints for the more
+  invasive check categories, as originally specified.</li>
+</ul>
+<hr />
+<p><em>This document reflects the system exactly as implemented, verified
+directly against the codebase. Architecture diagrams are provided
+separately as Mermaid (<code>.mmd</code>) source files, directly importable into
+Miro's Mermaid-import feature.</em></p>
+  </main>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: "default", securityLevel: "loose" });
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+flowchart TD
+    A["Scan run starts"] --> B{"Scan has its own<br/>AI Provider Config?"}
+    B -->|"yes"| C["Use it"]
+    B -->|"no"| D{"Org has a default<br/>AI Provider Config?<br/>(set once in the UI)"}
+    D -->|"yes"| E["Use the org default"]
+    D -->|"no"| F["Fall back to the deployment's<br/>AI_PROVIDER .env setting"]
+    C --> G["AIProviderAdapter.complete()"]
+    E --> G
+    F --> G
+    G --> H["Claude / OpenAI / Gemini / Grok /<br/>GenericOpenAIAdapter<br/>(any OpenAI-chat-completions-<br/>compatible endpoint)"]

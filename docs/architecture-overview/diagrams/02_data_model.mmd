@@ -1,0 +1,19 @@
+erDiagram
+    ORGANIZATION ||--o{ PROJECT : owns
+    ORGANIZATION ||--o{ USER : has
+    PROJECT ||--o{ VERSION : "has engagements"
+    VERSION ||--o{ SCOPE_ENTRY : "allow-lists"
+    VERSION ||--o{ TARGET : "points at"
+    VERSION ||--o{ CREDENTIAL_SET : "authenticates via"
+    VERSION ||--o{ BUSINESS_RULE : "declares"
+    VERSION ||--o{ TRAFFIC_INTERACTION : "seeds from"
+    VERSION ||--o{ SCAN_RUN : "is scanned by"
+    SCAN_RUN ||--o{ AGENT_JOB : "runs"
+    AGENT_JOB ||--o{ FINDING : "confirms"
+    AGENT_JOB ||--o{ REVIEW_CANDIDATE : "queues"
+    FINDING ||--o| EVIDENCE : "is proven by"
+    FINDING ||--o{ FINDING_TICKET : "tracked as"
+    FINDING ||--o{ RETEST_JOB : "re-verified by"
+    SCAN_RUN ||--o{ ATTACK_CHAIN : "composes into"
+    ATTACK_CHAIN ||--o{ ATTACK_CHAIN_EVIDENCE : "cites"
+    TARGET ||--o| SCOPE_ENTRY : "auto-derives"

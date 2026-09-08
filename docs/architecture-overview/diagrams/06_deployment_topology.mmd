@@ -1,0 +1,12 @@
+flowchart TB
+    subgraph Host["Host Machine (macOS / Linux / Windows)"]
+        subgraph Compose["docker compose up --build"]
+            DB[("db<br/>postgres:16-alpine<br/>named volume: verdikt_pgdata")]
+            BE["backend<br/>FastAPI + Playwright/Chromium<br/>runs `alembic upgrade head`<br/>automatically on start"]
+            FEC["frontend<br/>Vite dev server"]
+        end
+        Browser["Browser<br/>localhost:5173"]
+    end
+    BE -->|"db:5432"| DB
+    Browser -->|"HTTP"| FEC
+    Browser -->|"HTTP :8000"| BE

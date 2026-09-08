@@ -1,0 +1,46 @@
+flowchart TB
+    subgraph Client["Browser"]
+        FE["React + TypeScript SPA<br/>(Vite, TanStack Query, Tailwind)"]
+    end
+
+    subgraph Backend["Verdikt Backend — FastAPI (Python)"]
+        API["REST API<br/>JWT bearer auth, RBAC-enforced"]
+        ORCH["Multi-Agent Orchestrator<br/>(LangGraph)"]
+        AIABS["AI Provider Abstraction<br/>Claude / OpenAI / Gemini / Grok / Custom"]
+        RPT["Reporting Engine<br/>HTML / PDF / DOCX / CSV / JSON"]
+        VAULT["Credential Vault<br/>(envelope encryption, pluggable KMS)"]
+    end
+
+    subgraph Data["Persistence"]
+        PG[("PostgreSQL")]
+        OBJ[("Object Storage<br/>(screenshots, uploads, letters)")]
+    end
+
+    subgraph External["External Systems"]
+        TARGET["Target Application<br/>(the system under test)"]
+        LLM["LLM Provider<br/>Claude / OpenAI / Gemini / Grok /<br/>Any in-house OpenAI-compatible gateway"]
+        JIRA["Jira"]
+        SLACK["Slack"]
+        TEAMS["Microsoft Teams"]
+        VGS["VGS<br/>(DAST governance tool)"]
+        BURP["Burp Suite Professional"]
+        IDP["SSO: SAML / OIDC"]
+        CMDB["CMDB<br/>(asset inventory)"]
+    end
+
+    FE <-->|"HTTPS / JWT"| API
+    API --> ORCH
+    API --> RPT
+    API --> VAULT
+    ORCH --> AIABS
+    AIABS <-->|"chat completions"| LLM
+    ORCH <-->|"scoped, allow-listed<br/>HTTP requests"| TARGET
+    API <--> PG
+    API <--> OBJ
+    API -->|"ticket create/sync"| JIRA
+    API -->|"scan complete"| SLACK
+    API -->|"scan complete"| TEAMS
+    API -->|"push confirmed findings"| VGS
+    API <-->|"trigger / import"| BURP
+    API <-->|"authn"| IDP
+    API -->|"asset lookup"| CMDB
