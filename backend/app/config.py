@@ -46,11 +46,22 @@ class Settings(BaseSettings):
     # with no API keys runs LLM-dependent agents (injection/xss/access-control
     # triage+validation) against a no-op adapter that finds nothing, rather
     # than crashing. Set to "claude"/"openai" + the matching API key for
-    # real reasoning.
-    ai_provider: Literal["claude", "openai", "fake"] = "fake"
+    # real reasoning, or "custom" for any self-hosted/in-house
+    # OpenAI-chat-completions-compatible endpoint (the same GenericOpenAIAdapter
+    # an org's own AIProviderConfig rows already use per-scan — this is just
+    # the deployment-wide default, for when nothing overrides it per scan run).
+    ai_provider: Literal["claude", "openai", "custom", "fake"] = "fake"
     ai_model: str = "claude-haiku-4-5"
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
+    custom_llm_base_url: str | None = None
+    custom_llm_api_key: str | None = None
+    # "bearer_token" (default): sends "Authorization: Bearer <key>" — what
+    # most self-hosted/in-house OpenAI-compatible servers (vLLM, Ollama,
+    # LM Studio, TGI) and most internal LLM gateways expect. "api_key":
+    # sends the key in a raw "api-key" header instead, for gateways that
+    # use that convention. See GenericOpenAIAdapter.
+    custom_llm_auth_type: Literal["bearer_token", "api_key"] = "bearer_token"
 
     # §10.5 visible budget guardrail — per-scan-run cap on estimated LLM
     # spend. Once exceeded, remaining LLM-dependent agent nodes are skipped

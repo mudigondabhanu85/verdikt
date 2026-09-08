@@ -1,12 +1,15 @@
 import uuid
 
+import pytest
+
 from app.ai.adapters.claude import ClaudeAdapter
 from app.ai.adapters.gemini import GeminiAdapter
 from app.ai.adapters.generic_openai import GenericOpenAIAdapter
 from app.ai.adapters.grok import GrokAdapter
 from app.ai.adapters.null import NullAIProviderAdapter
 from app.ai.adapters.openai import OpenAIAdapter
-from app.ai.provider import build_adapter_from_config, resolve_provider_and_model
+from app.ai.provider import build_adapter_from_config, get_ai_provider, resolve_provider_and_model
+from app.config import get_settings
 from app.models.ai_provider_config import AIProviderConfig
 from app.models.scan import ScanRun
 from app.vault.credential_vault import encrypt_secret
@@ -86,6 +89,31 @@ async def test_resolve_falls_back_when_attached_config_was_deleted(db_adapter, m
 
         provider, _model = await resolve_provider_and_model(session, scan_run)
         assert isinstance(provider, NullAIProviderAdapter)
+
+
+def test_get_ai_provider_builds_generic_openai_adapter_for_custom(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_provider", "custom")
+    monkeypatch.setattr(settings, "custom_llm_base_url", "http://localhost:11434/v1")
+    monkeypatch.setattr(settings, "custom_llm_api_key", "sk-internal")
+    monkeypatch.setattr(settings, "custom_llm_auth_type", "bearer_token")
+    get_ai_provider.cache_clear()
+    try:
+        assert isinstance(get_ai_provider(), GenericOpenAIAdapter)
+    finally:
+        get_ai_provider.cache_clear()
+
+
+def test_get_ai_provider_custom_requires_base_url(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_provider", "custom")
+    monkeypatch.setattr(settings, "custom_llm_base_url", None)
+    get_ai_provider.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="CUSTOM_LLM_BASE_URL"):
+            get_ai_provider()
+    finally:
+        get_ai_provider.cache_clear()
 
 
 def test_build_adapter_from_config_maps_claude():

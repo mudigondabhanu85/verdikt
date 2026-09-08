@@ -32,6 +32,14 @@ def get_ai_provider() -> AIProviderAdapter:
         if not settings.openai_api_key:
             raise RuntimeError("ai_provider=openai requires OPENAI_API_KEY to be set")
         return OpenAIAdapter(settings.openai_api_key)
+    if settings.ai_provider == "custom":
+        if not settings.custom_llm_base_url:
+            raise RuntimeError("ai_provider=custom requires CUSTOM_LLM_BASE_URL to be set")
+        return GenericOpenAIAdapter(
+            settings.custom_llm_api_key or "unused",
+            base_url=settings.custom_llm_base_url,
+            auth_type=settings.custom_llm_auth_type,
+        )
     return NullAIProviderAdapter()
 
 
