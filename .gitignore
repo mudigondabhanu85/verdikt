@@ -10,3 +10,8 @@ uv.lock.bak
 *.db
 *.sqlite3
 .claude/
+# Machine-local compose override (e.g. pointing the backend at a native
+# host Postgres instead of the bundled fresh one) — never shared, since
+# a fresh clone (a work laptop, a demo) should always get the bundled
+# docker-compose.yml's own clean database by default.
+docker-compose.override.yml
