@@ -49,20 +49,34 @@ CORS — both default to `http://localhost:5173`.
 ### Or: everything via Docker Compose
 
 ```bash
-cp .env.example backend/.env   # adjust as needed
+cp .env.example backend/.env   # optional — see the AI provider note below
 docker compose up --build
 ```
 
-Starts Postgres, the backend (with `--reload`), and the frontend dev server
-together — `backend/Dockerfile` and `frontend/Dockerfile` build real images (the
-backend image also installs Playwright's Chromium, which several agents launch a
-real browser through). Migrations aren't run automatically by the compose file;
-run `docker compose exec backend uv run alembic upgrade head` once the `db`
-service is healthy. **Not exercised against a real Docker installation in this
-build environment** (no `docker` binary available here) — the Dockerfiles and
-compose config are reviewed for correctness and the compose YAML parses cleanly,
-but this is the one piece of local-dev setup that couldn't be run end to end
-before being committed.
+That's it — no separate migration step. Starts Postgres, the backend, and the
+frontend dev server together, verified end to end against a completely fresh
+setup (empty Postgres volume, no host `.venv`/`node_modules`):
+
+- `backend/Dockerfile` and `frontend/Dockerfile` build real images (the backend
+  image also installs Playwright's Chromium, which several agents launch a real
+  browser through).
+- The backend service runs `alembic upgrade head` automatically before serving
+  on every start (a no-op once already current), so a brand-new database gets
+  its schema without any manual step.
+- Everything here is plain Docker/Compose with no macOS-specific paths or
+  behavior, so the same `docker compose up --build` is expected to work
+  unchanged on Linux and Windows (via Docker Desktop, WSL2 backend or native).
+  If you hit a platform-specific snag, it's worth a bug report — this isn't
+  meant to be macOS-only.
+- **AI-assisted findings need a real API key.** `AI_PROVIDER` defaults to
+  `fake` (a no-op adapter), so a fresh checkout with no `.env` runs end to end
+  but every LLM-triaged check (injection/XSS/access-control/etc.) finds
+  nothing — a demo will look empty. Set `AI_PROVIDER=claude` and
+  `ANTHROPIC_API_KEY` in `backend/.env` (copied from `.env.example`) before a
+  real demo.
+- Postgres data lives in a named Docker volume (`verdikt_pgdata`), so it
+  starts genuinely empty on a fresh clone and persists across
+  `docker compose up`/`down` (not `down -v`) on the same machine.
 
 ## Tests
 
@@ -99,16 +113,18 @@ frontend/
     api/         Hand-written typed fetch client + TS types mirroring app/schemas
     auth/        AuthContext (JWT bearer token, current user, RBAC-aware canWrite/canReview)
     components/  Layout, ProtectedRoute, Tabs, badges
-    pages/       Projects -> Version workspace (scope/targets/credentials/authorization/
+    pages/       Projects -> Version workspace (scope/targets/credentials/
                  business rules/scan runs) -> Scan Run detail (agent jobs/findings/
                  review candidates/reports)
 ```
 
 ## Security notes (Phase 0 scope)
 
-- Every `Version` (engagement) carries `ScopeEntry` rows (the technical allow-list
-  future agents must respect) and requires at least one `AuthorizationRecord` before
-  it can be marked authorized — see §1 of the build prompt.
+- Every `Version` (engagement) carries `ScopeEntry` rows — a hard, exact
+  host+port allow-list every agent enforces on every request
+  (`app.agents.scope.is_in_scope`), not just a UI reminder. Adding a Target
+  auto-derives its matching Scope entry, so a host only ever needs to be
+  typed once.
 - Credential secrets are envelope-encrypted via `KMSAdapter` before hitting the
   database and are only ever returned to API clients as a masked reference.
   `LocalKMSAdapter` (Fernet, keyed by `VAULT_MASTER_KEY`) is dev-only — production
