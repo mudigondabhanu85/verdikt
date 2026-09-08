@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import ForeignKey, LargeBinary, String
+from sqlalchemy import Boolean, ForeignKey, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -43,3 +43,10 @@ class AIProviderConfig(Base):
     auth_type: Mapped[str] = mapped_column(String(20), default="api_key")
     encrypted_api_key: Mapped[bytes] = mapped_column(LargeBinary)
     masked_reference: Mapped[str] = mapped_column(String(255))
+    # The org-wide fallback used by resolve_provider_and_model whenever a
+    # scan doesn't specify its own AIProviderConfig — lets an org
+    # configure "any LLM can be patched in" entirely from this UI, no
+    # .env editing needed. At most one per org (enforced by a partial
+    # unique index — see the migration); setting a new default atomically
+    # unsets whichever one was previously default.
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)

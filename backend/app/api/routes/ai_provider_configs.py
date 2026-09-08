@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import write_audit_log
@@ -55,6 +55,45 @@ async def list_ai_provider_configs(
         select(AIProviderConfig).where(AIProviderConfig.org_id == user.org_id)
     )
     return list(result.scalars().all())
+
+
+@router.post("/{config_id}/set-default", response_model=AIProviderConfigOut)
+async def set_default_ai_provider_config(
+    config_id: uuid.UUID,
+    user: User = Depends(require_permission("ai_provider_config", "update")),
+    session: AsyncSession = Depends(get_db_session),
+) -> AIProviderConfig:
+    """Makes this the org's default provider — used by every scan that
+    doesn't specify its own AIProviderConfig (see
+    app.ai.provider.resolve_provider_and_model). The whole point: an org
+    configures its own LLM (Claude, OpenAI, or any in-house
+    OpenAI-compatible gateway) once, here, with no .env editing needed.
+    Unsets whichever config was previously default first — the partial
+    unique index (migration 0023) only allows one is_default=True row
+    per org, so setting the new one before clearing the old one would
+    violate it.
+    """
+    config = await session.get(AIProviderConfig, config_id)
+    if config is None or config.org_id != user.org_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "AI provider config not found")
+
+    await session.execute(
+        update(AIProviderConfig)
+        .where(AIProviderConfig.org_id == user.org_id, AIProviderConfig.id != config_id)
+        .values(is_default=False)
+    )
+    config.is_default = True
+    await write_audit_log(
+        session,
+        user=user,
+        action="ai_provider_config.set_default",
+        resource_type="organization",
+        resource_id=user.org_id,
+        metadata={"label": config.label},
+    )
+    await session.commit()
+    await session.refresh(config)
+    return config
 
 
 @router.delete("/{config_id}", status_code=204)

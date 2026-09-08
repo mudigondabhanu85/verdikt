@@ -363,6 +363,8 @@ export const api = {
       base_url?: string
       auth_type?: string
     }) => request<AIProviderConfigOut>('/ai-provider-configs', { method: 'POST', body }),
+    setDefault: (id: string) =>
+      request<AIProviderConfigOut>(`/ai-provider-configs/${id}/set-default`, { method: 'POST' }),
     delete: (id: string) => request<void>(`/ai-provider-configs/${id}`, { method: 'DELETE' }),
   },
 

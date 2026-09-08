@@ -132,6 +132,11 @@ function AiProviderConfigsSection() {
     onSuccess: invalidate,
   })
 
+  const setDefaultMutation = useMutation({
+    mutationFn: (id: string) => api.aiProviderConfigs.setDefault(id),
+    onSuccess: invalidate,
+  })
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
     if (!label.trim() || !model.trim() || !apiKey.trim()) return
@@ -141,7 +146,11 @@ function AiProviderConfigsSection() {
   return (
     <section>
       <h2 className="mb-3 text-lg font-medium text-gray-800">AI Provider Configs</h2>
-      <p className="mb-4 text-sm text-gray-500">Pick a provider per scan run — omitted, a scan falls back to the deployment default.</p>
+      <p className="mb-4 text-sm text-gray-500">
+        Configure once and mark it "Default" to route every scan through it automatically — no .env editing
+        needed. A scan can still pick a different one of its own; with no default set, it falls back to the
+        deployment's own AI_PROVIDER setting.
+      </p>
 
       <form onSubmit={handleSubmit} className="mb-4 flex flex-wrap gap-2">
         <input
@@ -205,13 +214,29 @@ function AiProviderConfigsSection() {
           <li key={cfg.id} className="flex items-center justify-between px-4 py-3 text-sm">
             <span>
               <span className="font-medium">{cfg.label}</span>
+              {cfg.is_default && (
+                <span className="ml-2 rounded-full border border-green-300 bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">
+                  Default
+                </span>
+              )}
               <span className="ml-2 text-xs text-gray-400">{cfg.provider} / {cfg.model}</span>
               <span className="ml-2 text-xs text-gray-400">({cfg.auth_type})</span>
               <span className="ml-2 font-mono text-xs text-gray-400">{cfg.masked_reference}</span>
             </span>
-            <button onClick={() => deleteMutation.mutate(cfg.id)} className="text-xs text-red-600 hover:underline">
-              Delete
-            </button>
+            <span className="flex items-center gap-3">
+              {!cfg.is_default && (
+                <button
+                  onClick={() => setDefaultMutation.mutate(cfg.id)}
+                  disabled={setDefaultMutation.isPending}
+                  className="text-xs text-purple-700 hover:underline disabled:opacity-50"
+                >
+                  Set as default
+                </button>
+              )}
+              <button onClick={() => deleteMutation.mutate(cfg.id)} className="text-xs text-red-600 hover:underline">
+                Delete
+              </button>
+            </span>
           </li>
         ))}
       </ul>

@@ -11,9 +11,26 @@ from app.ai.adapters.openai import OpenAIAdapter
 from app.ai.provider import build_adapter_from_config, get_ai_provider, resolve_provider_and_model
 from app.config import get_settings
 from app.models.ai_provider_config import AIProviderConfig
+from app.models.organization import Organization
+from app.models.project import Project, Version
 from app.models.scan import ScanRun
 from app.vault.credential_vault import encrypt_secret
 from tests.conftest import session_scope
+
+
+async def _make_org_project_version(session):
+    org = Organization(name=f"Org {uuid.uuid4()}")
+    session.add(org)
+    await session.flush()
+    project = Project(org_id=org.id, name="Project")
+    session.add(project)
+    await session.flush()
+    version = Version(project_id=project.id, name="v1")
+    session.add(version)
+    await session.commit()
+    await session.refresh(org)
+    await session.refresh(version)
+    return org, version
 
 
 async def test_resolve_falls_back_to_global_default_when_no_config_attached(db_adapter, monkeypatch):
@@ -37,6 +54,76 @@ async def test_resolve_falls_back_to_global_default_when_no_config_attached(db_a
         provider, model = await resolve_provider_and_model(session, scan_run)
         assert isinstance(provider, NullAIProviderAdapter)
         assert model  # global default ai_model string
+
+
+async def test_resolve_uses_the_orgs_default_config_when_none_attached(db_adapter, monkeypatch):
+    # Isolate from this environment's real deployment-wide AI_PROVIDER —
+    # the org default (what's actually under test) must win over it.
+    import app.ai.provider as provider_module
+
+    monkeypatch.setattr(provider_module, "get_ai_provider", lambda: NullAIProviderAdapter())
+
+    async with session_scope(db_adapter) as session:
+        _org, version = await _make_org_project_version(session)
+        default_config = AIProviderConfig(
+            org_id=_org.id,
+            label="Org default",
+            provider="custom",
+            model="llama3.1:8b",
+            base_url="http://localhost:11434/v1",
+            encrypted_api_key=encrypt_secret("sk-abc"),
+            masked_reference="****abc",
+            is_default=True,
+        )
+        session.add(default_config)
+        scan_run = ScanRun(version_id=version.id, status="pending", requested_by=uuid.uuid4())
+        session.add(scan_run)
+        await session.commit()
+        await session.refresh(scan_run)
+
+        provider, model = await resolve_provider_and_model(session, scan_run)
+        assert isinstance(provider, GenericOpenAIAdapter)
+        assert model == "llama3.1:8b"
+
+
+async def test_resolve_prefers_scan_runs_own_config_over_the_orgs_default(db_adapter):
+    async with session_scope(db_adapter) as session:
+        _org, version = await _make_org_project_version(session)
+        session.add(
+            AIProviderConfig(
+                org_id=_org.id,
+                label="Org default",
+                provider="claude",
+                model="claude-haiku-4-5",
+                encrypted_api_key=encrypt_secret("sk-ant-default"),
+                masked_reference="****",
+                is_default=True,
+            )
+        )
+        own_config = AIProviderConfig(
+            org_id=_org.id,
+            label="This scan's own choice",
+            provider="custom",
+            model="llama3.1:8b",
+            base_url="http://localhost:11434/v1",
+            encrypted_api_key=encrypt_secret("sk-abc"),
+            masked_reference="****abc",
+        )
+        session.add(own_config)
+        await session.flush()
+        scan_run = ScanRun(
+            version_id=version.id,
+            status="pending",
+            requested_by=uuid.uuid4(),
+            ai_provider_config_id=own_config.id,
+        )
+        session.add(scan_run)
+        await session.commit()
+        await session.refresh(scan_run)
+
+        provider, model = await resolve_provider_and_model(session, scan_run)
+        assert isinstance(provider, GenericOpenAIAdapter)
+        assert model == "llama3.1:8b"
 
 
 async def test_resolve_uses_attached_custom_provider_config(db_adapter):

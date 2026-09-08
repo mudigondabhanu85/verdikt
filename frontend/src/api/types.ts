@@ -267,6 +267,7 @@ export interface AIProviderConfigOut {
   base_url: string | null
   auth_type: AiProviderAuthType
   masked_reference: string
+  is_default: boolean
 }
 
 export const TRAFFIC_SOURCES = [

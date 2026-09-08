@@ -33,5 +33,6 @@ class AIProviderConfigOut(BaseModel):
     base_url: str | None
     auth_type: str
     masked_reference: str
+    is_default: bool
 
     model_config = {"from_attributes": True}

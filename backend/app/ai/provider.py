@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.adapters.base import AIProviderAdapter
@@ -11,6 +12,7 @@ from app.ai.adapters.null import NullAIProviderAdapter
 from app.ai.adapters.openai import OpenAIAdapter
 from app.config import get_settings
 from app.models.ai_provider_config import AIProviderConfig
+from app.models.project import Project, Version
 from app.models.scan import ScanRun
 from app.vault.credential_vault import decrypt_secret
 
@@ -70,11 +72,36 @@ async def resolve_provider_and_model(
     """The one place scan execution (app.agents.runner) and report
     generation (executive summary) both go to pick a provider+model for
     a given ScanRun — keeps them from drifting into two different
-    resolution rules. Falls back to the deployment default whenever no
-    AIProviderConfig is attached, or it's since been deleted.
+    resolution rules. Resolution order:
+
+    1. The ScanRun's own explicitly-attached AIProviderConfig, if any
+       (and it hasn't since been deleted).
+    2. The org's default AIProviderConfig, if one has been set (Account
+       page -> AI Provider Configs -> "Set as default") — the UI-only
+       path: an org registers its own LLM (Claude, OpenAI, or any
+       in-house OpenAI-compatible gateway) once, with no .env editing.
+    3. The deployment-wide AI_PROVIDER .env setting — the final
+       fallback for an org that hasn't configured one of its own.
     """
     if scan_run.ai_provider_config_id is not None:
         config = await session.get(AIProviderConfig, scan_run.ai_provider_config_id)
         if config is not None:
             return build_adapter_from_config(config), config.model
+
+    org_id_result = await session.execute(
+        select(Project.org_id).join(Version, Version.project_id == Project.id).where(
+            Version.id == scan_run.version_id
+        )
+    )
+    org_id = org_id_result.scalar_one_or_none()
+    if org_id is not None:
+        default_result = await session.execute(
+            select(AIProviderConfig).where(
+                AIProviderConfig.org_id == org_id, AIProviderConfig.is_default.is_(True)
+            )
+        )
+        default_config = default_result.scalar_one_or_none()
+        if default_config is not None:
+            return build_adapter_from_config(default_config), default_config.model
+
     return get_ai_provider(), get_settings().ai_model
