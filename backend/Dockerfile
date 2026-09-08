@@ -31,6 +31,11 @@ EXPOSE 8000
 # default is what runs if the image is ever used standalone (e.g. a
 # real deployment, not just docker compose up).
 #
+# Runs pending migrations before serving — nothing else creates the
+# schema, so a fresh database has no tables at all otherwise.
+# `alembic upgrade head` is a no-op once already current, so this is
+# safe on every container start, not just the first one.
+#
 # --loop asyncio is required, not optional: uvicorn[standard] pulls in
 # uvloop, and uvicorn's default `--loop auto` silently selects it
 # whenever it's importable. Playwright's async API is incompatible with
@@ -40,4 +45,4 @@ EXPOSE 8000
 # prototype-pollution) with no visible failure. Found via §14 live
 # validation against OWASP Juice Shop, where those three AgentJobs
 # stayed "running" indefinitely on every real scan until this was set.
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio"]
+CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --loop asyncio"]

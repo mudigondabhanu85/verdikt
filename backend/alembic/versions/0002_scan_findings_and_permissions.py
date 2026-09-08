@@ -17,7 +17,7 @@ from app.auth.rbac_seed import scan_resource_grants
 
 # revision identifiers, used by Alembic.
 revision: str = '0002_scan_findings_and_permissions'
-down_revision: Union[str, None] = '0001_initial_schema'
+down_revision: Union[str, None] = '0001b_widen_alembic_version_column'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

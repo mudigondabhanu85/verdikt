@@ -6,7 +6,15 @@ services:
       POSTGRES_PASSWORD: verdikt
       POSTGRES_DB: verdikt
     ports:
-      - "5432:5432"
+      # Host-side port only, for optional direct psql/GUI access — the
+      # backend always talks to this over the internal docker network
+      # via db:5432 regardless of this mapping. Not 5432:5432: a native
+      # Postgres already listening on the host's 5432 (common on dev
+      # machines) would make the container fail to bind that port at
+      # all, which otherwise breaks `docker compose up` outright with
+      # nothing about the failure pointing at "something else already
+      # owns this port."
+      - "5433:5432"
     volumes:
       - verdikt_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -32,16 +40,38 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
-    # --loop asyncio: uvicorn's default auto-selects uvloop, which is
-    # incompatible with Playwright's async browser launch (hangs
-    # forever instead of erroring) — see backend/Dockerfile for the
-    # full explanation.
-    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--loop", "asyncio"]
+      # Masks the container's own image-built (Linux) .venv from the
+      # bind mount above — without this, mounting the host's ./backend
+      # over /app replaces it with the *host's* .venv (macOS/ARM in
+      # dev), which is binary-incompatible with the container and
+      # breaks every C-extension dependency (psycopg, cryptography,
+      # Playwright's browser binaries) the moment the container starts.
+      # Same pattern as the frontend service's node_modules mask below.
+      - backend_venv:/app/.venv
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    # Runs pending migrations before serving — a fresh `docker compose
+    # up` against an empty Postgres volume had no tables at all
+    # otherwise (nothing anywhere ran `alembic upgrade head`), so every
+    # request failed. `alembic upgrade head` is a no-op once already
+    # current, so this is safe to run on every container start/restart,
+    # not just the first one. --loop asyncio: uvicorn's default
+    # auto-selects uvloop, which is incompatible with Playwright's async
+    # browser launch (hangs forever instead of erroring) — see
+    # backend/Dockerfile for the full explanation.
+    command: >
+      sh -c "uv run alembic upgrade head &&
+             uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --loop asyncio"
 
   frontend:
     build: ./frontend
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     environment:
       # Browser-visible backend address — the frontend container's own
       # network namespace is irrelevant here, this runs in the user's
@@ -55,3 +85,4 @@ services:
 
 volumes:
   verdikt_pgdata:
+  backend_venv:
