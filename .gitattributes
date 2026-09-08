@@ -1,0 +1,14 @@
+# Normalize line endings to LF in the repo regardless of which OS
+# clones/commits — without this, a Windows checkout (git's default
+# core.autocrlf=true there) can convert every text file to CRLF on
+# checkout, which is at best noisy diffs and at worst breaks anything
+# that cares about exact line endings (a few test fixtures compare raw
+# HTTP responses byte-for-byte).
+* text=auto eol=lf
+
+# Binary/generated content some tests build byte-for-byte — never let
+# git touch these regardless of platform.
+*.png binary
+*.ico binary
+*.woff binary
+*.woff2 binary
