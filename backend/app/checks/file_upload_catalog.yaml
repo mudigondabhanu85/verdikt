@@ -38,3 +38,50 @@
     Content-Disposition: attachment header and a randomized filename.
   references:
     - "https://cwe.mitre.org/data/definitions/434.html"
+
+# Only tried when the direct dangerous-extension check above is
+# rejected — i.e. the endpoint does enforce an image-extension
+# allow-list. Scoped honestly: this proves the server accepts and
+# stores, byte-for-byte unmodified, a file that is simultaneously a
+# structurally valid image (real magic bytes a getimagesize()-style
+# check accepts) and executable server-side code — a real, provable
+# weakness (no re-encoding/stripping happens) — but not standalone
+# code execution. That requires a second vector able to make the
+# server execute or include the stored file (e.g. Local File
+# Inclusion) rather than just serve it as a static image.
+- id: file-upload-image-polyglot-bypass
+  title: "File Upload Content Validation Bypassed With an Image Polyglot"
+  owasp_2025_category: "A05 Injection"
+  cwe_id: "CWE-434"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+  cvss_score: 5.3
+  portswigger_reference_url: "https://portswigger.net/web-security/file-upload"
+  plain_language_summary: >
+    This upload form rejects files with dangerous extensions directly,
+    but accepted a file crafted to be a real, valid {extension} image
+    (passing the same content check a library like PHP's getimagesize()
+    performs) while also containing executable server-side code appended
+    after the image data. The file was stored and served back with that
+    code intact — the server isn't stripping or re-encoding upload
+    content, only checking that it looks like a real image. On its own
+    this file is just a harmless image to anything that renders it, but
+    combined with any other vulnerability that can make the server
+    execute or include this specific file (path/local file inclusion,
+    for instance), the embedded code would run.
+  technical_description: >
+    Submitting {url} with a file named "verdikt-upload-test{extension}"
+    (Content-Type: {content_type}) — real {extension} magic bytes/header
+    followed by an embedded server-side script payload — was accepted
+    (HTTP {status_code}) and, on re-fetching the stored file, the
+    embedded payload text was present unchanged, proving the server
+    never re-encoded or stripped the upload's content.
+  remediation: >
+    Don't rely on a magic-bytes/getimagesize()-style check alone —
+    actively re-encode every uploaded image through a real image
+    library (e.g. re-saving it via GD/Imagick/Pillow) before storing it,
+    which destroys any appended non-image data. Combine with a strict
+    extension allow-list, storage outside the webroot, and serving
+    uploads with a Content-Disposition: attachment header.
+  references:
+    - "https://cwe.mitre.org/data/definitions/434.html"

@@ -37,12 +37,14 @@ def _extract_file_content(body: bytes) -> bytes:
     return body[start:end] if end != -1 else body[start:]
 
 
-def _make_handler(*, reject_dangerous: bool):
+def _make_handler():
     # Module-scoped so both do_POST and do_GET (separate request-handler
     # instances) see the same store — mirrors a real vulnerable app that
     # actually accepts and later serves the file back, which is exactly
     # what FileUploadAgent now requires proof of (see file_upload.py's
-    # class docstring for the real false-positive this replaced).
+    # class docstring for the real false-positive this replaced). No
+    # validation at all — see _image_validating_server below for a
+    # fixture that actually defends against dangerous/polyglot uploads.
     uploaded_files: dict[str, bytes] = {}
 
     class Handler(BaseHTTPRequestHandler):
@@ -54,13 +56,6 @@ def _make_handler(*, reject_dangerous: bool):
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length)
             filename = _extract_filename(body) or ""
-
-            if reject_dangerous and any(filename.endswith(ext) for ext in _DANGEROUS_EXTENSIONS):
-                self.send_response(400)
-                self.end_headers()
-                self.wfile.write(b"File type not allowed")
-                return
-
             content = _extract_file_content(body)
             uploaded_files[filename] = content
 
@@ -89,8 +84,8 @@ def _make_handler(*, reject_dangerous: bool):
     return Handler
 
 
-def _server(*, reject_dangerous: bool):
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(reject_dangerous=reject_dangerous))
+def _server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler())
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -154,6 +149,91 @@ def _login_gated_server():
     return server, thread
 
 
+_REAL_IMAGE_MAGIC = (b"GIF87a", b"GIF89a", b"\x89PNG\r\n\x1a\n")
+
+
+def _make_image_validating_handler(*, strip_trailing_bytes: bool):
+    """Mirrors a getimagesize()-style validator (real DVWA High
+    behavior, confirmed live this session): rejects a raw dangerous
+    extension outright, and for an image extension, only accepts it if
+    the content actually starts with real image magic bytes — otherwise
+    a benign-looking rejection message, not an error status, exactly
+    like DVWA's real "We can only accept JPEG or PNG images" response.
+    `strip_trailing_bytes` simulates an endpoint that actually
+    re-encodes the image (destroying anything appended after the real
+    image data) rather than storing the upload byte-for-byte."""
+    uploaded_files: dict[str, bytes] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            if self.path != "/upload":
+                self.send_response(404)
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            filename = _extract_filename(body) or ""
+            content = _extract_file_content(body)
+
+            if any(filename.endswith(ext) for ext in _DANGEROUS_EXTENSIONS):
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"File type not allowed")
+                return
+
+            # DVWA High's real whitelist (confirmed live) is extension
+            # *and* content: .gif is rejected by extension alone, even
+            # though it's a perfectly valid image our polyglot builder
+            # also supports — only .png/.jpg/.jpeg get to the content check.
+            if not filename.endswith((".jpg", ".jpeg", ".png")):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"Your image was not uploaded. We can only accept JPEG or PNG images.")
+                return
+
+            if not content.startswith(_REAL_IMAGE_MAGIC):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"Your image was not uploaded. We can only accept JPEG or PNG images.")
+                return
+
+            stored = content[:10] if strip_trailing_bytes else content
+            uploaded_files[filename] = stored
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(f"/uploads/{filename} succesfully uploaded!".encode())
+
+        def do_GET(self):  # noqa: N802
+            if self.path.startswith("/uploads/"):
+                filename = self.path.removeprefix("/uploads/")
+                content = uploaded_files.get(filename)
+                if content is None:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(content)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, format, *args):  # noqa: A002
+            pass
+
+    return Handler
+
+
+def _image_validating_server(*, strip_trailing_bytes: bool = False):
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), _make_image_validating_handler(strip_trailing_bytes=strip_trailing_bytes)
+    )
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
 def _form(host, port) -> FormInfo:
     return FormInfo(
         action_url=f"http://{host}:{port}/upload",
@@ -163,7 +243,7 @@ def _form(host, port) -> FormInfo:
 
 
 async def test_endpoint_accepting_php_upload_is_flagged(db_adapter):
-    server, thread = _server(reject_dangerous=False)
+    server, thread = _server()
     try:
         host, port = server.server_address
         async with session_scope(db_adapter) as session:
@@ -194,7 +274,13 @@ async def test_endpoint_accepting_php_upload_is_flagged(db_adapter):
 
 
 async def test_endpoint_rejecting_dangerous_extensions_is_not_flagged(db_adapter):
-    server, thread = _server(reject_dangerous=True)
+    # A blacklist-only fixture (reject_dangerous=True, no image content
+    # check) would now correctly get flagged via the polyglot fallback —
+    # it accepts any non-blacklisted extension unconditionally, which is
+    # itself a real gap. A genuinely defended endpoint needs real image
+    # validation too, so this uses the fixture that actually re-encodes
+    # (strips) uploads the same way a real image-processing pipeline would.
+    server, thread = _image_validating_server(strip_trailing_bytes=True)
     try:
         host, port = server.server_address
         async with session_scope(db_adapter) as session:
@@ -280,6 +366,70 @@ async def test_authenticated_upload_that_is_really_retrievable_is_flagged(db_ada
             }
             findings = await agent.run([_form(host, port)], sessions)
             assert len(findings) == 1
+            await client.aclose()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+async def test_image_content_check_is_bypassed_with_a_polyglot(db_adapter):
+    """Regression coverage for the real gap this session found live
+    against DVWA High: an endpoint that rejects raw dangerous extensions
+    but only checks that an image upload *looks like a real image*
+    (getimagesize()-style) accepts a payload that's genuinely valid PNG
+    header bytes with a PHP payload appended — and that payload survives
+    unmodified in storage. Verified end-to-end against the real DVWA
+    container (both the .gif and .png polyglots pass PHP's own
+    getimagesize(); DVWA High itself only allows the .png one through)."""
+    server, thread = _image_validating_server()
+    try:
+        host, port = server.server_address
+        async with session_scope(db_adapter) as session:
+            client = ScopedHttpClient(
+                version_id=uuid.uuid4(),
+                scope_entries=[ScopeEntry(host=host, port=port, in_scope=True)],
+                db_session=session,
+            )
+            agent = FileUploadAgent(
+                client, scan_run_id=uuid.uuid4(), agent_job_id=uuid.uuid4(), db_session=session
+            )
+            findings = await agent.run([_form(host, port)])
+
+            assert len(findings) == 1
+            finding = findings[0]
+            assert finding.check_id == "file-upload-image-polyglot-bypass"
+            assert finding.severity == "Medium"
+            assert ".png" in finding.technical_description
+
+            stored = (await session.execute(select(Finding))).scalars().all()
+            assert len(stored) == 1
+
+            await client.aclose()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+async def test_endpoint_that_actually_reencodes_images_is_not_flagged(db_adapter):
+    """The polyglot bypass must not fire against an endpoint that
+    genuinely re-processes uploads through a real image library —
+    stripping anything appended after the real image data destroys the
+    embedded payload, so _fetch_uploaded_file's marker check correctly
+    finds nothing and no finding is produced."""
+    server, thread = _image_validating_server(strip_trailing_bytes=True)
+    try:
+        host, port = server.server_address
+        async with session_scope(db_adapter) as session:
+            client = ScopedHttpClient(
+                version_id=uuid.uuid4(),
+                scope_entries=[ScopeEntry(host=host, port=port, in_scope=True)],
+                db_session=session,
+            )
+            agent = FileUploadAgent(
+                client, scan_run_id=uuid.uuid4(), agent_job_id=uuid.uuid4(), db_session=session
+            )
+            findings = await agent.run([_form(host, port)])
+            assert findings == []
             await client.aclose()
     finally:
         server.shutdown()

@@ -6,7 +6,9 @@ of what this does and doesn't prove.
 """
 
 import re
+import struct
 import uuid
+import zlib
 from urllib.parse import urljoin
 
 import httpx
@@ -23,13 +25,52 @@ from app.models.finding import Evidence, Finding
 
 _CATALOG_FILE = "file_upload_catalog.yaml"
 
+_MARKER = b'<?php echo "verdikt-upload-test"; ?>'
+
 # (extension, content-type, marker content) — the three most common
 # server-side stacks' web-shell extensions. Stops at the first one
 # accepted; doesn't try to prove all three are exploitable.
 _DANGEROUS_UPLOADS = (
-    (".php", "application/x-php", b'<?php echo "verdikt-upload-test"; ?>'),
+    (".php", "application/x-php", _MARKER),
     (".jsp", "application/x-jsp", b'<% out.println("verdikt-upload-test"); %>'),
     (".asp", "application/x-asp", b'<% Response.Write("verdikt-upload-test") %>'),
+)
+
+
+def _gif_polyglot() -> bytes:
+    """GIF89a signature + the minimum Logical Screen Descriptor a
+    getimagesize()-style content check needs to report real dimensions
+    (1x1, no global color table) — everything after this is invisible
+    to a GIF parser but still physically stored in the file. The
+    classic, most reliable image/code polyglot technique because GIF
+    readers stop at a trailer marker and never validate what follows."""
+    header = b"GIF89a" + struct.pack("<HH", 1, 1) + b"\x00\x00\x00"
+    return header + _MARKER
+
+
+def _png_polyglot() -> bytes:
+    """PNG signature + a real IHDR chunk (1x1, 8-bit grayscale) with a
+    correctly computed CRC — some getimagesize()-style checks validate
+    the CRC, not just the presence of a PNG-looking header, so a fake
+    one would fail validation on those. No IDAT/IEND chunks follow, so
+    this won't survive a decoder that actually renders pixel data (e.g.
+    Pillow/ImageMagick round-tripping the file) — only ones that, like
+    PHP's getimagesize(), just read the header."""
+    signature = b"\x89PNG\r\n\x1a\n"
+    chunk_type = b"IHDR"
+    chunk_data = struct.pack(">II", 1, 1) + bytes([8, 0, 0, 0, 0])
+    crc = zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF
+    ihdr_chunk = struct.pack(">I", len(chunk_data)) + chunk_type + chunk_data + struct.pack(">I", crc)
+    return signature + ihdr_chunk + _MARKER
+
+
+# Only tried when every extension in _DANGEROUS_UPLOADS above is
+# rejected — i.e. the endpoint enforces an image-extension allow-list.
+# Each payload is a structurally real image (passes a getimagesize()-
+# style check) with a PHP payload appended after the image data.
+_POLYGLOT_UPLOADS = (
+    (".gif", "image/gif", _gif_polyglot()),
+    (".png", "image/png", _png_polyglot()),
 )
 
 
@@ -172,43 +213,59 @@ class FileUploadAgent:
                 return url
         return None
 
-    async def _check_form(self, form: FormInfo, file_field: str) -> Finding | None:
-        for extension, content_type, content in _DANGEROUS_UPLOADS:
+    async def _confirm_upload(
+        self, form: FormInfo, file_field: str, extension: str, content_type: str, content: bytes
+    ) -> tuple[httpx.Response, str] | None:
+        """One accept-and-fetch-back attempt, run twice (§2 step 1:
+        deterministic re-execution before confirming — a fresh upload,
+        fresh fetch-back, not just re-checking the same one). Returns the
+        second attempt's response/URL so callers cite the reproduced
+        evidence, not the first."""
+        for _ in range(2):
             result = await self._try_upload(form, file_field, extension, content_type, content)
             if result is None:
-                continue
+                return None
             filename, response = result
             if self._rejected(response):
-                continue
+                return None
             uploaded_url = await self._fetch_uploaded_file(form, response, filename)
             if uploaded_url is None:
-                continue
+                return None
+        return response, uploaded_url
 
-            # §2 step 1: deterministic re-execution before confirming —
-            # a fresh upload, fresh fetch-back, not just re-checking the
-            # same one.
-            result_again = await self._try_upload(form, file_field, extension, content_type, content)
-            if result_again is None:
-                continue
-            filename_again, response_again = result_again
-            if self._rejected(response_again):
-                continue
-            uploaded_url_again = await self._fetch_uploaded_file(form, response_again, filename_again)
-            if uploaded_url_again is None:
-                continue
+    async def _check_form(self, form: FormInfo, file_field: str) -> Finding | None:
+        for extension, content_type, content in _DANGEROUS_UPLOADS:
+            confirmed = await self._confirm_upload(form, file_field, extension, content_type, content)
+            if confirmed is not None:
+                response, uploaded_url = confirmed
+                return await self._persist(
+                    "file-upload-insufficient-validation", form, extension, content_type, response, uploaded_url
+                )
 
-            return await self._persist(form, extension, content_type, response_again, uploaded_url_again)
+        # Only reached when every dangerous extension above was
+        # rejected — i.e. this endpoint does enforce an image-extension
+        # allow-list. Try the same accept-and-fetch-back proof with a
+        # payload that's simultaneously a structurally real image and
+        # executable code, disguised under an allowed extension.
+        for extension, content_type, content in _POLYGLOT_UPLOADS:
+            confirmed = await self._confirm_upload(form, file_field, extension, content_type, content)
+            if confirmed is not None:
+                response, uploaded_url = confirmed
+                return await self._persist(
+                    "file-upload-image-polyglot-bypass", form, extension, content_type, response, uploaded_url
+                )
         return None
 
     async def _persist(
         self,
+        check_id: str,
         form: FormInfo,
         extension: str,
         content_type: str,
         response: httpx.Response,
         uploaded_url: str,
     ) -> Finding:
-        check_def = get_check("file-upload-insufficient-validation", filename=_CATALOG_FILE)
+        check_def = get_check(check_id, filename=_CATALOG_FILE)
         extra = {
             "extension": extension,
             "content_type": content_type,
@@ -217,7 +274,7 @@ class FileUploadAgent:
         finding = Finding(
             scan_run_id=self._scan_run_id,
             agent_job_id=self._agent_job_id,
-            check_id="file-upload-insufficient-validation",
+            check_id=check_id,
             title=check_def.title,
             severity=check_def.severity,
             owasp_2025_category=check_def.owasp_2025_category,
