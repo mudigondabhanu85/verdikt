@@ -339,23 +339,43 @@ async def _group_open_findings_for_version(session: AsyncSession, version_id: uu
 async def _auto_seed_findings_into_draft(
     session: AsyncSession, version_id: uuid.UUID, draft: VgsReportDraft
 ) -> None:
-    """The first time a report draft's Vulnerability Picker is opened,
-    every real open/risk-accepted scan finding for this Version is
+    """Every real open/risk-accepted scan finding for this Version is
     auto-added — one report vulnerability per (check_id, title) group,
     not per raw Finding row (see _build_vulnerability_from_group) — so a
     report starts pre-populated with what the scan actually found, and
-    curation from there is by removing what you don't want. Runs at most
-    once per draft (see findings_auto_seeded)."""
+    curation from there is by removing what you don't want.
+
+    Runs on every list_report_vulnerabilities call, not just the first
+    (findings_auto_seeded now only records "has this draft ever been
+    seeded at least once" for informational purposes) — a real gap this
+    closes: a later scan run confirming a vulnerability class this
+    draft had never seen before (a real incident: a vertical-privilege-
+    escalation check added after this version's draft already existed)
+    was invisible in "Selected for this report" until an analyst
+    happened to notice it in the Vulnerability Picker's "From scans"
+    list and added it by hand — a scan-confirmed finding should show up
+    in the VGS tab as a matter of course, not by luck. Safe to re-run:
+    the `already_ids` check below only ever adds a group whose
+    representative Finding isn't already linked as some row's
+    source_finding_id in this draft, so an existing, still-present
+    selection is never duplicated. A vulnerability an analyst
+    deliberately removed *will* reappear if a later scan reconfirms the
+    same (check_id, title) group — matching "whatever the scan finds
+    shows up here" rather than silently trusting a stale removal
+    decision made before that later scan ever ran.
+    """
     groups = await _group_open_findings_for_version(session, version_id)
 
     if groups:
-        already_result = await session.execute(
+        already_present_result = await session.execute(
             select(VgsReportVulnerability.source_finding_id).where(
                 VgsReportVulnerability.report_draft_id == draft.id,
                 VgsReportVulnerability.source_finding_id.isnot(None),
             )
         )
-        already_ids = {row[0] for row in already_result.all()}
+        already_present_ids = {str(row[0]) for row in already_present_result.all()}
+        ever_seeded_ids = set(draft.auto_seeded_finding_ids or [])
+        skip_ids = already_present_ids | ever_seeded_ids
 
         count_result = await session.execute(
             select(VgsReportVulnerability).where(VgsReportVulnerability.report_draft_id == draft.id)
@@ -363,16 +383,32 @@ async def _auto_seed_findings_into_draft(
         order_index = len(list(count_result.scalars().all()))
 
         for group in groups:
-            if any(finding.id in already_ids for finding in group.instances):
+            if any(str(finding.id) in skip_ids for finding in group.instances):
                 continue
             vuln = build_vulnerability_from_group(draft.id, group, order_index)
             order_index += 1
             session.add(vuln)
             await session.flush()
             await _attach_finding_evidence(session, vuln, group.shared)
+            _mark_group_as_seeded(draft, group)
 
     draft.findings_auto_seeded = True
     await session.commit()
+
+
+def _mark_group_as_seeded(draft: VgsReportDraft, group: FindingGroup) -> None:
+    """Records every Finding.id in this group as having been offered to
+    this draft at least once — auto-seed's persistent memory against
+    resurrecting a deliberately-deleted vulnerability the next time it
+    runs (see VgsReportDraft.auto_seeded_finding_ids). Called both by
+    auto-seed itself and by the manual per-finding "Add" action, so a
+    manual add is remembered exactly the same way an automatic one is —
+    otherwise deleting a manually-added vulnerability would have
+    auto-seed immediately resurrect it on the very next Picker load.
+    """
+    seen = set(draft.auto_seeded_finding_ids or [])
+    seen.update(str(finding.id) for finding in group.instances)
+    draft.auto_seeded_finding_ids = sorted(seen)
 
 
 @draft_router.get("/vulnerabilities", response_model=list[VgsReportVulnerabilityOut])
@@ -383,8 +419,7 @@ async def list_report_vulnerabilities(
 ) -> list[VgsReportVulnerability]:
     await get_version_or_404(session, version_id, user.org_id)
     draft = await _get_or_create_draft(session, version_id)
-    if not draft.findings_auto_seeded:
-        await _auto_seed_findings_into_draft(session, version_id, draft)
+    await _auto_seed_findings_into_draft(session, version_id, draft)
     result = await session.execute(
         select(VgsReportVulnerability)
         .where(VgsReportVulnerability.report_draft_id == draft.id)
@@ -487,6 +522,7 @@ async def add_report_vulnerability_from_finding(
     session.add(vuln)
     await session.flush()
     await _attach_finding_evidence(session, vuln, group.shared)
+    _mark_group_as_seeded(draft, group)
 
     await write_audit_log(
         session,

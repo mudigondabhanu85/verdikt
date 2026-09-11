@@ -465,6 +465,56 @@ async def test_vulnerability_picker_auto_seeds_open_findings_on_first_load(vgs_c
     assert listed_again.json() == []
 
 
+async def test_auto_seed_reruns_on_every_load_without_resurrecting_deletions(vgs_client):
+    """A later scan's newly-confirmed vulnerability class must appear in
+    'Selected for this report' automatically on the next picker load,
+    even though findings_auto_seeded was already set True by an earlier
+    scan — while a vulnerability the analyst deliberately deleted (and
+    whose underlying Finding was never rescanned) must stay deleted.
+    This is the fix for the real gap found live: a scan run's newly
+    confirmed check sat invisible in 'Selected for this report' until an
+    analyst noticed it in the 'From scans' list and added it by hand."""
+    client, db_adapter = vgs_client
+    _org, _user, version, headers = await _create_org_admin(db_adapter)
+
+    first_scan_finding = await _make_finding(db_adapter, version.id)
+
+    # First load seeds the one finding from the first scan.
+    listed = await client.get(f"/versions/{version.id}/vgs-report-draft/vulnerabilities", headers=headers)
+    assert listed.status_code == 200
+    body = listed.json()
+    assert len(body) == 1
+    assert body[0]["source_finding_id"] == str(first_scan_finding.id)
+
+    # The analyst deliberately removes it.
+    deleted = await client.delete(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/{body[0]['id']}", headers=headers
+    )
+    assert deleted.status_code == 204
+
+    # Reloading without any new scan must not resurrect it (the
+    # already-covered regression from
+    # test_vulnerability_picker_auto_seeds_open_findings_on_first_load).
+    listed_again = await client.get(f"/versions/{version.id}/vgs-report-draft/vulnerabilities", headers=headers)
+    assert listed_again.json() == []
+
+    # A later scan confirms a brand new, never-before-seen check.
+    second_scan_findings = await _make_findings_sharing_check_id(
+        db_adapter, version.id, ["http://site.test/admin"]
+    )
+
+    # Reloading the picker now must auto-add the new check without a
+    # manual Add — the deleted HSTS finding still must not come back.
+    listed_after_new_scan = await client.get(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities", headers=headers
+    )
+    assert listed_after_new_scan.status_code == 200
+    after_body = listed_after_new_scan.json()
+    assert len(after_body) == 1
+    assert after_body[0]["source_finding_id"] == str(second_scan_findings[0].id)
+    assert after_body[0]["title"] == "Missing Content-Security-Policy"
+
+
 async def test_delete_report_vulnerability_with_evidence_steps_succeeds(vgs_client):
     """Regression test: vgs_evidence_steps.report_vulnerability_id had no
     ON DELETE CASCADE, so deleting a selected vulnerability that had any

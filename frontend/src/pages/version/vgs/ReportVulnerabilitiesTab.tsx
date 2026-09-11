@@ -1,6 +1,13 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { calculateCvss, vgsApi, type AvailableFindingOut, type Severity, type VgsVulnerabilityLibraryEntryOut } from './api'
+import {
+  calculateCvss,
+  vgsApi,
+  type AvailableFindingOut,
+  type Severity,
+  type VgsReportVulnerabilityOut,
+  type VgsVulnerabilityLibraryEntryOut,
+} from './api'
 
 const CVSS_METRICS: Record<string, { label: string; options: Record<string, string> }> = {
   AV: { label: 'Attack Vector', options: { N: 'Network', A: 'Adjacent', L: 'Local', P: 'Physical' } },
@@ -127,6 +134,59 @@ function FindingRow({ item, versionId }: { item: AvailableFindingOut; versionId:
   )
 }
 
+const SEVERITIES: Severity[] = ['Critical', 'High', 'Medium', 'Low']
+
+function SelectedVulnerabilityRow({
+  vuln,
+  versionId,
+}: {
+  vuln: VgsReportVulnerabilityOut
+  versionId: string
+}) {
+  const queryClient = useQueryClient()
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['vgs-report-vulnerabilities', versionId] })
+
+  const severityMutation = useMutation({
+    mutationFn: (severity: Severity) => vgsApi.vulnerabilities.update(versionId, vuln.id, { severity }),
+    onSuccess: invalidate,
+  })
+  const removeMutation = useMutation({
+    mutationFn: () => vgsApi.vulnerabilities.delete(versionId, vuln.id),
+    onSuccess: invalidate,
+  })
+
+  return (
+    <li className="rounded border border-gray-200 bg-purple-50 p-3">
+      <div className="flex items-center justify-between">
+        <span className="font-medium">{vuln.title}</span>
+        <button onClick={() => removeMutation.mutate()} className="text-xs text-red-600 hover:underline">
+          Remove
+        </button>
+      </div>
+      <div className="mt-1 flex items-center gap-2 text-xs text-gray-600">
+        <select
+          value={vuln.severity}
+          onChange={(e) => severityMutation.mutate(e.target.value as Severity)}
+          disabled={severityMutation.isPending}
+          className="rounded border border-gray-300 bg-white px-1.5 py-0.5 text-xs disabled:opacity-50"
+        >
+          {SEVERITIES.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+        <span>· CVSS {vuln.cvss_score}</span>
+        {vuln.source_finding_id && (
+          <span className="text-gray-400" title="Severity as originally identified by the scan; editable here for this report only">
+            (from scan)
+          </span>
+        )}
+      </div>
+    </li>
+  )
+}
+
 export function ReportVulnerabilitiesTab({ versionId }: { versionId: string }) {
   const queryClient = useQueryClient()
   const [searchTerm, setSearchTerm] = useState('')
@@ -161,11 +221,6 @@ export function ReportVulnerabilitiesTab({ versionId }: { versionId: string }) {
       setCustomTitle('')
       setCustomDescription('')
     },
-  })
-
-  const removeMutation = useMutation({
-    mutationFn: (vulnId: string) => vgsApi.vulnerabilities.delete(versionId, vulnId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['vgs-report-vulnerabilities', versionId] }),
   })
 
   const filteredLibrary = (library ?? []).filter((v) => v.title.toLowerCase().includes(searchTerm.toLowerCase()))
@@ -263,20 +318,7 @@ export function ReportVulnerabilitiesTab({ versionId }: { versionId: string }) {
         <h3 className="font-semibold text-gray-800">Selected for this report ({selected?.length ?? 0})</h3>
         <ul className="max-h-[600px] space-y-2 overflow-y-auto">
           {(selected ?? []).map((v) => (
-            <li key={v.id} className="rounded border border-gray-200 bg-purple-50 p-3">
-              <div className="flex items-center justify-between">
-                <span className="font-medium">{v.title}</span>
-                <button
-                  onClick={() => removeMutation.mutate(v.id)}
-                  className="text-xs text-red-600 hover:underline"
-                >
-                  Remove
-                </button>
-              </div>
-              <p className="mt-1 text-xs text-gray-600">
-                {v.severity} · CVSS {v.cvss_score}
-              </p>
-            </li>
+            <SelectedVulnerabilityRow key={v.id} vuln={v} versionId={versionId} />
           ))}
           {(selected ?? []).length === 0 && <p className="text-sm text-gray-400">Nothing selected yet.</p>}
         </ul>
