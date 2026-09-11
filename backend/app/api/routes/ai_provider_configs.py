@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, update
@@ -9,7 +10,12 @@ from app.auth.rbac import require_permission
 from app.db.session import get_db_session
 from app.models.ai_provider_config import AIProviderConfig
 from app.models.organization import User
-from app.schemas.ai_provider_config import AIProviderConfigCreate, AIProviderConfigOut
+from app.schemas.ai_provider_config import (
+    AIProviderConfigCreate,
+    AIProviderConfigOut,
+    AIProviderConfigRotateSecret,
+    AIProviderConfigUpdateModels,
+)
 from app.vault.credential_vault import encrypt_secret, mask_secret
 
 router = APIRouter(prefix="/ai-provider-configs", tags=["ai-provider-configs"])
@@ -26,10 +32,17 @@ async def create_ai_provider_config(
         label=payload.label,
         provider=payload.provider,
         model=payload.model,
+        model_reasoning=payload.model_reasoning,
+        model_classification=payload.model_classification,
         base_url=payload.base_url,
         auth_type=payload.auth_type,
         encrypted_api_key=encrypt_secret(payload.api_key),
         masked_reference=mask_secret(payload.api_key),
+        app_id=payload.app_id,
+        encrypted_secondary_api_key=(
+            encrypt_secret(payload.secondary_api_key) if payload.secondary_api_key else None
+        ),
+        secret_rotated_at=datetime.now(timezone.utc),
     )
     session.add(config)
     # Audit the creation event, never the API key itself (§1.5).
@@ -55,6 +68,93 @@ async def list_ai_provider_configs(
         select(AIProviderConfig).where(AIProviderConfig.org_id == user.org_id)
     )
     return list(result.scalars().all())
+
+
+@router.post("/{config_id}/rotate-secret", response_model=AIProviderConfigOut)
+async def rotate_ai_provider_config_secret(
+    config_id: uuid.UUID,
+    payload: AIProviderConfigRotateSecret,
+    user: User = Depends(require_permission("ai_provider_config", "update")),
+    session: AsyncSession = Depends(get_db_session),
+) -> AIProviderConfig:
+    """Updates just the secret(s)/app_id on an existing row — label,
+    provider, model, base_url, and (crucially) is_default all stay
+    unchanged. Covers the routine "my Spark bearer token expired, here's
+    a new one" action, and fixing a wrong app_id (e.g. a typo) — either
+    way, no delete-and-recreate, no re-picking "set default".
+    """
+    config = await session.get(AIProviderConfig, config_id)
+    if config is None or config.org_id != user.org_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "AI provider config not found")
+
+    updated_fields = []
+    if payload.api_key is not None:
+        config.encrypted_api_key = encrypt_secret(payload.api_key)
+        config.masked_reference = mask_secret(payload.api_key)
+        config.secret_rotated_at = datetime.now(timezone.utc)
+        updated_fields.append("api_key")
+    if payload.secondary_api_key is not None:
+        config.encrypted_secondary_api_key = encrypt_secret(payload.secondary_api_key)
+        updated_fields.append("secondary_api_key")
+    if payload.app_id is not None:
+        config.app_id = payload.app_id
+        updated_fields.append("app_id")
+
+    if updated_fields:
+        # Never log the secret itself — just which field(s) changed (§1.5).
+        await write_audit_log(
+            session,
+            user=user,
+            action="ai_provider_config.rotate_secret",
+            resource_type="organization",
+            resource_id=user.org_id,
+            metadata={"label": config.label, "fields_rotated": updated_fields},
+        )
+        await session.commit()
+        await session.refresh(config)
+    return config
+
+
+@router.patch("/{config_id}/models", response_model=AIProviderConfigOut)
+async def update_ai_provider_config_models(
+    config_id: uuid.UUID,
+    payload: AIProviderConfigUpdateModels,
+    user: User = Depends(require_permission("ai_provider_config", "update")),
+    session: AsyncSession = Depends(get_db_session),
+) -> AIProviderConfig:
+    """Routes different agent roles to different models on the same
+    provider account (see app.ai.model_routing.ModelRouter) — separate
+    from rotate-secret (which never touches model fields) and from
+    set-default. An empty string clears a tier override back to
+    following `model`; omitting a field leaves it untouched.
+    """
+    config = await session.get(AIProviderConfig, config_id)
+    if config is None or config.org_id != user.org_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "AI provider config not found")
+
+    updated_fields = []
+    if payload.model is not None and payload.model:
+        config.model = payload.model
+        updated_fields.append("model")
+    if payload.model_reasoning is not None:
+        config.model_reasoning = payload.model_reasoning or None
+        updated_fields.append("model_reasoning")
+    if payload.model_classification is not None:
+        config.model_classification = payload.model_classification or None
+        updated_fields.append("model_classification")
+
+    if updated_fields:
+        await write_audit_log(
+            session,
+            user=user,
+            action="ai_provider_config.update_models",
+            resource_type="organization",
+            resource_id=user.org_id,
+            metadata={"label": config.label, "fields_updated": updated_fields},
+        )
+        await session.commit()
+        await session.refresh(config)
+    return config
 
 
 @router.post("/{config_id}/set-default", response_model=AIProviderConfigOut)

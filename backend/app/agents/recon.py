@@ -131,8 +131,16 @@ class ReconAgent:
     beyond whatever a traffic import happened to already seed.
     """
 
-    MAX_PAGES = 40
-    MAX_DEPTH = 2
+    # Raised 2026-09 from 40/2 — real apps routinely have more than 40
+    # pages or a link structure deeper than 2 hops from robots.txt/
+    # sitemap.xml/the homepage, so the crawl was silently stopping well
+    # short of "the entire application" for anything beyond a small
+    # demo target. Still bounded (§1.2 safe-by-default — never truly
+    # unbounded even against a fully authorized target), just a much
+    # more realistic ceiling; CONCURRENCY unchanged since it controls
+    # request rate against the live target, not coverage.
+    MAX_PAGES = 300
+    MAX_DEPTH = 6
     CONCURRENCY = 5
 
     def __init__(
@@ -141,10 +149,20 @@ class ReconAgent:
         targets: list[Target],
         *,
         session: AuthenticatedSession | None = None,
+        extra_seed_urls: list[str] | None = None,
     ):
         self._client = client
         self._targets = targets
         self._session = session
+        # Traffic-imported and AI-recon-planner-suggested URLs (see
+        # app.agents.graph's recon_node) — previously only ever unioned
+        # into the *result* list after this crawl finished, never
+        # explored *from*, so any page only reachable by following a
+        # link on one of them was invisible to Verdikt no matter how
+        # much traffic was imported. Seeding them into the frontier
+        # here means the crawl actually continues from them, same as
+        # any page it found itself.
+        self._extra_seed_urls = extra_seed_urls or []
         self._semaphore = asyncio.Semaphore(self.CONCURRENCY)
         self.discovered_parameters: list[DiscoveredParameter] = []
         self.discovered_forms: list[FormInfo] = []
@@ -168,6 +186,7 @@ class ReconAgent:
         frontier: list[str] = []
         for target in self._targets:
             frontier.extend(_seed_urls_for_target(target))
+        frontier.extend(self._extra_seed_urls)
 
         depth = 0
         while frontier and depth <= self.MAX_DEPTH and len(visited) < self.MAX_PAGES:

@@ -37,7 +37,20 @@ services:
       # any container-internal address) — see app/config.py.
       FRONTEND_ORIGIN: http://localhost:5173
     ports:
-      - "8000:8000"
+      # Host-side port only — container still listens on 8000 internally
+      # (see the healthcheck/command below and frontend's
+      # VITE_API_BASE_URL, which must match this host-side value since
+      # the browser talks to the host, not the container network).
+      # Changed from 8000 because something else on this machine already
+      # owns host port 8000.
+      - "8095:8000"
+      # noVNC/websockify (start-display.sh) — lets the frontend stream
+      # the login-macro recorder's headed browser into the analyst's own
+      # tab, no browser extension or local display needed. Bound to
+      # 127.0.0.1 only, not "6080:6080" (all-interfaces) — x11vnc runs
+      # with -nopw, so this must never be reachable from the network,
+      # only from the analyst's own machine.
+      - "127.0.0.1:6080:6080"
     volumes:
       - ./backend:/app
       # Masks the container's own image-built (Linux) .venv from the
@@ -64,7 +77,8 @@ services:
     # browser launch (hangs forever instead of erroring) — see
     # backend/Dockerfile for the full explanation.
     command: >
-      sh -c "uv run alembic upgrade head &&
+      sh -c "sh scripts/start-display.sh &&
+             uv run alembic upgrade head &&
              uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --loop asyncio"
 
   frontend:
@@ -76,7 +90,10 @@ services:
       # Browser-visible backend address — the frontend container's own
       # network namespace is irrelevant here, this runs in the user's
       # browser on the host.
-      VITE_API_BASE_URL: http://localhost:8000
+      VITE_API_BASE_URL: http://localhost:8095
+      # Where the login-macro recorder's live VNC-in-browser view loads
+      # from — see backend's 127.0.0.1:6080 port mapping above.
+      VITE_VNC_BASE_URL: http://localhost:6080
     ports:
       - "5173:5173"
     volumes:

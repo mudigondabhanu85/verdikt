@@ -1,23 +1,71 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from '../../api/client'
+import { api, ApiError } from '../../api/client'
+import type { TestLoginResult } from '../../api/types'
 import { useAuth, canWrite } from '../../auth/AuthContext'
 import { MacroSection } from './MacroSection'
+
+// The direct answer to "how do I confirm login is working and getting a
+// 200": one button, one clear pass/fail banner with the actual URL and
+// status code hit — not just "a session was created" (that can happen
+// with a garbage token and still 401 on every real request, which is
+// exactly the failure mode this exists to catch). See
+// backend/app/api/routes/credentials.py's test_login for what it
+// actually checks (and doesn't — <form> auto-discovery needs a real
+// crawl this quick check skips).
+function TestLoginControl({ versionId, credentialId }: { versionId: string; credentialId: string }) {
+  const [result, setResult] = useState<TestLoginResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const testMutation = useMutation({
+    mutationFn: () => api.credentials.testLogin(versionId, credentialId),
+    onSuccess: (res) => {
+      setError(null)
+      setResult(res)
+    },
+    onError: (err) => {
+      setResult(null)
+      setError(err instanceof ApiError ? err.message : 'Test failed')
+    },
+  })
+
+  return (
+    <div className="mt-1">
+      <button
+        onClick={() => testMutation.mutate()}
+        disabled={testMutation.isPending}
+        className="text-xs text-purple-700 hover:underline disabled:opacity-50"
+      >
+        {testMutation.isPending ? 'Testing…' : 'Test login'}
+      </button>
+      {result && (
+        <p className={`mt-1 text-xs ${result.ok ? 'text-green-700' : 'text-red-600'}`}>
+          {result.ok ? '✅' : '❌'} {result.message}
+        </p>
+      )}
+      {error && <p className="mt-1 text-xs text-red-600">❌ {error}</p>}
+    </div>
+  )
+}
 
 export function CredentialsTab({ versionId }: { versionId: string }) {
   const { user } = useAuth()
   const queryClient = useQueryClient()
   const [label, setLabel] = useState('')
+  const [credentialType, setCredentialType] = useState<'username_password' | 'api_token'>('username_password')
   const [username, setUsername] = useState('')
   const [secret, setSecret] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [loginEndpoint, setLoginEndpoint] = useState('')
   const [extraCookies, setExtraCookies] = useState('')
+  const [privilegeRank, setPrivilegeRank] = useState('')
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editLabel, setEditLabel] = useState('')
+  const [editUsername, setEditUsername] = useState('')
   const [editSecret, setEditSecret] = useState('')
   const [editLoginEndpoint, setEditLoginEndpoint] = useState('')
+  const [editPrivilegeRank, setEditPrivilegeRank] = useState('')
 
   function parseExtraCookies(raw: string): Record<string, string> | null {
     const trimmed = raw.trim()
@@ -40,10 +88,19 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
     mutationFn: () =>
       api.credentials.create(versionId, {
         label,
-        username,
+        credential_type: credentialType,
+        // api_token has no real "username" (it's not a login) — the
+        // schema requires the field regardless, so a fixed placeholder
+        // goes in rather than asking the analyst to type something
+        // meaningless. login_endpoint/extra_cookies don't apply either
+        // (see backend/app/agents/login.py's api_token branch, which
+        // returns a session straight from `secret` as a bearer token,
+        // skipping login entirely).
+        username: credentialType === 'api_token' ? 'api-token' : username,
         secret,
-        login_endpoint: loginEndpoint || null,
-        extra_cookies: parseExtraCookies(extraCookies),
+        login_endpoint: credentialType === 'api_token' ? null : loginEndpoint || null,
+        extra_cookies: credentialType === 'api_token' ? null : parseExtraCookies(extraCookies),
+        privilege_rank: privilegeRank.trim() ? Number(privilegeRank) : null,
       }),
     onSuccess: () => {
       invalidate()
@@ -52,6 +109,7 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
       setSecret('')
       setLoginEndpoint('')
       setExtraCookies('')
+      setPrivilegeRank('')
     },
   })
 
@@ -64,8 +122,10 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
     mutationFn: (id: string) =>
       api.credentials.update(versionId, id, {
         label: editLabel || undefined,
+        username: editUsername || undefined,
         secret: editSecret || undefined,
         login_endpoint: editLoginEndpoint || undefined,
+        privilege_rank: editPrivilegeRank.trim() ? Number(editPrivilegeRank) : undefined,
       }),
     onSuccess: () => {
       invalidate()
@@ -75,15 +135,32 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (!label.trim() || !username.trim() || !secret.trim()) return
+    if (credentialType === 'api_token') {
+      if (!label.trim() || !secret.trim()) return
+    } else if (!label.trim() || !username.trim() || !secret.trim()) {
+      return
+    }
     createMutation.mutate()
   }
 
-  function startEdit(cred: { id: string; label: string; login_endpoint: string | null }) {
+  function startEdit(cred: {
+    id: string
+    label: string
+    login_endpoint: string | null
+    privilege_rank: number | null
+  }) {
     setEditingId(cred.id)
     setEditLabel(cred.label)
+    // Blank, not pre-filled — the backend never echoes back the current
+    // username (only masked_reference, e.g. "dvaAdmin (****3$)"), same
+    // reason editSecret starts blank. Both are "leave blank to keep
+    // current" fields, not "here's the current value, edit it in place".
+    setEditUsername('')
     setEditSecret('')
     setEditLoginEndpoint(cred.login_endpoint ?? '')
+    // Unlike username/secret, privilege_rank IS returned by the API —
+    // safe (and more usable) to pre-fill for in-place editing.
+    setEditPrivilegeRank(cred.privilege_rank == null ? '' : String(cred.privilege_rank))
   }
 
   return (
@@ -91,6 +168,10 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
       <p className="mb-4 text-sm text-gray-500">
         Secrets are envelope-encrypted server-side and never echoed back — the list below only ever shows a masked
         reference. Leave "login endpoint" blank to fall back to automatic &lt;form&gt; discovery during recon.
+        "API token" skips login entirely — for an imported OpenAPI/Postman collection with no login flow, just a
+        pre-issued bearer token/API key sent on every request. Set "privilege rank" on two or more credentials
+        (higher = more privileged) to enable role-vs-role vertical escalation testing — e.g. does a Standard User's
+        session get into an endpoint only an Admin's should.
       </p>
       {canWrite(user?.role) && (
         <form onSubmit={handleSubmit} className="mb-6 space-y-2">
@@ -101,28 +182,48 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
               placeholder="label (e.g. Standard User)"
               className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
             />
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="username"
-              className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
-            />
+            <select
+              value={credentialType}
+              onChange={(e) => setCredentialType(e.target.value as 'username_password' | 'api_token')}
+              className="rounded border border-gray-300 px-3 py-2 text-sm"
+            >
+              <option value="username_password">Username / password</option>
+              <option value="api_token">API token (bearer, no login)</option>
+            </select>
+            {credentialType !== 'api_token' && (
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="username"
+                className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+              />
+            )}
             <input
               value={secret}
               onChange={(e) => setSecret(e.target.value)}
-              placeholder="password / secret"
+              placeholder={credentialType === 'api_token' ? 'bearer token / API key' : 'password / secret'}
               type="password"
               className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
             />
-            <button
-              type="button"
-              onClick={() => setShowAdvanced((v) => !v)}
-              className="text-xs text-purple-700 hover:underline"
-            >
-              {showAdvanced ? 'Hide' : 'Show'} login config
-            </button>
+            <input
+              value={privilegeRank}
+              onChange={(e) => setPrivilegeRank(e.target.value)}
+              placeholder="privilege rank (optional)"
+              type="number"
+              title='Higher = more privileged. Set on two or more credentials with different values (e.g. "Standard User"=1, "Admin"=10) to enable role-vs-role vertical escalation testing.'
+              className="w-40 rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+            />
+            {credentialType !== 'api_token' && (
+              <button
+                type="button"
+                onClick={() => setShowAdvanced((v) => !v)}
+                className="text-xs text-purple-700 hover:underline"
+              >
+                {showAdvanced ? 'Hide' : 'Show'} login config
+              </button>
+            )}
           </div>
-          {showAdvanced && (
+          {showAdvanced && credentialType !== 'api_token' && (
             <>
               <input
                 value={loginEndpoint}
@@ -157,6 +258,11 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
                 <span className="font-medium">{cred.label}</span>
                 <span className="ml-2 text-gray-500">{cred.masked_reference}</span>
                 <span className="ml-2 text-xs text-gray-400">{cred.credential_type}</span>
+                {cred.privilege_rank != null && (
+                  <span className="ml-2 rounded-full border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+                    rank {cred.privilege_rank}
+                  </span>
+                )}
               </span>
               {canWrite(user?.role) && (
                 <span className="flex items-center gap-3">
@@ -185,11 +291,24 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
                     className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
                   />
                   <input
+                    value={editUsername}
+                    onChange={(e) => setEditUsername(e.target.value)}
+                    placeholder="new username (leave blank to keep current)"
+                    className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+                  />
+                  <input
                     value={editSecret}
                     onChange={(e) => setEditSecret(e.target.value)}
                     placeholder="new secret (leave blank to keep current)"
                     type="password"
                     className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+                  />
+                  <input
+                    value={editPrivilegeRank}
+                    onChange={(e) => setEditPrivilegeRank(e.target.value)}
+                    placeholder="privilege rank"
+                    type="number"
+                    className="w-32 rounded border border-gray-300 px-2 py-2 text-sm focus:border-purple-500 focus:outline-none"
                   />
                   <input
                     value={editLoginEndpoint}
@@ -207,6 +326,7 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
                 </button>
               </div>
             )}
+            <TestLoginControl versionId={versionId} credentialId={cred.id} />
             {canWrite(user?.role) && <MacroSection versionId={versionId} credentialId={cred.id} />}
           </li>
         ))}

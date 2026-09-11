@@ -162,6 +162,21 @@ class SessionManager:
         self, credential_set: CredentialSet, forms: list[FormInfo]
     ) -> AuthenticatedSession | None:
         username, secret = decrypt_credential(credential_set.encrypted_secret)
+
+        if credential_set.credential_type == "api_token":
+            # A pre-issued bearer token/API key (e.g. for an imported
+            # OpenAPI/Postman collection with no login flow at all) —
+            # `secret` holds the token directly, applied statically to
+            # every request via ScopedHttpClient's existing
+            # AuthenticatedSession.bearer_token mechanism (same header
+            # injection every other credential type already gets, just
+            # skipping the login POST/form/macro dance entirely since
+            # there's nothing to log into).
+            session = AuthenticatedSession(credential_set_id=credential_set.id, bearer_token=secret)
+            if credential_set.extra_cookies:
+                session.cookies = dict(credential_set.extra_cookies)
+            return session
+
         # See ScopedHttpClient.reset_cookie_jar's docstring — a fresh
         # slate before every login attempt, since whatever the recon
         # crawl (or an earlier credential's login attempt) happened to

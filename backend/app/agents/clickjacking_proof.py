@@ -42,7 +42,14 @@ async def attempt_clickjacking_proof(url: str, *, headless: bool = True) -> Clic
     try:
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=headless)
-            page = await browser.new_page()
+            # Internal staging/pre-prod targets routinely sit behind a
+            # self-signed/internal-CA cert Chromium doesn't trust by
+            # default — an analyst testing one of those is authorized,
+            # scoped access, not a real end-user's browser, so trusting
+            # it here is the correct call (see app.agents.macro's
+            # identical fix/rationale for the real incident this closes).
+            context = await browser.new_context(ignore_https_errors=True)
+            page = await context.new_page()
             page.on("requestfailed", _on_request_failed)
 
             await page.set_content(_WRAPPER_HTML_TEMPLATE.format(url=url))

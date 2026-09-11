@@ -12,6 +12,7 @@ RESOURCES = (
     "credential",
     "traffic",
     "scan",
+    "finding",
     "review_candidate",
     "business_rule",
     "ai_provider_config",
@@ -46,6 +47,7 @@ def baseline_grants() -> list[tuple[str, str, str]]:
         "credential",
         "traffic",
         "scan",
+        "finding",
         "review_candidate",
         "business_rule",
         "ai_provider_config",
@@ -66,6 +68,12 @@ def baseline_grants() -> list[tuple[str, str, str]]:
     grants.append(("analyst", "traffic", "create"))
     grants.append(("analyst", "scan", "create"))
     grants.append(("analyst", "review_candidate", "update"))
+    # Mark a Finding false-positive/risk-accepted after review — same
+    # "analyst can act, but delete stays lead/admin-only" pattern as
+    # review_candidate above. Deleting a Finding outright is more
+    # destructive (no "undo" the way un-dismissing a review candidate
+    # effectively has) so that stays out of analyst's blanket grants.
+    grants.append(("analyst", "finding", "update"))
     grants.append(("analyst", "business_rule", "create"))
 
     # viewer: read-only everywhere.
@@ -84,6 +92,13 @@ def scan_resource_grants() -> list[tuple[str, str, str]]:
     0002, which runs against DBs that already have every other resource's
     rows seeded by 0001 and must not re-insert them (unique constraint)."""
     return _grants_for_resource("scan")
+
+
+def finding_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "finding" resource rows — used by the incremental
+    migration adding this resource, same reasoning as
+    scan_resource_grants() above."""
+    return _grants_for_resource("finding")
 
 
 def review_candidate_resource_grants() -> list[tuple[str, str, str]]:

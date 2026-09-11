@@ -20,6 +20,10 @@ def _identity_of(request: httpx.Request) -> str | None:
         return "admin"
     if "usera-token" in auth:
         return "usera"
+    if "standarduser-role-token" in auth:
+        return "standarduser"
+    if "roleadmin-role-token" in auth:
+        return "roleadmin"
     return None
 
 
@@ -48,6 +52,19 @@ def _handler(request: httpx.Request) -> httpx.Response:
         if who == "usera" and order_id == "100":
             return httpx.Response(200, text="<html>Order #100: 3 items, $42.00, ships to...</html>")
         return httpx.Response(403, text="forbidden")
+
+    if path == "/role-admin/dashboard":
+        # Vulnerable: identical full content regardless of caller's role.
+        if who in ("standarduser", "roleadmin"):
+            return httpx.Response(200, text="<html>Admin Dashboard: revenue, users, settings...</html>")
+        return httpx.Response(401, text="unauthorized")
+
+    if path == "/safe-role-admin/dashboard":
+        if who == "roleadmin":
+            return httpx.Response(200, text="<html>Admin Dashboard: revenue, users, settings...</html>")
+        if who == "standarduser":
+            return httpx.Response(403, text="forbidden")
+        return httpx.Response(401, text="unauthorized")
 
     return httpx.Response(404)
 
@@ -120,6 +137,76 @@ async def test_safe_vertical_endpoint_is_not_flagged(db_adapter):
 
         assert findings == []
         assert len(provider.calls) == 0  # unauthenticated 401 -> no candidate, no LLM call
+
+        await client.aclose()
+
+
+def _ranked_sessions_and_labels():
+    standarduser_id = uuid.uuid4()
+    roleadmin_id = uuid.uuid4()
+    sessions = {
+        standarduser_id: AuthenticatedSession(
+            credential_set_id=standarduser_id, bearer_token="standarduser-role-token"
+        ),
+        roleadmin_id: AuthenticatedSession(credential_set_id=roleadmin_id, bearer_token="roleadmin-role-token"),
+    }
+    labels = {standarduser_id: "Standard User", roleadmin_id: "Role Admin"}
+    ranks = {standarduser_id: 1, roleadmin_id: 10}
+    return sessions, labels, ranks
+
+
+async def test_detects_role_vs_role_vertical_escalation(db_adapter):
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "standard user gets full admin content"}'
+        )
+        agent, client = await _make_agent(session, provider)
+        sessions, labels, ranks = _ranked_sessions_and_labels()
+
+        findings = await agent.run(["http://site.test/role-admin/dashboard"], sessions, labels, ranks)
+
+        assert len(findings) == 1
+        assert findings[0].check_id == "access-control-role_vertical"
+        assert findings[0].severity == "Critical"
+        assert findings[0].confirmation_status == "ai_confirmed"
+
+        await client.aclose()
+
+
+async def test_safe_role_vertical_endpoint_is_not_flagged(db_adapter):
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "would confirm if asked"}'
+        )
+        agent, client = await _make_agent(session, provider)
+        sessions, labels, ranks = _ranked_sessions_and_labels()
+
+        findings = await agent.run(["http://site.test/safe-role-admin/dashboard"], sessions, labels, ranks)
+
+        assert findings == []
+        assert len(provider.calls) == 0  # 403 for the lower-ranked identity -> no candidate, no LLM call
+
+        await client.aclose()
+
+
+async def test_role_vertical_never_triggers_without_ranks(db_adapter):
+    # Same vulnerable endpoint as test_detects_role_vs_role_vertical_escalation,
+    # but no credential_ranks passed at all — without an explicit ranking
+    # there's no ground truth for which identity is "supposed" to have
+    # more access, so this check must not fire (the existing unranked
+    # "vertical" check, unauth-vs-auth, still can't fire here either
+    # since there's no unauthenticated identity in this fixture's set).
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "would confirm if asked"}'
+        )
+        agent, client = await _make_agent(session, provider)
+        sessions, labels, _ranks = _ranked_sessions_and_labels()
+
+        findings = await agent.run(["http://site.test/role-admin/dashboard"], sessions, labels)
+
+        assert findings == []
+        assert len(provider.calls) == 0
 
         await client.aclose()
 

@@ -76,6 +76,15 @@ export interface CredentialSetOut {
   login_method: string | null
   token_response_path: string | null
   extra_cookies: Record<string, string> | null
+  privilege_rank: number | null
+}
+
+export interface TestLoginResult {
+  session_established: boolean
+  test_request_url: string | null
+  test_request_status: number | null
+  ok: boolean
+  message: string
 }
 
 export const BUSINESS_RULE_TYPES = [
@@ -92,6 +101,7 @@ export interface BusinessRuleOut {
   rule_type: BusinessRuleType
   title: string
   config: Record<string, unknown>
+  source: 'analyst' | 'ai_generated'
 }
 
 // Mirrors app/schemas/business_rule.py's per-rule-type config shapes
@@ -146,6 +156,9 @@ export interface ScanRunOut {
   error: string | null
   warning: string | null
   ai_provider_config_id: string | null
+  llm_cost_usd: string
+  llm_input_tokens: number
+  llm_output_tokens: number
 }
 
 export interface AgentJobOut {
@@ -200,6 +213,8 @@ export interface EvidenceOut {
 
 export type Severity = 'Critical' | 'High' | 'Medium' | 'Low'
 
+export type FindingRetestStatus = 'open' | 'fixed' | 'risk_accepted' | 'false_positive_after_review'
+
 export interface FindingOut {
   id: string
   check_id: string
@@ -217,7 +232,7 @@ export interface FindingOut {
   remediation: string
   references: string[]
   confirmation_status: string
-  retest_status: string
+  retest_status: FindingRetestStatus
   evidence: EvidenceOut | null
 }
 
@@ -253,7 +268,7 @@ export interface ApiKeyOut {
   revoked_at: string | null
 }
 
-export const AI_PROVIDER_TYPES = ['claude', 'openai', 'gemini', 'grok', 'custom'] as const
+export const AI_PROVIDER_TYPES = ['claude', 'openai', 'gemini', 'grok', 'custom', 'spark'] as const
 export type AiProviderType = (typeof AI_PROVIDER_TYPES)[number]
 export const AI_PROVIDER_AUTH_TYPES = ['api_key', 'bearer_token'] as const
 export type AiProviderAuthType = (typeof AI_PROVIDER_AUTH_TYPES)[number]
@@ -264,10 +279,19 @@ export interface AIProviderConfigOut {
   label: string
   provider: AiProviderType
   model: string
+  // Optional per-task overrides — unset means every agent role just
+  // uses `model`. See backend app.ai.model_routing.ModelRouter.
+  model_reasoning: string | null
+  model_classification: string | null
   base_url: string | null
   auth_type: AiProviderAuthType
+  app_id: string | null
+  has_secondary_api_key: boolean
   masked_reference: string
   is_default: boolean
+  // When the secret was last created/rotated — only meaningful (shown
+  // as an expiry countdown) for provider="spark" auth_type="bearer_token".
+  secret_rotated_at: string | null
 }
 
 export const TRAFFIC_SOURCES = [
@@ -331,6 +355,10 @@ export interface LoginMacroOut {
   credential_set_id: string
   step_count: number
   created_at: string
+}
+
+export interface RecordingStartedOut {
+  recording_id: string
 }
 
 export interface BurpScanCreated {

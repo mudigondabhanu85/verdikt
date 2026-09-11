@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.agents.graph import build_graph
 from app.agents.http_client import ScopedHttpClient
 from app.ai.budget import BudgetGuard
+from app.ai.model_routing import ModelRouter
 from app.models.credential import CredentialSet
 from app.models.project import ScopeEntry
 from app.models.scan import AgentJob, ScanRun
@@ -76,17 +77,24 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
         provider = ScriptedAIProviderAdapter.from_responses(
             '{"vulnerable": false, "confidence": "low", "reasoning": "nothing interesting on this fixture site"}'
         )
-        guard = BudgetGuard(scan_run, session, provider)
+        # Must share ScopedHttpClient's session_lock (see BudgetGuard's
+        # docstring) — several agent nodes run truly concurrently here
+        # and all write to the same AsyncSession; two independent locks
+        # let a BudgetGuard-driven commit race a graph.py-driven one
+        # (this test previously never reached this far, so the gap was
+        # never exercised).
+        guard = BudgetGuard(scan_run, session, provider, lock=client.session_lock)
 
         graph = build_graph(
             client=client,
             session=session,
             scan_run_id=scan_run.id,
+            version_id=scan_run.version_id,
             targets=targets,
             credential_sets=[credential],
             business_rules=[],
             budget_guard=guard,
-            ai_model="fake-model",
+            model_router=ModelRouter.single_model("fake-model"),
             scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
         )
         final_state = await graph.ainvoke({})
@@ -112,10 +120,12 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             "cache_poisoning",
             "login",
             "authenticated_recon",
+            "recon_planner",
             "injection",
             "xss",
             "auth",
             "access_control",
+            "ai_business_logic_plan",
             "business_logic",
             "csrf",
             "stored_xss",

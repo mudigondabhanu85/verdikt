@@ -80,6 +80,17 @@ def _handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text="Notes: none")
         return httpx.Response(200, text="Notes: some default notes here")
 
+    if parsed.path == "/legacy_item":
+        # Only trips on a numeric-context payload with no quote at all
+        # (e.g. "1 OR 1=1--") — the fixed battery's sqli-error payload
+        # is a bare "'", which this endpoint's parser strips/ignores
+        # silently, so only an AI-suggested, context-appropriate
+        # payload can ever surface this signal.
+        value = query.get("item_id", [""])[0]
+        if "OR 1=1" in value.upper():
+            return httpx.Response(200, text="Error: You have an error in your SQL syntax near '1=1--'")
+        return httpx.Response(200, text="Item details page")
+
     if parsed.path == "/ping" and request.method == "POST":
         body = request.content.decode()
         params = parse_qs(body)
@@ -147,6 +158,52 @@ async def test_injection_agent_confirms_real_vulnerabilities(db_adapter):
 
         result = await session.execute(select(Finding))
         assert len(result.scalars().all()) == len(findings)
+
+        await client.aclose()
+
+
+async def test_ai_suggested_payload_catches_what_the_fixed_battery_misses(db_adapter):
+    """/legacy_item only trips its SQL-error signal on a numeric-context
+    payload with no quote at all — the fixed battery's bare "'" never
+    finds it. An AI-suggested payload tailored to the parameter's shape
+    (informed by its name/sample value, see
+    InjectionAgent._generate_ai_payloads) does.
+    """
+    async with session_scope(db_adapter) as session:
+        def respond(msgs):
+            if any("Suggest additional SQL-injection-error payload" in m.content for m in msgs):
+                return '{"payloads": ["1 OR 1=1--"]}'
+            return '{"vulnerable": true, "confidence": "high", "reasoning": "looks vulnerable"}'
+
+        provider = ScriptedAIProviderAdapter(respond_fn=respond)
+        agent, client, _scan_run = await _make_agent(session, provider)
+
+        parameters = [
+            DiscoveredParameter(
+                url="http://site.test/legacy_item?item_id=42", method="GET", name="item_id"
+            )
+        ]
+        findings = await agent.run(
+            parameters, [], tech_stack_fingerprint={"backend_languages": ["PHP"]}
+        )
+
+        check_ids = {f.check_id for f in findings}
+        assert "sqli-error" in check_ids
+        finding = next(f for f in findings if f.affected_endpoints == ["http://site.test/legacy_item?item_id=42"])
+        assert "AI-suggested" in finding.technical_description
+
+        await client.aclose()
+
+
+async def test_no_parameters_never_calls_the_llm_for_payload_suggestions(db_adapter):
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses('{"payloads": ["should never be seen"]}')
+        agent, client, _scan_run = await _make_agent(session, provider)
+
+        findings = await agent.run([], [])
+
+        assert findings == []
+        assert provider.calls == []
 
         await client.aclose()
 
@@ -250,7 +307,9 @@ async def test_ssti_probe_skipped_on_json_api_response(db_adapter):
         findings = await agent.run(parameters, [])
 
         assert findings == []
-        assert provider.calls == []  # never even reached LLM triage
+        # The 1 call left is the AI-payload-suggestion call every run()
+        # makes first — probe triage itself was never reached.
+        assert len(provider.calls) == 1
 
         await client.aclose()
 
@@ -269,7 +328,11 @@ async def test_injection_agent_finds_nothing_against_clean_target(db_adapter):
 
         findings = await agent.run(parameters, [])
         assert findings == []
-        assert len(provider.calls) == 0
+        # The AI-payload-suggestion call still fires once per run() with
+        # any parameters at all — it's the probe battery itself that
+        # never gets an LLM call for this target (no deterministic
+        # signal on /safe to triage).
+        assert len(provider.calls) == 1
 
         await client.aclose()
 
@@ -285,10 +348,11 @@ async def test_injection_agent_discards_when_triage_says_not_vulnerable(db_adapt
         findings = await agent.run(parameters, [])
 
         assert findings == []
-        # Only the sqli-error probe should have triggered an LLM call (the
-        # boolean probe produces no length divergence here, ssti/cmd-i
-        # produce no marker match on this endpoint).
-        assert len(provider.calls) == 1
+        # +1 for the AI-payload-suggestion call every run() makes first.
+        # Beyond that, only the sqli-error probe should have triggered an
+        # LLM call (the boolean probe produces no length divergence
+        # here, ssti/cmd-i produce no marker match on this endpoint).
+        assert len(provider.calls) == 2
 
         await client.aclose()
 
@@ -302,13 +366,24 @@ async def test_injection_agent_adversarial_validation_can_veto_triage(db_adapter
                 '{"vulnerable": false, "confidence": "high", "reasoning": "actually just a generic error page"}',
             ]
         )
-        provider = ScriptedAIProviderAdapter(respond_fn=lambda _msgs: next(responses))
+        def respond(msgs):
+            # The AI-payload-suggestion call (one per run(), before any
+            # triage) shares this provider too — give it an empty
+            # "payloads" response so it doesn't consume/advance the
+            # triage/validation sequence below.
+            if any("Suggest additional SQL-injection-error payload" in m.content for m in msgs):
+                return '{"payloads": []}'
+            return next(responses)
+
+        provider = ScriptedAIProviderAdapter(respond_fn=respond)
         agent, client, _scan_run = await _make_agent(session, provider)
 
         parameters = [DiscoveredParameter(url="http://site.test/product?id=1", method="GET", name="id")]
         findings = await agent.run(parameters, [])
 
         assert findings == []
-        assert len(provider.calls) == 2
+        # +1 for the AI-payload-suggestion call every run() now makes
+        # first (see injection.py's InjectionAgent docstring).
+        assert len(provider.calls) == 3
 
         await client.aclose()

@@ -56,6 +56,58 @@ def _credential_set(**overrides) -> CredentialSet:
     return CredentialSet(**defaults)
 
 
+async def test_api_token_credential_skips_login_and_uses_secret_as_bearer_token(db_adapter):
+    # No login flow at all — e.g. an imported OpenAPI/Postman collection
+    # with no login endpoint/form/macro. secret (the pasted token) becomes
+    # the session's bearer_token directly.
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=443, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+        credential = _credential_set(
+            credential_type="api_token",
+            username="api-token",
+            secret="sk-pre-issued-token",
+        )
+
+        manager = SessionManager(client)
+        auth_session = await manager.login(credential, forms=[])
+
+        assert auth_session is not None
+        assert auth_session.bearer_token == "sk-pre-issued-token"
+        assert auth_session.credential_set_id == credential.id
+        assert auth_session.cookies == {}
+
+        await client.aclose()
+
+
+async def test_api_token_credential_merges_extra_cookies(db_adapter):
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=443, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+        credential = _credential_set(
+            credential_type="api_token",
+            username="api-token",
+            secret="sk-pre-issued-token",
+            extra_cookies={"env": "staging"},
+        )
+
+        manager = SessionManager(client)
+        auth_session = await manager.login(credential, forms=[])
+
+        assert auth_session is not None
+        assert auth_session.cookies == {"env": "staging"}
+
+        await client.aclose()
+
+
 async def test_explicit_login_config_extracts_bearer_token(db_adapter):
     async with session_scope(db_adapter) as session:
         client = ScopedHttpClient(

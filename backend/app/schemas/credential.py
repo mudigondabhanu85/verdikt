@@ -24,6 +24,9 @@ class CredentialSetCreate(BaseModel):
     # app.models.credential.CredentialSet.extra_cookies.
     extra_cookies: dict[str, str] | None = None
 
+    # Optional — see app.models.credential.CredentialSet.privilege_rank.
+    privilege_rank: int | None = None
+
 
 class CredentialSetUpdate(BaseModel):
     """All fields optional — a PATCH only touches what's present (§5/§6:
@@ -45,6 +48,7 @@ class CredentialSetUpdate(BaseModel):
     login_content_type: str | None = None
     token_response_path: str | None = None
     extra_cookies: dict[str, str] | None = None
+    privilege_rank: int | None = None
 
 
 class CredentialSetOut(BaseModel):
@@ -57,5 +61,22 @@ class CredentialSetOut(BaseModel):
     login_method: str | None
     token_response_path: str | None
     extra_cookies: dict[str, str] | None
+    privilege_rank: int | None
 
     model_config = {"from_attributes": True}
+
+
+class TestLoginResult(BaseModel):
+    """Response for POST .../test-login — a quick "does this actually
+    work" check, distinct from a full scan: attempts SessionManager.login
+    (skipping <form> auto-discovery, which needs a real crawl this
+    doesn't do — see the message returned when that's the gap) and, if a
+    session comes back, fires one authenticated GET at the version's
+    first Target to report a real HTTP status code.
+    """
+
+    session_established: bool
+    test_request_url: str | None
+    test_request_status: int | None
+    ok: bool  # session_established AND test_request_status in 200..299
+    message: str

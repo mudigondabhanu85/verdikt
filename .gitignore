@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 .venv/
 .env
+.env.*
+!.env.example
 *.egg-info/
 .pytest_cache/
 data/
@@ -10,6 +12,12 @@ uv.lock.bak
 *.db
 *.sqlite3
 .claude/
+node_modules/
+dist/
+build/
+# Real captured traffic/screenshots from live scans against internal
+# targets — never belongs in any shared repo, personal or not.
+logs/
 # Machine-local compose override (e.g. pointing the backend at a native
 # host Postgres instead of the bundled fresh one) — never shared, since
 # a fresh clone (a work laptop, a demo) should always get the bundled

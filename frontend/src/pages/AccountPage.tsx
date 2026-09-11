@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, BASE_URL } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
@@ -93,6 +93,289 @@ function ApiKeysSection() {
   )
 }
 
+// Spark's model/base_url are deployment-wide constants (one tenant per
+// org, not one per config row — see build_adapter_from_config), so the
+// form below never asks for them under provider="spark". auth_type,
+// though, changes what Spark actually needs: bearer_token mode is just
+// the 60-min token from spark.spglobal.com/settings; api_key mode needs
+// the App ID from that key's registration plus the primary key (and,
+// optionally, a secondary key SparkAdapter falls back to on a 401).
+// Spark's actual model catalog (confirmed against the live gateway,
+// 2026-09) — grouped by what each is good for, matching the three
+// ModelRouter tiers (see app.ai.model_routing on the backend):
+// "reasoning" for heavy business-logic/attack-chain work, "specialist"
+// for the bulk of vulnerability-class agents, "classification" for
+// cheap mechanical triage. Kept as a fixed dropdown rather than free
+// text — a typo'd model name fails a scan exactly like a typo'd app_id
+// did (the "openai" app_id incident), so pick from what's actually on
+// the tenant, not what looks plausible.
+const SPARK_MODELS = [
+  { value: 'openAI-5.6-terra', label: 'openAI-5.6-terra — Research and analysis' },
+  { value: 'openAI-5.6-sol', label: 'openAI-5.6-sol — Complex work, deep analysis' },
+  { value: 'openAI-5.6-luna', label: 'openAI-5.6-luna — Fast, cost-efficient tasks' },
+  { value: 'Anthropic-Opus-5', label: 'Anthropic-Opus-5 — Deep reasoning, coding' },
+  { value: 'Anthropic-Sonnet-5', label: 'Anthropic-Sonnet-5 — Advanced coding, writing' },
+  { value: 'Anthropic-Opus-4.8', label: 'Anthropic-Opus-4.8 — Complex work expert' },
+  { value: 'Gemini-3.6-Flash', label: 'Gemini 3.6 Flash — Advanced reasoning, with grounding' },
+  { value: 'Gemini-3.5-Flash-Lite', label: 'Gemini 3.5 Flash Lite — Efficient processing, with grounding' },
+  { value: 'Gemini-3.5-Flash', label: 'Gemini 3.5 Flash — Rapid insights, with grounding' },
+] as const
+
+// Sensible tier defaults from that catalog — Opus-5 for the reasoning
+// tier (business-logic hypotheses, attack-chain analysis, adversarial
+// validation, exec summaries), Sonnet-5 as the specialist-tier default
+// (the bulk of vulnerability-class agents), Luna for cheap
+// classification-tier work. An org can still override any of these.
+const SPARK_DEFAULT_MODEL = 'Anthropic-Sonnet-5'
+const SPARK_DEFAULT_REASONING_MODEL = 'Anthropic-Opus-5'
+const SPARK_DEFAULT_CLASSIFICATION_MODEL = 'openAI-5.6-luna'
+// Spark has two separate tenants with separate app_id/key registrations
+// (an app_id valid on one gets "app_id ... is not valid" on the other) —
+// UAT's base_url per S&P Global's own Spark platform. Custom lets an
+// analyst paste some other override entirely (e.g. a third environment)
+// without needing a code change every time one shows up.
+const SPARK_ENVIRONMENTS = {
+  prod: { label: 'Prod', baseUrl: '' }, // '' = fall back to deployment's SPARK_BASE_URL
+  uat: { label: 'UAT', baseUrl: 'https://sparkuatapi.spglobal.com' },
+  custom: { label: 'Custom base URL', baseUrl: null },
+} as const
+type SparkEnvironment = keyof typeof SPARK_ENVIRONMENTS
+
+// Bearer-token auth (Spark's ~60-min expiry, most self-hosted gateways'
+// session tokens) means "paste a new secret into this existing config"
+// is routine and frequent — this is its own small component (rather than
+// inline in the list) so its open/closed + input state doesn't have to
+// live in a per-row array in the parent. App ID is included for Spark
+// configs too — the other field that turned out to need fixing without
+// a full recreate (a real incident: "openai" typed in instead of the
+// actual Spark App ID).
+function RotateSecretControl({
+  configId,
+  showAppId,
+  currentAppId,
+}: {
+  configId: string
+  showAppId: boolean
+  currentAppId: string | null
+}) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [value, setValue] = useState('')
+  const [appId, setAppId] = useState('')
+
+  const rotateMutation = useMutation({
+    mutationFn: () =>
+      api.aiProviderConfigs.rotateSecret(configId, {
+        api_key: value || undefined,
+        app_id: showAppId && appId.trim() ? appId.trim() : undefined,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ai-provider-configs'] })
+      setOpen(false)
+      setValue('')
+      setAppId('')
+    },
+  })
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => {
+          setAppId(currentAppId ?? '')
+          setOpen(true)
+        }}
+        className="text-xs text-purple-700 hover:underline"
+      >
+        {showAppId ? 'Rotate token / fix App ID' : 'Rotate token'}
+      </button>
+    )
+  }
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (value.trim() || (showAppId && appId.trim() !== (currentAppId ?? ''))) rotateMutation.mutate()
+      }}
+      className="flex items-center gap-1"
+    >
+      {showAppId && (
+        <input
+          value={appId}
+          onChange={(e) => setAppId(e.target.value)}
+          placeholder="App ID"
+          className="w-28 rounded border border-gray-300 px-2 py-1 text-xs focus:border-purple-500 focus:outline-none"
+        />
+      )}
+      <input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="new token/key (optional)"
+        type="password"
+        autoFocus={!showAppId}
+        className="w-32 rounded border border-gray-300 px-2 py-1 text-xs focus:border-purple-500 focus:outline-none"
+      />
+      <button
+        type="submit"
+        disabled={rotateMutation.isPending}
+        className="text-xs text-purple-700 hover:underline disabled:opacity-50"
+      >
+        Save
+      </button>
+      <button type="button" onClick={() => setOpen(false)} className="text-xs text-gray-400 hover:underline">
+        cancel
+      </button>
+    </form>
+  )
+}
+
+// Lets an org route different agent roles to different models on the
+// same provider account after the fact — heavier reasoning
+// (business-logic hypothesis generation, attack-chain analysis) to a
+// stronger/costlier model, cheap mechanical classification to a
+// smaller/faster one — without touching the secret (RotateSecretControl's
+// job) or re-picking "set default". Same open/closed pattern as that
+// component, for the same reason (per-row state without a parent array).
+function ModelTiersControl({
+  configId,
+  isSpark,
+  currentModel,
+  currentReasoning,
+  currentClassification,
+}: {
+  configId: string
+  isSpark: boolean
+  currentModel: string
+  currentReasoning: string | null
+  currentClassification: string | null
+}) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [model, setModel] = useState('')
+  const [reasoning, setReasoning] = useState('')
+  const [classification, setClassification] = useState('')
+
+  const updateMutation = useMutation({
+    mutationFn: () =>
+      api.aiProviderConfigs.updateModels(configId, {
+        model: model.trim() || undefined,
+        model_reasoning: reasoning.trim(),
+        model_classification: classification.trim(),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ai-provider-configs'] })
+      setOpen(false)
+    },
+  })
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => {
+          setModel(currentModel)
+          setReasoning(currentReasoning ?? '')
+          setClassification(currentClassification ?? '')
+          setOpen(true)
+        }}
+        className="text-xs text-purple-700 hover:underline"
+      >
+        Route models by task
+      </button>
+    )
+  }
+
+  // Spark's catalog is fixed — a typo'd model name fails a scan exactly
+  // like the "openai" app_id typo did, so pick from what's actually on
+  // the tenant rather than free text. Other providers keep free text
+  // (their model names aren't a closed, known-in-advance catalog here).
+  const tierInput = (value: string, onChange: (v: string) => void, placeholder: string, width: string) =>
+    isSpark ? (
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${width} rounded border border-gray-300 px-2 py-1 text-xs focus:border-purple-500 focus:outline-none`}
+      >
+        <option value="">{placeholder}</option>
+        {SPARK_MODELS.map((m) => (
+          <option key={m.value} value={m.value}>
+            {m.label}
+          </option>
+        ))}
+      </select>
+    ) : (
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={`${width} rounded border border-gray-300 px-2 py-1 text-xs focus:border-purple-500 focus:outline-none`}
+      />
+    )
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        updateMutation.mutate()
+      }}
+      className="flex items-center gap-1"
+    >
+      {tierInput(model, setModel, 'specialist model (default)', 'w-48')}
+      {tierInput(reasoning, setReasoning, 'reasoning model (blank = default)', 'w-48')}
+      {tierInput(classification, setClassification, 'classification model (blank = default)', 'w-48')}
+      <button
+        type="submit"
+        disabled={updateMutation.isPending}
+        className="text-xs text-purple-700 hover:underline disabled:opacity-50"
+      >
+        Save
+      </button>
+      <button type="button" onClick={() => setOpen(false)} className="text-xs text-gray-400 hover:underline">
+        cancel
+      </button>
+    </form>
+  )
+}
+
+// Spark bearer tokens expire ~60 minutes after being set — a token
+// silently going stale mid-scan produced a real incident: every
+// LLM-dependent agent quietly skipped its work (caught as
+// ProviderUnavailableError), so a completed scan showed exactly 0
+// tokens/$0 cost with no obvious error anywhere. This makes the
+// countdown visible so anyone looking at the config can tell at a
+// glance whether it's still good, instead of finding out only after
+// a scan silently got no AI participation.
+const SPARK_BEARER_TOKEN_LIFETIME_MINUTES = 60
+
+function SparkTokenExpiry({ secretRotatedAt }: { secretRotatedAt: string | null }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  if (!secretRotatedAt) {
+    return <span className="ml-2 text-xs text-amber-600">expiry unknown — rotate to start tracking</span>
+  }
+  const rotatedAtMs = new Date(secretRotatedAt).getTime()
+  const expiresAtMs = rotatedAtMs + SPARK_BEARER_TOKEN_LIFETIME_MINUTES * 60_000
+  const minutesLeft = Math.round((expiresAtMs - now) / 60_000)
+  const expiresAtLabel = new Date(expiresAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+  if (minutesLeft <= 0) {
+    return (
+      <span className="ml-2 text-xs font-medium text-red-600">
+        token expired at {expiresAtLabel} — rotate it before scanning
+      </span>
+    )
+  }
+  const color = minutesLeft <= 10 ? 'text-amber-600' : 'text-gray-400'
+  return (
+    <span className={`ml-2 text-xs ${color}`}>
+      expires {expiresAtLabel} ({minutesLeft}m left)
+    </span>
+  )
+}
+
 function AiProviderConfigsSection() {
   const queryClient = useQueryClient()
   const [label, setLabel] = useState('')
@@ -101,6 +384,10 @@ function AiProviderConfigsSection() {
   const [apiKey, setApiKey] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [authType, setAuthType] = useState<AiProviderAuthType>('api_key')
+  const [sparkAppId, setSparkAppId] = useState('')
+  const [sparkSecondaryKey, setSparkSecondaryKey] = useState('')
+  const [sparkEnvironment, setSparkEnvironment] = useState<SparkEnvironment>('prod')
+  const [sparkCustomBaseUrl, setSparkCustomBaseUrl] = useState('')
 
   const { data: configs, isLoading } = useQuery({
     queryKey: ['ai-provider-configs'],
@@ -110,20 +397,47 @@ function AiProviderConfigsSection() {
 
   const createMutation = useMutation({
     mutationFn: () =>
-      api.aiProviderConfigs.create({
-        label,
-        provider,
-        model,
-        api_key: apiKey,
-        base_url: baseUrl || undefined,
-        auth_type: authType,
-      }),
+      api.aiProviderConfigs.create(
+        provider === 'spark'
+          ? {
+              label: label || 'Spark',
+              provider,
+              model: SPARK_DEFAULT_MODEL,
+              model_reasoning: SPARK_DEFAULT_REASONING_MODEL,
+              model_classification: SPARK_DEFAULT_CLASSIFICATION_MODEL,
+              api_key: apiKey,
+              auth_type: authType,
+              base_url:
+                (sparkEnvironment === 'custom' ? sparkCustomBaseUrl : SPARK_ENVIRONMENTS[sparkEnvironment].baseUrl) ||
+                undefined,
+              // App ID is required for every Spark request, but it's a
+              // deployment-wide constant (SPARK_APP_ID) this org falls
+              // back to automatically — see build_adapter_from_config.
+              // Only set here for an org on its own distinct Spark
+              // tenant/app registration. Secondary key is still
+              // api_key-only (bearer has nothing to fall back to).
+              app_id: sparkAppId || undefined,
+              ...(authType === 'api_key' ? { secondary_api_key: sparkSecondaryKey || undefined } : {}),
+            }
+          : {
+              label,
+              provider,
+              model,
+              api_key: apiKey,
+              base_url: baseUrl || undefined,
+              auth_type: authType,
+            }
+      ),
     onSuccess: () => {
       invalidate()
       setLabel('')
       setModel('')
       setApiKey('')
       setBaseUrl('')
+      setSparkAppId('')
+      setSparkSecondaryKey('')
+      setSparkEnvironment('prod')
+      setSparkCustomBaseUrl('')
     },
   })
 
@@ -139,7 +453,12 @@ function AiProviderConfigsSection() {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (!label.trim() || !model.trim() || !apiKey.trim()) return
+    if (provider === 'spark') {
+      if (!apiKey.trim()) return
+      if (sparkEnvironment === 'custom' && !sparkCustomBaseUrl.trim()) return
+    } else if (!label.trim() || !model.trim() || !apiKey.trim()) {
+      return
+    }
     createMutation.mutate()
   }
 
@@ -156,7 +475,7 @@ function AiProviderConfigsSection() {
         <input
           value={label}
           onChange={(e) => setLabel(e.target.value)}
-          placeholder="label"
+          placeholder={provider === 'spark' ? 'label (optional, defaults to "Spark")' : 'label'}
           className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
         />
         <select
@@ -170,19 +489,14 @@ function AiProviderConfigsSection() {
             </option>
           ))}
         </select>
-        <input
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          placeholder="model"
-          className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
-        />
-        <input
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder="API key"
-          type="password"
-          className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
-        />
+        {provider !== 'spark' && (
+          <input
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="model"
+            className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+          />
+        )}
         <select
           value={authType}
           onChange={(e) => setAuthType(e.target.value as AiProviderAuthType)}
@@ -191,6 +505,57 @@ function AiProviderConfigsSection() {
           <option value="api_key">API Key</option>
           <option value="bearer_token">Bearer Token</option>
         </select>
+        {provider === 'spark' && (
+          <select
+            value={sparkEnvironment}
+            onChange={(e) => setSparkEnvironment(e.target.value as SparkEnvironment)}
+            className="rounded border border-gray-300 px-3 py-2 text-sm"
+          >
+            {Object.entries(SPARK_ENVIRONMENTS).map(([key, env]) => (
+              <option key={key} value={key}>
+                {env.label}
+              </option>
+            ))}
+          </select>
+        )}
+        {provider === 'spark' && sparkEnvironment === 'custom' && (
+          <input
+            value={sparkCustomBaseUrl}
+            onChange={(e) => setSparkCustomBaseUrl(e.target.value)}
+            placeholder="https://..."
+            className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+          />
+        )}
+        {provider === 'spark' && (
+          <input
+            value={sparkAppId}
+            onChange={(e) => setSparkAppId(e.target.value)}
+            placeholder="App ID (optional — blank uses deployment default)"
+            className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+          />
+        )}
+        <input
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={
+            provider === 'spark'
+              ? authType === 'bearer_token'
+                ? 'Bearer token'
+                : 'Primary API key'
+              : 'API key'
+          }
+          type="password"
+          className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+        />
+        {provider === 'spark' && authType === 'api_key' && (
+          <input
+            value={sparkSecondaryKey}
+            onChange={(e) => setSparkSecondaryKey(e.target.value)}
+            placeholder="Secondary API key (optional)"
+            type="password"
+            className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+          />
+        )}
         {provider === 'custom' && (
           <input
             value={baseUrl}
@@ -198,6 +563,18 @@ function AiProviderConfigsSection() {
             placeholder="base URL"
             className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
           />
+        )}
+        {provider === 'spark' && (
+          <p className="w-full text-xs text-gray-400">
+            {authType === 'bearer_token'
+              ? 'Paste your Spark bearer token from spark.spglobal.com/settings (expires ~60 min — re-add it here when it does). App ID is optional — leave it blank to use the deployment\'s own registered App ID.'
+              : 'Primary API key is required; App ID and secondary key are optional (fall back to the deployment default) unless this org is on its own Spark tenant — secondary key lets SparkAdapter retry once if the primary key gets a 401.'}{' '}
+            An App ID/key registered on one environment gets "app_id ... is not valid" on the other — make sure
+            Environment matches where this App ID/key was actually issued. Defaults to {SPARK_DEFAULT_MODEL} for
+            most testing, {SPARK_DEFAULT_REASONING_MODEL} for heavy reasoning (business logic, attack chains), and{' '}
+            {SPARK_DEFAULT_CLASSIFICATION_MODEL} for cheap mechanical work — adjust per-tier anytime via "Route
+            models by task" below.
+          </p>
         )}
         <button
           type="submit"
@@ -221,9 +598,37 @@ function AiProviderConfigsSection() {
               )}
               <span className="ml-2 text-xs text-gray-400">{cfg.provider} / {cfg.model}</span>
               <span className="ml-2 text-xs text-gray-400">({cfg.auth_type})</span>
+              {cfg.provider === 'spark' && (
+                <span className="ml-2 text-xs text-gray-400">{cfg.base_url || 'prod (default)'}</span>
+              )}
+              {cfg.app_id && <span className="ml-2 text-xs text-gray-400">app_id={cfg.app_id}</span>}
+              {cfg.model_reasoning && (
+                <span className="ml-2 text-xs text-gray-400">reasoning={cfg.model_reasoning}</span>
+              )}
+              {cfg.model_classification && (
+                <span className="ml-2 text-xs text-gray-400">classification={cfg.model_classification}</span>
+              )}
               <span className="ml-2 font-mono text-xs text-gray-400">{cfg.masked_reference}</span>
+              {cfg.has_secondary_api_key && (
+                <span className="ml-2 text-xs text-gray-400">+ secondary key</span>
+              )}
+              {cfg.provider === 'spark' && cfg.auth_type === 'bearer_token' && (
+                <SparkTokenExpiry secretRotatedAt={cfg.secret_rotated_at} />
+              )}
             </span>
             <span className="flex items-center gap-3">
+              <RotateSecretControl
+                configId={cfg.id}
+                showAppId={cfg.provider === 'spark'}
+                currentAppId={cfg.app_id}
+              />
+              <ModelTiersControl
+                configId={cfg.id}
+                isSpark={cfg.provider === 'spark'}
+                currentModel={cfg.model}
+                currentReasoning={cfg.model_reasoning}
+                currentClassification={cfg.model_classification}
+              />
               {!cfg.is_default && (
                 <button
                   onClick={() => setDefaultMutation.mutate(cfg.id)}

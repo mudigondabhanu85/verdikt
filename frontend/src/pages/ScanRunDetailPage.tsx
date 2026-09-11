@@ -28,11 +28,16 @@ export function ScanRunDetailPage() {
       <Link to={`/versions/${scanRun.version_id}`} className="mb-2 inline-block text-sm text-purple-700 hover:underline">
         ← Version
       </Link>
-      <div className="mb-6 flex items-center gap-3">
+      <div className="mb-1 flex items-center gap-3">
         <h1 className="text-2xl font-semibold">Scan Run</h1>
         <StatusBadge status={scanRun.status} testId="scan-run-status" />
         <span className="font-mono text-xs text-gray-400">{scanRun.id}</span>
       </div>
+      <p className="mb-6 text-xs text-gray-500">
+        LLM usage: {(scanRun.llm_input_tokens + scanRun.llm_output_tokens).toLocaleString()} tokens (
+        {scanRun.llm_input_tokens.toLocaleString()} in / {scanRun.llm_output_tokens.toLocaleString()} out) · $
+        {Number(scanRun.llm_cost_usd).toFixed(4)} estimated
+      </p>
 
       <Tabs
         tabs={[

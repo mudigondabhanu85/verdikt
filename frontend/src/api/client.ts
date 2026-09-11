@@ -13,8 +13,10 @@ import type {
   DashboardOut,
   FindingTicketOut,
   LoginMacroOut,
+  RecordingStartedOut,
   NotificationConfigOut,
   FindingOut,
+  FindingRetestStatus,
   HttpRequest,
   HttpResponse,
   OidcProviderConfigOut,
@@ -30,6 +32,7 @@ import type {
   ScanRunOut,
   ScopeEntryOut,
   TargetOut,
+  TestLoginResult,
   TicketingConfigOut,
   TokenResponse,
   TrafficImportResult,
@@ -41,6 +44,10 @@ import type {
 } from './types'
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+// noVNC/websockify — see docker-compose.yml's backend.ports and
+// start-display.sh. Used by MacroSection to stream the login-macro
+// recorder's headed browser into an <iframe>, no extension needed.
+export const VNC_BASE_URL = import.meta.env.VITE_VNC_BASE_URL ?? 'http://localhost:6080'
 const TOKEN_KEY = 'verdikt_token'
 
 export function getToken(): string | null {
@@ -264,6 +271,7 @@ export const api = {
         login_content_type?: string | null
         token_response_path?: string | null
         extra_cookies?: Record<string, string> | null
+        privilege_rank?: number | null
       },
     ) => request<CredentialSetOut>(`/versions/${versionId}/credentials`, { method: 'POST', body }),
     update: (
@@ -280,6 +288,7 @@ export const api = {
         login_content_type?: string | null
         token_response_path?: string | null
         extra_cookies?: Record<string, string> | null
+        privilege_rank?: number | null
       },
     ) =>
       request<CredentialSetOut>(`/versions/${versionId}/credentials/${credentialId}`, {
@@ -293,19 +302,37 @@ export const api = {
         method: 'POST',
         body,
       }),
-    // Blocks server-side until the analyst closes a real, local headed
-    // browser window on whatever machine is running the API — only
-    // meaningful for a self-hosted, single-analyst deployment where
-    // that's the analyst's own machine. See CredentialsTab's warning
-    // copy and app/api/routes/credentials.py's record_login_macro
-    // docstring for the full explanation.
-    recordMacro: (versionId: string, credentialId: string, body: { start_url: string }) =>
-      request<LoginMacroOut>(`/versions/${versionId}/credentials/${credentialId}/record-macro`, {
+    // Split into start/finish (not one blocking call) — see
+    // MacroSection.tsx and app/api/routes/credentials.py's
+    // start_recording_macro docstring for why: relying on the analyst
+    // finding and clicking the *remote*, VNC-streamed browser window's
+    // own close button turned out to silently lose recordings. The
+    // Verdikt UI itself now streams that browser live and has its own
+    // "Finish recording" button, which calls finishRecordingMacro.
+    startRecordingMacro: (versionId: string, credentialId: string, body: { start_url: string }) =>
+      request<RecordingStartedOut>(`/versions/${versionId}/credentials/${credentialId}/record-macro/start`, {
         method: 'POST',
         body,
       }),
+    finishRecordingMacro: (versionId: string, credentialId: string, recordingId: string) =>
+      request<LoginMacroOut>(
+        `/versions/${versionId}/credentials/${credentialId}/record-macro/${recordingId}/finish`,
+        { method: 'POST' },
+      ),
+    cancelRecordingMacro: (versionId: string, credentialId: string, recordingId: string) =>
+      request<void>(`/versions/${versionId}/credentials/${credentialId}/record-macro/${recordingId}/cancel`, {
+        method: 'POST',
+      }),
     listMacros: (versionId: string, credentialId: string) =>
       request<LoginMacroOut[]>(`/versions/${versionId}/credentials/${credentialId}/macros`),
+    deleteMacro: (versionId: string, credentialId: string, macroId: string) =>
+      request<void>(`/versions/${versionId}/credentials/${credentialId}/macros/${macroId}`, {
+        method: 'DELETE',
+      }),
+    testLogin: (versionId: string, credentialId: string) =>
+      request<TestLoginResult>(`/versions/${versionId}/credentials/${credentialId}/test-login`, {
+        method: 'POST',
+      }),
   },
 
   businessRules: {
@@ -328,6 +355,17 @@ export const api = {
       request<ScanRunDiffOut>(`/scan-runs/${laterScanRunId}/diff/${earlierScanRunId}`),
     cancel: (scanRunId: string) => request<ScanRunOut>(`/scan-runs/${scanRunId}/cancel`, { method: 'POST' }),
     delete: (scanRunId: string) => request<void>(`/scan-runs/${scanRunId}`, { method: 'DELETE' }),
+  },
+
+  findings: {
+    // An analyst's own disposition after reviewing a Finding — mark it
+    // a false positive or an accepted risk (both "analyst-locked": a
+    // later rescan won't silently reopen them just because the same
+    // signal reproduced), or reopen one. See
+    // app/api/routes/findings.py.
+    updateStatus: (findingId: string, retest_status: FindingRetestStatus) =>
+      request<FindingOut>(`/findings/${findingId}`, { method: 'PATCH', body: { retest_status } }),
+    delete: (findingId: string) => request<void>(`/findings/${findingId}`, { method: 'DELETE' }),
   },
 
   retestJobs: {
@@ -359,12 +397,27 @@ export const api = {
       label: string
       provider: string
       model: string
+      model_reasoning?: string
+      model_classification?: string
       api_key: string
       base_url?: string
       auth_type?: string
+      app_id?: string
+      secondary_api_key?: string
     }) => request<AIProviderConfigOut>('/ai-provider-configs', { method: 'POST', body }),
     setDefault: (id: string) =>
       request<AIProviderConfigOut>(`/ai-provider-configs/${id}/set-default`, { method: 'POST' }),
+    rotateSecret: (id: string, body: { api_key?: string; secondary_api_key?: string; app_id?: string }) =>
+      request<AIProviderConfigOut>(`/ai-provider-configs/${id}/rotate-secret`, { method: 'POST', body }),
+    // Routes different agent roles (business-logic reasoning vs.
+    // mechanical classification vs. the specialist-tier default) to
+    // different models on the same provider account — see
+    // app.ai.model_routing.ModelRouter on the backend. An empty string
+    // clears a tier override back to following the base `model`.
+    updateModels: (
+      id: string,
+      body: { model?: string; model_reasoning?: string; model_classification?: string }
+    ) => request<AIProviderConfigOut>(`/ai-provider-configs/${id}/models`, { method: 'PATCH', body }),
     delete: (id: string) => request<void>(`/ai-provider-configs/${id}`, { method: 'DELETE' }),
   },
 
@@ -384,6 +437,18 @@ export const api = {
         timestamp?: string | null
       },
     ) => request<TrafficInteractionOut>(`/versions/${versionId}/traffic/manual`, { method: 'POST', body }),
+    deleteInteraction: (versionId: string, interactionId: string) =>
+      request<void>(`/versions/${versionId}/traffic/${interactionId}`, { method: 'DELETE' }),
+    // `source` clears just one import type (e.g. "har") without
+    // touching manually-added entries or other imports — there's no
+    // import-batch id (each imported exchange is its own row), so this
+    // is the practical "delete what I just uploaded" action. Omit it
+    // to clear everything for this version.
+    clearAll: (versionId: string, source?: string) =>
+      request<void>(
+        `/versions/${versionId}/traffic${source ? `?source=${encodeURIComponent(source)}` : ''}`,
+        { method: 'DELETE' },
+      ),
   },
 
   burp: {

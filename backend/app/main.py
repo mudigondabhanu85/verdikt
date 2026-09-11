@@ -1,9 +1,11 @@
 import asyncio
 import concurrent.futures
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.routes import (
     ai_provider_configs,
@@ -16,6 +18,7 @@ from app.api.routes import (
     credentials,
     dashboard,
     finding_tickets,
+    findings,
     macro_upload,
     notification_configs,
     objects,
@@ -36,6 +39,19 @@ from app.api.routes import (
     vgs_vulnerabilities,
 )
 from app.config import get_settings
+
+# Without this, the root logger defaults to WARNING with no handler
+# attached, so every logger.info(...) call anywhere in app/* (e.g. the
+# AI-provider resolution tracing in app/ai/provider.py) is silently
+# dropped and never reaches `docker compose logs backend` — confirmed
+# missing during a real incident chasing an AI provider misconfig.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -67,6 +83,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+    # Without this, an unhandled exception falls through to Starlette's
+    # default ServerErrorMiddleware, which — being the outermost layer,
+    # wrapping CORSMiddleware rather than sitting inside it — returns its
+    # 500 with no Access-Control-Allow-Origin header at all. The browser
+    # then reports "blocked by CORS policy" instead of the real error,
+    # which is exactly as misleading for a genuine backend bug (e.g. the
+    # in-container Playwright headed-browser launch in
+    # app.api.routes.credentials.start_recording_macro, or any future
+    # unexpected 500) as it would be for an actual CORS misconfiguration
+    # — undistinguishable from the browser's console alone. A route
+    # handler's own registered @app.exception_handler(SomeSpecificError)
+    # (if any) still takes precedence over this catch-all; this only
+    # catches what nothing more specific already handled.
+    logger.exception("Unhandled exception", exc_info=exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 app.include_router(auth.router)
 app.include_router(organizations.router)
 app.include_router(ai_provider_configs.router)
@@ -79,6 +114,7 @@ app.include_router(credentials.router)
 app.include_router(traffic_import.router)
 app.include_router(scans.router)
 app.include_router(review_candidates.router)
+app.include_router(findings.router)
 app.include_router(business_rules.router)
 app.include_router(burp.router)
 app.include_router(objects.router)

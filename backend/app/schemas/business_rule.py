@@ -47,7 +47,11 @@ class RaceConditionConfig(BaseModel):
     credential_set_id: uuid.UUID | None = None
 
 
-_CONFIG_SCHEMAS: dict[str, type[BaseModel]] = {
+# Public: also reused by app.agents.business_logic_planner to validate
+# AI-proposed hypothesis configs the exact same way an analyst-submitted
+# BusinessRuleCreate is validated below — same schema, same "malformed
+# input is discarded, never best-effort repaired" discipline either way.
+CONFIG_SCHEMAS_BY_RULE_TYPE: dict[str, type[BaseModel]] = {
     "resource_isolation": ResourceIsolationConfig,
     "workflow_order": WorkflowOrderConfig,
     "price_or_quantity_tampering": PriceOrQuantityTamperingConfig,
@@ -62,9 +66,9 @@ class BusinessRuleCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_config_shape(self) -> "BusinessRuleCreate":
-        if self.rule_type not in _CONFIG_SCHEMAS:
+        if self.rule_type not in CONFIG_SCHEMAS_BY_RULE_TYPE:
             raise ValueError(f"Unknown rule_type {self.rule_type!r}; must be one of {sorted(RULE_TYPES)}")
-        schema_cls = _CONFIG_SCHEMAS[self.rule_type]
+        schema_cls = CONFIG_SCHEMAS_BY_RULE_TYPE[self.rule_type]
         validated = schema_cls(**self.config)
         self.config = validated.model_dump(mode="json")
         return self
@@ -76,5 +80,6 @@ class BusinessRuleOut(BaseModel):
     rule_type: str
     title: str
     config: dict
+    source: str
 
     model_config = {"from_attributes": True}

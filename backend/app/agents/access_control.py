@@ -8,7 +8,7 @@ from app.agents.evidence_screenshot import capture_and_store_evidence_screenshot
 from app.agents.http_client import ScopedHttpClient, ScopeViolationError
 from app.agents.idor import find_numeric_id_segment, nearby_ids, substitute_path_segment
 from app.agents.matrix import Identity, build_identities
-from app.ai.budget import BudgetExceededError, BudgetGuard
+from app.ai.budget import BudgetExceededError, BudgetGuard, ProviderUnavailableError
 from app.ai.prompt_truncation import truncate_pair_for_prompt
 from app.ai.prompts.loader import render_prompt
 from app.ai.verdict import parse_verdict
@@ -52,12 +52,31 @@ _ACCESS_CONTROL_METADATA = {
             "— not just that they are logged in."
         ),
     },
+    "role_vertical": {
+        "title": "Broken Access Control (Role-Based Privilege Escalation)",
+        "owasp_2025_category": "A01 Broken Access Control",
+        "cwe_id": "CWE-284",
+        "severity": "Critical",
+        "cvss_vector": "AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N",
+        "cvss_score": 8.8,
+        "portswigger_reference_url": "https://portswigger.net/web-security/access-control",
+        "plain_language_summary": (
+            "A lower-privileged authenticated user appears able to get essentially the "
+            "same response as a higher-privileged one on an endpoint that should "
+            "differentiate between their roles."
+        ),
+        "remediation": (
+            "Enforce role/permission checks server-side on every request to this "
+            "endpoint, not just an authentication check — verify the caller's specific "
+            "role or entitlement, not just that they are logged in as someone."
+        ),
+    },
 }
 
 
 @dataclass
 class AccessControlCandidate:
-    comparison_type: str  # "vertical" or "horizontal"
+    comparison_type: str  # "vertical", "horizontal", or "role_vertical"
     endpoint: str
     original_endpoint: str
     identity_a: Identity
@@ -111,6 +130,57 @@ async def _detect_vertical(
     return None
 
 
+async def _detect_role_vertical(
+    client: ScopedHttpClient, endpoint: str, identities: list[Identity]
+) -> AccessControlCandidate | None:
+    """Role-vs-role vertical escalation — distinct from _detect_vertical
+    above, which only ever compares unauthenticated vs. authenticated.
+    Only identities the analyst explicitly ranked (CredentialSet.
+    privilege_rank) participate: without an explicit ranking there's no
+    ground truth for which of two authenticated identities is "supposed"
+    to have more access, so nothing here can safely be called an
+    escalation — this is why it's a separate check rather than folded
+    into _detect_vertical.
+    """
+    ranked = [i for i in identities if i.session is not None and i.privilege_rank is not None]
+    for lower in ranked:
+        for higher in ranked:
+            if lower.privilege_rank is None or higher.privilege_rank is None:
+                continue
+            if lower.privilege_rank >= higher.privilege_rank:
+                continue
+            try:
+                higher_resp = await client.get(endpoint, session=higher.session)
+            except (ScopeViolationError, httpx.HTTPError):
+                continue
+            if higher_resp.status_code >= 400:
+                continue
+            try:
+                lower_resp = await client.get(endpoint, session=lower.session)
+            except (ScopeViolationError, httpx.HTTPError):
+                continue
+            if lower_resp.status_code >= 400:
+                continue
+            if _similar_length(len(lower_resp.text), len(higher_resp.text)):
+                return AccessControlCandidate(
+                    comparison_type="role_vertical",
+                    endpoint=endpoint,
+                    original_endpoint=endpoint,
+                    identity_a=lower,
+                    identity_b=higher,
+                    response_a=lower_resp,
+                    response_b=higher_resp,
+                    deterministic_signal=(
+                        f"{lower.label} (privilege rank {lower.privilege_rank}) response "
+                        f"({len(lower_resp.text)} bytes, status {lower_resp.status_code}) is "
+                        f"nearly identical in size to {higher.label} (privilege rank "
+                        f"{higher.privilege_rank})'s response ({len(higher_resp.text)} bytes, "
+                        f"status {higher_resp.status_code}) to the same endpoint."
+                    ),
+                )
+    return None
+
+
 async def _detect_horizontal(
     client: ScopedHttpClient, endpoint: str, identities: list[Identity]
 ) -> AccessControlCandidate | None:
@@ -156,8 +226,11 @@ async def _reexecute(
     client: ScopedHttpClient, candidate: AccessControlCandidate
 ) -> AccessControlCandidate | None:
     try:
-        if candidate.comparison_type == "vertical":
-            response_a = await client.get(candidate.endpoint, session=None)
+        if candidate.comparison_type in ("vertical", "role_vertical"):
+            # identity_a.session is None for "vertical" (the unauth
+            # baseline) and the lower-ranked identity's real session for
+            # "role_vertical" — same shape either way.
+            response_a = await client.get(candidate.endpoint, session=candidate.identity_a.session)
             response_b = await client.get(candidate.endpoint, session=candidate.identity_b.session)
             if response_a.status_code >= 400 or response_b.status_code >= 400:
                 return None
@@ -208,27 +281,32 @@ class AccessControlAgent:
         self._budget_guard = budget_guard
         self._ai_model = ai_model
         self.budget_exceeded = False
+        self.budget_stop_reason: str | None = None
 
     async def run(
         self,
         endpoints: list[str],
         sessions,
         credential_labels: dict[uuid.UUID, str],
+        credential_ranks: dict[uuid.UUID, int | None] | None = None,
     ) -> list[Finding]:
-        identities = build_identities(sessions, credential_labels)
+        identities = build_identities(sessions, credential_labels, credential_ranks)
         findings: list[Finding] = []
 
         for endpoint in endpoints:
             if self.budget_exceeded:
                 break
-            for detect in (_detect_vertical, _detect_horizontal):
+            for detect in (_detect_vertical, _detect_horizontal, _detect_role_vertical):
                 candidate = await detect(self._client, endpoint, identities)
                 if candidate is None:
                     continue
                 try:
                     finding = await self._triage_and_confirm(candidate)
-                except BudgetExceededError:
+                except (BudgetExceededError, ProviderUnavailableError) as exc:
                     self.budget_exceeded = True
+                    self.budget_stop_reason = (
+                        "provider_unavailable" if isinstance(exc, ProviderUnavailableError) else "budget_exceeded"
+                    )
                     break
                 if finding is not None:
                     findings.append(finding)

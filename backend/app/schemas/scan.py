@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -25,6 +26,13 @@ class ScanRunOut(BaseModel):
     error: str | None
     warning: str | None = None
     ai_provider_config_id: uuid.UUID | None = None
+    # LLM spend/usage for this run (§10.5 budget guardrail — see
+    # app.ai.budget.BudgetGuard). 0 for scans that never called an LLM
+    # (e.g. ai_provider="fake"/Null adapter, or budget exhausted before
+    # any call).
+    llm_cost_usd: Decimal = Decimal(0)
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
 
     model_config = {"from_attributes": True}
 

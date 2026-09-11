@@ -17,6 +17,22 @@ class BudgetExceededError(Exception):
     """
 
 
+class ProviderUnavailableError(Exception):
+    """Raised when the LLM provider call itself fails (network blip,
+    DNS hiccup, provider-side 5xx, timeout — anything transient, not a
+    programming bug) — real incident: a scan-crashing "Connection
+    error." reaching Spark from inside request_smuggling's AI triage,
+    because guarded_complete previously let ANY exception from the
+    provider call propagate raw, and none of the ~9 call sites across
+    app/agents/ catch anything but BudgetExceededError. A transient
+    provider outage should degrade exactly the same way running out of
+    budget does — skip the rest of this agent's LLM-dependent work,
+    keep whatever it already found, don't take the whole scan down —
+    so every existing `except BudgetExceededError:` handler should
+    catch this too.
+    """
+
+
 class BudgetGuard:
     """Tracks and enforces the §10.5 per-scan-run LLM cost cap. One
     instance per ScanRun, shared across every agent node that makes LLM
@@ -61,8 +77,21 @@ class BudgetGuard:
                     f"${self.spent} spent of ${self._cap} cap"
                 )
 
-            response = await self._provider.complete(messages, model=model, max_tokens=max_tokens)
+            try:
+                response = await self._provider.complete(messages, model=model, max_tokens=max_tokens)
+            except BudgetExceededError:
+                raise
+            except Exception as exc:
+                # Deliberately broad — every adapter (Claude/OpenAI/
+                # Gemini/Grok/GenericOpenAI/Spark) can raise its own
+                # SDK-specific exception type for a network/timeout/
+                # 5xx failure, and none of them are worth enumerating
+                # here: the handling is identical regardless of which
+                # one fired (see ProviderUnavailableError's docstring).
+                raise ProviderUnavailableError(str(exc)) from exc
             cost = self._provider.estimate_cost(response.input_tokens, response.output_tokens, model)
             self._scan_run.llm_cost_usd = self.spent + cost
+            self._scan_run.llm_input_tokens = (self._scan_run.llm_input_tokens or 0) + response.input_tokens
+            self._scan_run.llm_output_tokens = (self._scan_run.llm_output_tokens or 0) + response.output_tokens
             await self._session.commit()
             return response

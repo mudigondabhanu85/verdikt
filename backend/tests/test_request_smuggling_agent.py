@@ -6,11 +6,33 @@ from sqlalchemy import select
 
 from app.agents.http_client import ScopedHttpClient
 from app.agents.request_smuggling import RequestSmugglingAgent
+from app.ai.budget import BudgetGuard
 from app.models.project import ScopeEntry
 from app.models.review_candidate import ReviewCandidate
+from app.models.scan import ScanRun
 from tests.conftest import session_scope
+from tests.fakes import ScriptedAIProviderAdapter
 
 _HANG_TIMEOUT = 2.0
+
+
+async def _make_agent(session, client):
+    scan_run = ScanRun(version_id=uuid.uuid4(), status="running", requested_by=uuid.uuid4())
+    session.add(scan_run)
+    await session.commit()
+    await session.refresh(scan_run)
+    provider = ScriptedAIProviderAdapter.from_responses(
+        '{"vulnerable": false, "confidence": "medium", "reasoning": "Timing delta looks like network jitter."}'
+    )
+    guard = BudgetGuard(scan_run, session, provider, lock=client.session_lock)
+    return RequestSmugglingAgent(
+        client,
+        scan_run_id=scan_run.id,
+        agent_job_id=uuid.uuid4(),
+        db_session=session,
+        budget_guard=guard,
+        ai_model="fake-model",
+    )
 
 
 def _make_server(*, prioritizes: str | None):
@@ -103,9 +125,7 @@ async def test_te_prioritizing_backend_is_flagged(db_adapter):
                 scope_entries=[ScopeEntry(host=host, port=port, in_scope=True)],
                 db_session=session,
             )
-            agent = RequestSmugglingAgent(
-                client, scan_run_id=uuid.uuid4(), agent_job_id=uuid.uuid4(), db_session=session
-            )
+            agent = await _make_agent(session, client)
             candidates = await agent.run([f"http://{host}:{port}/"])
 
             assert len(candidates) == 1
@@ -130,9 +150,7 @@ async def test_cl_prioritizing_backend_is_flagged(db_adapter):
                 scope_entries=[ScopeEntry(host=host, port=port, in_scope=True)],
                 db_session=session,
             )
-            agent = RequestSmugglingAgent(
-                client, scan_run_id=uuid.uuid4(), agent_job_id=uuid.uuid4(), db_session=session
-            )
+            agent = await _make_agent(session, client)
             candidates = await agent.run([f"http://{host}:{port}/"])
             assert len(candidates) == 1
             await client.aclose()
@@ -151,9 +169,7 @@ async def test_compliant_backend_rejecting_ambiguous_framing_is_not_flagged(db_a
                 scope_entries=[ScopeEntry(host=host, port=port, in_scope=True)],
                 db_session=session,
             )
-            agent = RequestSmugglingAgent(
-                client, scan_run_id=uuid.uuid4(), agent_job_id=uuid.uuid4(), db_session=session
-            )
+            agent = await _make_agent(session, client)
             candidates = await agent.run([f"http://{host}:{port}/"])
             assert candidates == []
             await client.aclose()

@@ -382,7 +382,66 @@ async def test_scan_run_attaches_chosen_ai_provider_config(client, fixture_site)
     assert created.json()["ai_provider_config_id"] == config_id
 
 
-async def test_full_scan_flow_completes_and_produces_report(client, fixture_site):
+async def test_get_scan_run_reports_real_llm_token_and_cost_usage(client, fixture_site, db_adapter):
+    """Real incident this guards against: GET /scan-runs/{id} always
+    showed "0 tokens/$0.00" regardless of what was actually in the DB
+    — _scan_run_detail's ScanRunDetail(...) call never passed
+    llm_cost_usd/llm_input_tokens/llm_output_tokens, so Pydantic
+    silently fell back to their schema defaults (all 0) instead of the
+    real accumulated values.
+    """
+    import uuid as uuid_module
+    from decimal import Decimal
+
+    from app.models.scan import ScanRun
+    from tests.conftest import session_scope
+
+    host, port = fixture_site
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+    await _authorize_and_target(client, admin["headers"], version_id, host, port)
+
+    async with session_scope(db_adapter) as session:
+        scan_run = ScanRun(
+            version_id=uuid_module.UUID(version_id),
+            status="completed",
+            requested_by=uuid_module.uuid4(),
+            llm_cost_usd=Decimal("1.2345"),
+            llm_input_tokens=96713,
+            llm_output_tokens=2129,
+        )
+        session.add(scan_run)
+        await session.commit()
+        await session.refresh(scan_run)
+        scan_run_id = str(scan_run.id)
+
+    detail = await client.get(f"/scan-runs/{scan_run_id}", headers=admin["headers"])
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["llm_input_tokens"] == 96713
+    assert body["llm_output_tokens"] == 2129
+    assert Decimal(body["llm_cost_usd"]) == Decimal("1.2345")
+
+
+async def test_full_scan_flow_completes_and_produces_report(client, fixture_site, monkeypatch):
+    # Isolate from this dev environment's real deployment-wide
+    # AI_PROVIDER=spark setting (a real incident: recon_planner and
+    # ai_business_logic_plan always fire an LLM call regardless of
+    # what's discovered, unlike most other agents which only call the
+    # LLM when they find something to triage — so this test started
+    # hitting Spark's real network with a stale/invalid test token and
+    # getting a genuine 401, which the ProviderUnavailableError fix
+    # correctly turns into a "skipped" AgentJob rather than a crash,
+    # but that still isn't "completed", failing this test's own
+    # all-jobs-completed assertion below). NullAIProviderAdapter always
+    # succeeds with a harmless "not vulnerable" verdict at zero cost —
+    # exactly what a fresh checkout with no API keys configured gets.
+    from app.ai.provider import get_ai_provider
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "ai_provider", "fake")
+    get_ai_provider.cache_clear()
+
     host, port = fixture_site
     admin = await register_org_admin(client)
     _, version_id = await create_project_and_version(client, admin["headers"])
@@ -419,10 +478,12 @@ async def test_full_scan_flow_completes_and_produces_report(client, fixture_site
         "cache_poisoning",
         "login",
         "authenticated_recon",
+        "recon_planner",
         "injection",
         "xss",
         "auth",
         "access_control",
+        "ai_business_logic_plan",
         "business_logic",
         "csrf",
         "stored_xss",

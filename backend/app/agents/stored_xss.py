@@ -169,7 +169,11 @@ class StoredXssAgent:
         try:
             async with async_playwright() as playwright:
                 browser = await playwright.chromium.launch(headless=True)
-                context = await browser.new_context()
+                # See app.agents.macro's identical fix/rationale — an
+                # internal staging target's self-signed/internal-CA
+                # cert shouldn't fail this check when the analyst
+                # already has authorized, scoped access to it.
+                context = await browser.new_context(ignore_https_errors=True)
                 if self._auth_session is not None and self._auth_session.cookies:
                     await context.add_cookies(
                         [

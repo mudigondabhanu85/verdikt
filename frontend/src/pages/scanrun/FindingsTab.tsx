@@ -4,7 +4,95 @@ import { api, ApiError } from '../../api/client'
 import { AuthenticatedImage } from '../../components/AuthenticatedImage'
 import { SeverityBadge, StatusBadge } from '../../components/Badges'
 import { TicketSection } from './TicketSection'
-import type { FindingOut } from '../../api/types'
+import type { FindingOut, FindingRetestStatus } from '../../api/types'
+import { useAuth, canReview, canWrite } from '../../auth/AuthContext'
+
+// The direct answer to "I need to delete/false-positive a finding": mark
+// it false_positive_after_review/risk_accepted (both "analyst-locked" —
+// a later rescan diff won't silently reopen them just because the same
+// signal reproduced) if you want the record kept for audit history, or
+// delete it outright if you don't. See backend/app/api/routes/findings.py.
+function FindingStatusControl({ scanRunId, finding }: { scanRunId: string; finding: FindingOut }) {
+  const { user } = useAuth()
+  const queryClient = useQueryClient()
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['scan-runs', scanRunId, 'findings'] })
+
+  const statusMutation = useMutation({
+    mutationFn: (retest_status: FindingRetestStatus) => api.findings.updateStatus(finding.id, retest_status),
+    onSuccess: () => {
+      setError(null)
+      invalidate()
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : 'Update failed'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: () => api.findings.delete(finding.id),
+    onSuccess: invalidate,
+    onError: (err) => setError(err instanceof ApiError ? err.message : 'Delete failed'),
+  })
+
+  if (!canReview(user?.role)) return null
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-2">
+      {finding.retest_status !== 'false_positive_after_review' && (
+        <button
+          onClick={() => statusMutation.mutate('false_positive_after_review')}
+          disabled={statusMutation.isPending}
+          className="rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          Mark false positive
+        </button>
+      )}
+      {finding.retest_status !== 'risk_accepted' && (
+        <button
+          onClick={() => statusMutation.mutate('risk_accepted')}
+          disabled={statusMutation.isPending}
+          className="rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          Accept risk
+        </button>
+      )}
+      {finding.retest_status !== 'open' && (
+        <button
+          onClick={() => statusMutation.mutate('open')}
+          disabled={statusMutation.isPending}
+          className="rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          Reopen
+        </button>
+      )}
+      {canWrite(user?.role) &&
+        (confirmingDelete ? (
+          <span className="flex items-center gap-1 text-xs">
+            <span className="text-gray-500">Delete permanently?</span>
+            <button
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+              className="rounded border border-red-300 bg-red-50 px-2 py-0.5 text-red-700 hover:bg-red-100 disabled:opacity-50"
+            >
+              {deleteMutation.isPending ? 'Deleting…' : 'Confirm delete'}
+            </button>
+            <button onClick={() => setConfirmingDelete(false)} className="text-gray-400 hover:underline">
+              cancel
+            </button>
+          </span>
+        ) : (
+          <button
+            onClick={() => setConfirmingDelete(true)}
+            className="rounded border border-red-300 bg-white px-2 py-0.5 text-xs text-red-600 hover:bg-red-50"
+          >
+            Delete
+          </button>
+        ))}
+      {error && <span className="text-xs text-red-600">{error}</span>}
+    </div>
+  )
+}
 
 const RETEST_RESULT_LABELS: Record<string, string> = {
   still_vulnerable: 'Still vulnerable',
@@ -106,6 +194,7 @@ function FindingDetail({ scanRunId, finding }: { scanRunId: string; finding: Fin
         <span>{finding.owasp_2025_category}</span>
       </div>
 
+      <FindingStatusControl scanRunId={scanRunId} finding={finding} />
       <RetestSection scanRunId={scanRunId} finding={finding} />
       <TicketSection findingId={finding.id} />
 

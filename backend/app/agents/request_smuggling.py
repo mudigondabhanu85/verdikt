@@ -30,6 +30,17 @@ payload is (network jitter, a slow endpoint, or a WAF can all produce
 the same signal), so per §2's Confirmed-Only Findings Policy this is
 always queued as a ReviewCandidate — the same treatment
 app.agents.deserialization gets for its passive signature match.
+
+An LLM triage pass (added 2026-09, matching deserialization.py's) still
+runs on every signal — not to promote it to a Finding (actually
+smuggling a second request to prove the desync is exactly what §1.2's
+safe-by-default guardrail forbids), but to replace the previously
+templated `llm_reasoning` text with a real per-signal assessment (e.g.
+weighing how large the timing delta was relative to the threshold, and
+whether the target's likely under load in a way that could produce a
+false positive) — same treatment as every other check, without
+weakening the guarantee that a timing signal alone can never self-
+confirm into a Finding.
 """
 
 import asyncio
@@ -40,6 +51,9 @@ import httpx
 
 from app.agents.http_client import ScopedHttpClient
 from app.agents.raw_http import send_raw
+from app.ai.budget import BudgetExceededError, BudgetGuard, ProviderUnavailableError
+from app.ai.prompts.loader import render_prompt
+from app.ai.verdict import parse_verdict
 from app.checks.loader import get_check
 from app.checks.render import render_check_template
 from app.models.review_candidate import ReviewCandidate
@@ -96,8 +110,10 @@ def _baseline_probe(host: str, path: str) -> bytes:
 
 
 class RequestSmugglingAgent:
-    """No LLM triage — a timing signal is queued straight to
-    ReviewCandidate (never a Finding, see module docstring)."""
+    """LLM triage refines llm_reasoning/llm_confidence on every signal
+    (see module docstring) — but can never turn one into a Finding;
+    that would require actually smuggling a request, which is
+    deliberately never attempted here."""
 
     def __init__(
         self,
@@ -106,11 +122,17 @@ class RequestSmugglingAgent:
         scan_run_id: uuid.UUID,
         agent_job_id: uuid.UUID,
         db_session,
+        budget_guard: BudgetGuard,
+        ai_model: str,
     ):
         self._client = client
         self._scan_run_id = scan_run_id
         self._agent_job_id = agent_job_id
         self._session = db_session
+        self._budget_guard = budget_guard
+        self._ai_model = ai_model
+        self.budget_exceeded = False
+        self.budget_stop_reason: str | None = None
 
     async def run(self, endpoints: list[str]) -> list[ReviewCandidate]:
         candidates: list[ReviewCandidate] = []
@@ -168,6 +190,33 @@ class RequestSmugglingAgent:
             return delta
         return None
 
+    async def _triage(self, signal: SmugglingSignal, variant_label: str, fallback_reasoning: str) -> tuple[str, str]:
+        if self.budget_exceeded:
+            return fallback_reasoning, "medium"
+        messages = render_prompt(
+            "deterministic_signal_triage",
+            check_type=f"HTTP request smuggling ({variant_label})",
+            url=signal.url,
+            deterministic_signal=(
+                f"A raw-socket {variant_label} probe was {signal.delta_seconds:.2f}s slower than "
+                f"baseline (re-verified once; threshold is {_DELAY_THRESHOLD_SECONDS}s)"
+            ),
+            evidence_before="baseline: a plain GET request, timed for comparison",
+            evidence_after=f"probe response was {signal.delta_seconds:.2f}s slower than that baseline",
+        )
+        try:
+            response = await self._budget_guard.guarded_complete(messages, model=self._ai_model)
+        except (BudgetExceededError, ProviderUnavailableError) as exc:
+            self.budget_exceeded = True
+            self.budget_stop_reason = (
+                "provider_unavailable" if isinstance(exc, ProviderUnavailableError) else "budget_exceeded"
+            )
+            return fallback_reasoning, "medium"
+        verdict = parse_verdict(response.content)
+        if verdict is None:
+            return fallback_reasoning, "medium"
+        return verdict.reasoning, verdict.confidence
+
     async def _persist(self, signal: SmugglingSignal) -> ReviewCandidate:
         check_def = get_check("potential-http-request-smuggling", filename=_CATALOG_FILE)
         variant_label = (
@@ -176,6 +225,8 @@ class RequestSmugglingAgent:
             else "Content-Length-prioritizing (oversized declared length)"
         )
         extra = {"variant": variant_label, "delta_seconds": f"{signal.delta_seconds:.2f}"}
+        fallback_reasoning = render_check_template(check_def.technical_description, signal.url, extra)
+        llm_reasoning, llm_confidence = await self._triage(signal, variant_label, fallback_reasoning)
         candidate = ReviewCandidate(
             scan_run_id=self._scan_run_id,
             agent_job_id=self._agent_job_id,
@@ -185,8 +236,8 @@ class RequestSmugglingAgent:
             affected_endpoint=signal.url,
             request_raw=f"(raw socket probe — {variant_label}) targeting {signal.url}",
             response_raw=f"response {signal.delta_seconds:.2f}s slower than baseline (threshold {_DELAY_THRESHOLD_SECONDS}s)",
-            llm_reasoning=render_check_template(check_def.technical_description, signal.url, extra),
-            llm_confidence="medium",
+            llm_reasoning=llm_reasoning,
+            llm_confidence=llm_confidence,
             status="pending",
         )
         async with self._client.session_lock:

@@ -8,6 +8,10 @@ class RecordMacroRequest(BaseModel):
     start_url: str
 
 
+class RecordingStartedOut(BaseModel):
+    recording_id: uuid.UUID
+
+
 class LoginMacroOut(BaseModel):
     id: uuid.UUID
     version_id: uuid.UUID

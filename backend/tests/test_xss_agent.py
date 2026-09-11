@@ -45,6 +45,21 @@ def _handler(request: httpx.Request) -> httpx.Response:
         term = query.get("q", [""])[0]
         return httpx.Response(200, headers={"content-type": "text/html"}, text=f"<p>Results for: {term}</p>")
 
+    if parsed.path == "/attr-search":
+        # A real, common flaw: escapes <, >, & (so the fixed HTML-body
+        # payload's <marker> tag never survives raw) but forgets to
+        # escape quotes in an attribute context — only a quote-breakout
+        # payload template (no < or > at all) makes it through
+        # unescaped.
+        import html
+
+        term = query.get("q", [""])[0]
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            text=f'<input value="{html.escape(term, quote=False)}">',
+        )
+
     return httpx.Response(404)
 
 
@@ -70,6 +85,47 @@ async def _make_agent(session, provider):
         ai_model="fake-model",
     )
     return agent, client
+
+
+async def test_ai_suggested_payload_template_catches_what_the_fixed_probe_misses(db_adapter):
+    """/attr-search escapes <, >, & — the fixed HTML-body payload's
+    <marker> tag never survives raw, so the fixed probe alone finds
+    nothing. An AI-suggested quote-breakout template (no < or > at
+    all) does.
+    """
+    async with session_scope(db_adapter) as session:
+        def respond(msgs):
+            if any("Suggest additional reflected-XSS payload templates" in m.content for m in msgs):
+                return '{"payload_templates": ["\\" onmouseover=alert(\'{marker}\')"]}'
+            return '{"vulnerable": true, "confidence": "high", "reasoning": "looks vulnerable"}'
+
+        provider = ScriptedAIProviderAdapter(respond_fn=respond)
+        agent, client = await _make_agent(session, provider)
+
+        parameters = [DiscoveredParameter(url="http://site.test/attr-search?q=x", method="GET", name="q")]
+        candidates = await agent.run(
+            parameters, [], tech_stack_fingerprint={"backend_languages": ["PHP"]}
+        )
+
+        assert len(candidates) == 1
+        assert candidates[0].affected_endpoint.startswith("http://site.test/attr-search")
+
+        await client.aclose()
+
+
+async def test_no_parameters_never_calls_the_llm_for_payload_template_suggestions(db_adapter):
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"payload_templates": ["should never be seen {marker}"]}'
+        )
+        agent, client = await _make_agent(session, provider)
+
+        candidates = await agent.run([], [])
+
+        assert candidates == []
+        assert provider.calls == []
+
+        await client.aclose()
 
 
 async def test_xss_agent_queues_review_candidate_not_finding(db_adapter):
@@ -142,7 +198,10 @@ async def test_xss_agent_ignores_properly_escaped_reflection(db_adapter):
         candidates = await agent.run(parameters, [])
 
         assert candidates == []
-        assert len(provider.calls) == 0  # escaped reflection never even reaches the LLM
+        # The 1 call left is the AI-payload-template-suggestion call
+        # every run() makes first — escaped reflection itself never
+        # even reaches triage.
+        assert len(provider.calls) == 1
 
         await client.aclose()
 

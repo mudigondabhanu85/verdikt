@@ -203,6 +203,16 @@ async def _scan_run_detail(session: AsyncSession, scan_run: ScanRun) -> ScanRunD
         agent_jobs=[AgentJobOut.model_validate(j) for j in jobs],
         finding_counts_by_severity={sev: counts.get(sev, 0) for sev in ("Critical", "High", "Medium", "Low")},
         tech_stack_fingerprint=scan_run.tech_stack_fingerprint,
+        # Real incident this fixes: ScanRunDetail.llm_cost_usd/
+        # llm_input_tokens/llm_output_tokens all have schema defaults
+        # of 0 — omitting them here (as this constructor call always
+        # did) meant every scan showed "0 tokens/$0.00" on the UI
+        # regardless of what was actually accumulated in the DB, since
+        # Pydantic silently falls back to the default rather than
+        # erroring on a missing-but-optional field.
+        llm_cost_usd=scan_run.llm_cost_usd,
+        llm_input_tokens=scan_run.llm_input_tokens,
+        llm_output_tokens=scan_run.llm_output_tokens,
     )
 
 
@@ -314,10 +324,13 @@ async def _get_or_generate_executive_summary(
     if scan_run.executive_summary:
         return scan_run.executive_summary
 
-    provider, ai_model = await resolve_provider_and_model(session, scan_run)
+    provider, model_router = await resolve_provider_and_model(session, scan_run)
     guard = BudgetGuard(scan_run, session, provider)
     summary = await generate_executive_summary(
-        scan_run=detail, findings=findings, budget_guard=guard, ai_model=ai_model
+        scan_run=detail,
+        findings=findings,
+        budget_guard=guard,
+        ai_model=model_router.for_role("reporting"),
     )
     scan_run.executive_summary = summary
     await session.commit()

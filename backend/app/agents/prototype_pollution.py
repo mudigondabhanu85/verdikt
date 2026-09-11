@@ -46,7 +46,12 @@ async def attempt_prototype_pollution_proof(
     try:
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=headless)
-            page = await browser.new_page()
+            # See app.agents.macro's identical fix/rationale — an
+            # internal staging target's self-signed/internal-CA cert
+            # shouldn't fail this check when the analyst already has
+            # authorized, scoped access to it.
+            context = await browser.new_context(ignore_https_errors=True)
+            page = await context.new_page()
             for template in _PAYLOAD_TEMPLATES:
                 payload = template.format(marker=marker)
                 target_url = _append_payload(url, payload)

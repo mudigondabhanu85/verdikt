@@ -10,10 +10,12 @@ from app.agents.deserialization import (
 )
 from app.agents.http_client import ScopedHttpClient
 from app.agents.recon import FormField, FormInfo
+from app.ai.budget import BudgetGuard
 from app.models.project import ScopeEntry
 from app.models.review_candidate import ReviewCandidate
 from app.models.scan import AgentJob, ScanRun
 from tests.conftest import session_scope
+from tests.fakes import ScriptedAIProviderAdapter
 
 
 def _response_with_cookie(url: str, cookie_header: str) -> httpx.Response:
@@ -87,8 +89,17 @@ async def test_agent_persists_review_candidates_never_findings(db_adapter):
             db_session=session,
             transport=httpx.MockTransport(lambda r: httpx.Response(404)),
         )
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": false, "confidence": "medium", "reasoning": "Looks like a framework session token."}'
+        )
+        guard = BudgetGuard(scan_run, session, provider, lock=client.session_lock)
         agent = DeserializationAgent(
-            client, scan_run_id=scan_run.id, agent_job_id=job.id, db_session=session
+            client,
+            scan_run_id=scan_run.id,
+            agent_job_id=job.id,
+            db_session=session,
+            budget_guard=guard,
+            ai_model="fake-model",
         )
 
         responses = {
@@ -106,6 +117,11 @@ async def test_agent_persists_review_candidates_never_findings(db_adapter):
         assert len(candidates) == 2
         assert all(c.status == "pending" for c in candidates)
         assert {c.check_type for c in candidates} == {"potential-insecure-deserialization"}
+        # LLM triage ran (real per-signal reasoning, not the old static
+        # template text) but never turned a candidate into a Finding —
+        # that stays structurally impossible (see module docstring).
+        assert all(c.llm_reasoning == "Looks like a framework session token." for c in candidates)
+        assert all(c.llm_confidence == "medium" for c in candidates)
 
         await client.aclose()
 

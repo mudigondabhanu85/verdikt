@@ -1,4 +1,5 @@
 import uuid
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -33,3 +34,12 @@ class FindingOut(BaseModel):
     evidence: EvidenceOut | None = None
 
     model_config = {"from_attributes": True}
+
+
+class FindingStatusUpdate(BaseModel):
+    """PATCH .../findings/{id} body — an analyst's own disposition after
+    reviewing a Finding: mark it a false positive, accept the risk, or
+    reopen it. See app.models.finding.RETEST_STATUSES.
+    """
+
+    retest_status: Literal["open", "fixed", "risk_accepted", "false_positive_after_review"]

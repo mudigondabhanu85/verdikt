@@ -5,7 +5,7 @@ import uuid
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 
-from app.ai.budget import BudgetExceededError, BudgetGuard
+from app.ai.budget import BudgetExceededError, BudgetGuard, ProviderUnavailableError
 from app.ai.prompts.loader import render_prompt
 from app.ai.verdict import parse_verdict
 from app.models.attack_chain import AttackChain, AttackChainEvidence
@@ -99,6 +99,7 @@ class ChainAnalysisAgent:
         self._budget_guard = budget_guard
         self._ai_model = ai_model
         self.budget_exceeded = False
+        self.budget_stop_reason: str | None = None
 
     async def run(self, findings: list[Finding]) -> list[AttackChain]:
         # Deterministic pre-filter (§10) — a chain needs at least 2 links;
@@ -114,8 +115,11 @@ class ChainAnalysisAgent:
                 render_prompt("chain_analysis_triage", findings_summary=findings_summary),
                 model=self._ai_model,
             )
-        except BudgetExceededError:
+        except (BudgetExceededError, ProviderUnavailableError) as exc:
             self.budget_exceeded = True
+            self.budget_stop_reason = (
+                "provider_unavailable" if isinstance(exc, ProviderUnavailableError) else "budget_exceeded"
+            )
             return []
 
         proposals = _parse_chain_proposals(triage_response.content)
@@ -153,8 +157,11 @@ class ChainAnalysisAgent:
                 ),
                 model=self._ai_model,
             )
-        except BudgetExceededError:
+        except (BudgetExceededError, ProviderUnavailableError) as exc:
             self.budget_exceeded = True
+            self.budget_stop_reason = (
+                "provider_unavailable" if isinstance(exc, ProviderUnavailableError) else "budget_exceeded"
+            )
             return None
 
         verdict = parse_verdict(validation_response.content)

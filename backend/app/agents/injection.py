@@ -1,7 +1,8 @@
+import functools
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 import httpx
 
@@ -16,10 +17,10 @@ from app.agents.probing import (
     query_probe_targets,
 )
 from app.agents.recon import DiscoveredParameter, FormInfo
-from app.ai.budget import BudgetExceededError, BudgetGuard
+from app.ai.budget import BudgetExceededError, BudgetGuard, ProviderUnavailableError
 from app.ai.prompt_truncation import truncate_pair_for_prompt
 from app.ai.prompts.loader import render_prompt
-from app.ai.verdict import parse_verdict
+from app.ai.verdict import extract_json_objects, parse_verdict
 from app.models.finding import Evidence, Finding
 
 _SQLI_ERROR_PATTERNS = [
@@ -176,6 +177,39 @@ class InjectionCandidate:
     probe_fn: ProbeFn
 
 
+_MAX_PARAMETERS_IN_PAYLOAD_PROMPT = 40
+
+
+def _format_parameters_for_payload_prompt(parameters: list[DiscoveredParameter]) -> str:
+    shown = parameters[:_MAX_PARAMETERS_IN_PAYLOAD_PROMPT]
+    lines = [f"- {p.name} (sample value: {p.sample_value!r}) on {p.method} {p.url}" for p in shown]
+    if len(parameters) > len(shown):
+        lines.append(f"... and {len(parameters) - len(shown)} more, omitted for length")
+    return "\n".join(lines) if lines else "(none discovered)"
+
+
+def _format_tech_stack_for_payload_prompt(fingerprint: dict[str, Any] | None) -> str:
+    if not fingerprint:
+        return "(not determined)"
+    parts = []
+    for key in ("server_software", "backend_languages", "frontend_frameworks", "cms"):
+        values = fingerprint.get(key) or []
+        if values:
+            parts.append(f"{key}: {', '.join(values)}")
+    return "; ".join(parts) if parts else "(not determined)"
+
+
+_MAX_AI_PAYLOADS = 5
+
+
+def _parse_payload_suggestions(raw_content: str) -> list[str]:
+    for data in extract_json_objects(raw_content):
+        payloads = data.get("payloads")
+        if isinstance(payloads, list):
+            return [p for p in payloads if isinstance(p, str) and p][:_MAX_AI_PAYLOADS]
+    return []
+
+
 def _matches_sqli_error(text: str) -> bool:
     return any(p.search(text) for p in _SQLI_ERROR_PATTERNS)
 
@@ -196,6 +230,40 @@ async def _probe_sqli_error(
             probe_response=probe,
             probe_fn=_probe_sqli_error,
         )
+    return None
+
+
+async def _probe_sqli_error_ai(
+    client: ScopedHttpClient,
+    target: ProbeTarget,
+    session: AuthenticatedSession | None = None,
+    *,
+    payloads: list[str],
+) -> InjectionCandidate | None:
+    """Same detection oracle as _probe_sqli_error (a SQL error string
+    appearing in the probe response but not the baseline) — just tried
+    against a batch of AI-suggested payload strings instead of the one
+    fixed "'" (see InjectionAgent._generate_ai_payloads), informed by
+    this scan's actual discovered parameter names/tech stack rather
+    than a one-size-fits-all guess. Bound via functools.partial in
+    InjectionAgent.run() so it still matches ProbeFn's signature.
+    """
+    baseline = await fetch_with_value(client, target, BASELINE_VALUE, session)
+    for payload in payloads:
+        probe = await fetch_with_value(client, target, payload, session)
+        if _matches_sqli_error(probe.text) and not _matches_sqli_error(baseline.text):
+            return InjectionCandidate(
+                payload_type="sqli-error",
+                target=target,
+                payload=payload,
+                deterministic_signal=(
+                    "A SQL error string appeared in the probe response but not the baseline "
+                    "response, using an AI-suggested payload tailored to this parameter/tech stack."
+                ),
+                baseline_response=baseline,
+                probe_response=probe,
+                probe_fn=functools.partial(_probe_sqli_error_ai, payloads=payloads),
+            )
     return None
 
 
@@ -361,6 +429,16 @@ class InjectionAgent:
     (§2 step 1) -> adversarial LLM validation (§2 step 3) -> Finding.
     Server-side and re-fetchable, so — unlike XSS — these can become real
     ai_confirmed Findings without browser proof.
+
+    Also generates one extra batch of AI-suggested SQLi-error payloads
+    per run() (not per parameter/target — see the research behind
+    app.ai.model_routing: per-parameter LLM calls would burn through the
+    scan-wide budget long before later parameters are ever reached), informed
+    by this scan's actual discovered parameter names and tech-stack
+    fingerprint, supplementing (never replacing) the fixed payload
+    battery above. A wrong/ineffective suggestion just never triggers
+    the same deterministic error-string signal every other payload is
+    judged by — no separate trust path, no separate risk.
     """
 
     def __init__(
@@ -384,6 +462,7 @@ class InjectionAgent:
         # results — the caller (graph node) checks this flag to record the
         # AgentJob as "skipped" (budget) vs "completed".
         self.budget_exceeded = False
+        self.budget_stop_reason: str | None = None
         self._auth_session: AuthenticatedSession | None = None
 
     async def run(
@@ -391,6 +470,7 @@ class InjectionAgent:
         parameters: list[DiscoveredParameter],
         forms: list[FormInfo],
         sessions: dict[uuid.UUID, AuthenticatedSession] | None = None,
+        tech_stack_fingerprint: dict[str, Any] | None = None,
     ) -> list[Finding]:
         # A real, significant bug found live against DVWA: these probes
         # never carried any session at all before this fix, silently
@@ -405,10 +485,15 @@ class InjectionAgent:
         targets = query_probe_targets(parameters) + form_probe_targets(forms)
         findings: list[Finding] = []
 
+        probe_fns = list(_PROBE_FNS)
+        ai_payloads = await self._generate_ai_payloads(parameters, tech_stack_fingerprint)
+        if ai_payloads:
+            probe_fns.append(functools.partial(_probe_sqli_error_ai, payloads=ai_payloads))
+
         for target in targets:
             if self.budget_exceeded:
                 break
-            for probe_fn in _PROBE_FNS:
+            for probe_fn in probe_fns:
                 try:
                     candidate = await probe_fn(self._client, target, self._auth_session)
                 except (ScopeViolationError, httpx.HTTPError):
@@ -417,13 +502,39 @@ class InjectionAgent:
                     continue
                 try:
                     finding = await self._triage_and_confirm(candidate)
-                except BudgetExceededError:
+                except (BudgetExceededError, ProviderUnavailableError) as exc:
                     self.budget_exceeded = True
+                    self.budget_stop_reason = (
+                        "provider_unavailable" if isinstance(exc, ProviderUnavailableError) else "budget_exceeded"
+                    )
                     break
                 if finding is not None:
                     findings.append(finding)
 
         return findings
+
+    async def _generate_ai_payloads(
+        self, parameters: list[DiscoveredParameter], tech_stack_fingerprint: dict[str, Any] | None
+    ) -> list[str]:
+        if not parameters or self.budget_exceeded:
+            # Nothing to inform a suggestion with, or no budget left to
+            # spend on one — same pre-filter discipline as
+            # business_logic_planner's empty-site-map check.
+            return []
+        messages = render_prompt(
+            "injection_payload_suggestions",
+            parameters=_format_parameters_for_payload_prompt(parameters),
+            tech_stack=_format_tech_stack_for_payload_prompt(tech_stack_fingerprint),
+        )
+        try:
+            response = await self._budget_guard.guarded_complete(messages, model=self._ai_model, max_tokens=512)
+        except (BudgetExceededError, ProviderUnavailableError) as exc:
+            self.budget_exceeded = True
+            self.budget_stop_reason = (
+                "provider_unavailable" if isinstance(exc, ProviderUnavailableError) else "budget_exceeded"
+            )
+            return []
+        return _parse_payload_suggestions(response.content)
 
     async def _triage_and_confirm(self, candidate: InjectionCandidate) -> Finding | None:
         baseline_text, probe_text = truncate_pair_for_prompt(

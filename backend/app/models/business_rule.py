@@ -30,3 +30,13 @@ class BusinessRule(Base):
     title: Mapped[str] = mapped_column(String(500))
     config: Mapped[dict] = mapped_column(JSON)
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    # "analyst" (default, hand-authored via the API) or "ai_generated" —
+    # see app.agents.business_logic_planner.BusinessLogicPlannerAgent,
+    # which proposes hypotheses from the site map/tech-stack fingerprint
+    # instead of requiring an analyst to write every rule by hand. Either
+    # way, this row is just an input to the SAME deterministic-detector
+    # -> LLM-triage -> adversarial-validation pipeline
+    # (app.agents.business_logic) — an AI-generated rule gets zero
+    # shortcut to becoming a Finding; this column is provenance/audit
+    # only, never consulted by the detection pipeline itself.
+    source: Mapped[str] = mapped_column(String(20), default="analyst")

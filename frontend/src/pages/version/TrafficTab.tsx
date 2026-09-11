@@ -14,6 +14,12 @@ const SOURCE_LABELS: Record<string, string> = {
   agent: 'Agent',
 }
 
+// Matches backend MAX_TRAFFIC_IMPORT_BYTES (traffic_import.py) — checked
+// here too so an oversized file fails fast with a clear message instead
+// of sitting in "Importing…" for however long the upload takes before
+// the server-side cap rejects it.
+const MAX_IMPORT_SIZE_MB = 2048
+
 function ImportSection({ versionId }: { versionId: string }) {
   const queryClient = useQueryClient()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -39,6 +45,10 @@ function ImportSection({ versionId }: { versionId: string }) {
     const file = fileInputRef.current?.files?.[0]
     if (!file) return
     setResult(null)
+    if (file.size > MAX_IMPORT_SIZE_MB * 1024 * 1024) {
+      setError(`File is ${(file.size / (1024 * 1024)).toFixed(0)}MB — the import limit is ${MAX_IMPORT_SIZE_MB}MB.`)
+      return
+    }
     setError(null)
     importMutation.mutate(file)
   }
@@ -47,11 +57,21 @@ function ImportSection({ versionId }: { versionId: string }) {
     <form onSubmit={handleSubmit} className="mb-6 rounded border border-gray-200 bg-white p-4">
       <h3 className="mb-1 text-sm font-medium text-gray-800">Import a traffic file</h3>
       <p className="mb-3 text-xs text-gray-500">
-        Supported today: .har, .zst (Zest). .burp and .webmacro are recognized but report a clean "not yet supported"
-        error rather than failing silently — no real sample export was available to build those parsers against.
+        Supported today: .har, .zst (Zest), OpenAPI/Swagger (.yaml/.yml, or .json), Postman collections (.json —
+        auto-detected by content, same extension as HAR), and Burp's "Save selected items"/"Save all items" XML
+        export (.burp, including extensionless — Proxy &gt; HTTP history, right-click &gt; Save selected items).
+        Imported API endpoints get scanned directly with no crawling needed; attach an "API token" credential
+        (Credentials tab) to authenticate the requests. Burp's separate proprietary full-project save (Project &gt;
+        Save/Save as) and .webmacro are recognized but report a clean "not yet supported" error rather than failing
+        silently — the former is an undocumented binary format, the latter had no real sample export available to
+        build against. Up to {MAX_IMPORT_SIZE_MB}MB per file.
       </p>
       <div className="flex gap-2">
-        <input ref={fileInputRef} type="file" accept=".har,.zst,.burp,.webmacro" className="text-sm" />
+        {/* No `accept` filter — an extensionless Burp export would be hidden by the OS
+            file picker's "matching files only" view if we restricted it to specific
+            extensions (HTML's accept attribute has no wildcard for "no extension"). The
+            backend validates the actual file type and reports a clear error either way. */}
+        <input ref={fileInputRef} type="file" className="text-sm" />
         <button
           type="submit"
           disabled={importMutation.isPending}
@@ -166,6 +186,7 @@ function ManualEntrySection({ versionId }: { versionId: string }) {
 
 export function TrafficTab({ versionId }: { versionId: string }) {
   const { user } = useAuth()
+  const queryClient = useQueryClient()
   const [expanded, setExpanded] = useState<string | null>(null)
 
   const { data: interactions, isLoading } = useQuery({
@@ -173,12 +194,26 @@ export function TrafficTab({ versionId }: { versionId: string }) {
     queryFn: () => api.traffic.list(versionId),
   })
 
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['versions', versionId, 'traffic'] })
+
+  const deleteMutation = useMutation({
+    mutationFn: (interactionId: string) => api.traffic.deleteInteraction(versionId, interactionId),
+    onSuccess: invalidate,
+  })
+
+  const clearAllMutation = useMutation({
+    mutationFn: () => api.traffic.clearAll(versionId),
+    onSuccess: invalidate,
+  })
+
   return (
     <div>
       <p className="mb-4 text-sm text-gray-500">
         Traffic recorded outside a scan run — a HAR export, a Zest script, or a request the Montoya Burp extension's
-        "Send to Verdikt" action captured. Not consumed by any agent automatically yet; useful today as a
-        record/reference alongside a scan's own findings.
+        "Send to Verdikt" action captured. Every scan feeds this in automatically: each URL here is added to the
+        site map for injection/XSS/etc. to test directly, and the crawler now also follows links reachable from
+        these URLs (not just the URLs themselves) — this is what makes a client-rendered SPA's real API surface
+        testable at all, since it never shows up in a plain crawl's static HTML.
       </p>
 
       {canWrite(user?.role) && (
@@ -191,25 +226,50 @@ export function TrafficTab({ versionId }: { versionId: string }) {
       {isLoading && <p className="text-gray-500">Loading…</p>}
       {interactions && interactions.length === 0 && <p className="text-gray-500">No traffic recorded yet.</p>}
 
+      {canWrite(user?.role) && interactions && interactions.length > 0 && (
+        <div className="mb-2 flex justify-end">
+          <button
+            onClick={() => {
+              if (confirm(`Delete all ${interactions.length} traffic interaction(s) for this version?`)) {
+                clearAllMutation.mutate()
+              }
+            }}
+            disabled={clearAllMutation.isPending}
+            className="text-xs text-red-600 hover:underline disabled:opacity-50"
+          >
+            Clear all
+          </button>
+        </div>
+      )}
+
       <ul className="divide-y divide-gray-200 rounded border border-gray-200 bg-white">
         {interactions?.map((interaction) => (
           <li key={interaction.id}>
-            <button
-              onClick={() => setExpanded(expanded === interaction.id ? null : interaction.id)}
-              className="flex w-full items-center justify-between px-4 py-3 text-left text-sm hover:bg-gray-50"
-            >
-              <span className="flex min-w-0 items-center gap-3">
+            <div className="flex w-full items-center justify-between px-4 py-3 text-left text-sm hover:bg-gray-50">
+              <button
+                onClick={() => setExpanded(expanded === interaction.id ? null : interaction.id)}
+                className="flex min-w-0 flex-1 items-center gap-3 text-left"
+              >
                 <span className="w-16 shrink-0 font-mono text-xs text-gray-500">{interaction.request.method}</span>
                 <span className="truncate">{interaction.request.url}</span>
-              </span>
+              </button>
               <span className="flex shrink-0 items-center gap-2">
                 {interaction.response.status && (
                   <span className="font-mono text-xs text-gray-500">{interaction.response.status}</span>
                 )}
                 <StatusBadge status={SOURCE_LABELS[interaction.source] ?? interaction.source} />
                 <span className="text-xs text-gray-400">{new Date(interaction.timestamp).toLocaleString()}</span>
+                {canWrite(user?.role) && (
+                  <button
+                    onClick={() => deleteMutation.mutate(interaction.id)}
+                    disabled={deleteMutation.isPending}
+                    className="text-xs text-red-600 hover:underline disabled:opacity-50"
+                  >
+                    Delete
+                  </button>
+                )}
               </span>
-            </button>
+            </div>
             {expanded === interaction.id && (
               <div className="space-y-2 border-t border-gray-100 bg-gray-50 px-4 py-4 text-sm">
                 <div>

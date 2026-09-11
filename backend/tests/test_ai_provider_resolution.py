@@ -8,6 +8,7 @@ from app.ai.adapters.generic_openai import GenericOpenAIAdapter
 from app.ai.adapters.grok import GrokAdapter
 from app.ai.adapters.null import NullAIProviderAdapter
 from app.ai.adapters.openai import OpenAIAdapter
+from app.ai.adapters.spark import SparkAdapter
 from app.ai.provider import build_adapter_from_config, get_ai_provider, resolve_provider_and_model
 from app.config import get_settings
 from app.models.ai_provider_config import AIProviderConfig
@@ -51,9 +52,9 @@ async def test_resolve_falls_back_to_global_default_when_no_config_attached(db_a
         await session.commit()
         await session.refresh(scan_run)
 
-        provider, model = await resolve_provider_and_model(session, scan_run)
+        provider, model_router = await resolve_provider_and_model(session, scan_run)
         assert isinstance(provider, NullAIProviderAdapter)
-        assert model  # global default ai_model string
+        assert model_router.specialist  # global default ai_model string, every tier the same
 
 
 async def test_resolve_uses_the_orgs_default_config_when_none_attached(db_adapter, monkeypatch):
@@ -81,9 +82,9 @@ async def test_resolve_uses_the_orgs_default_config_when_none_attached(db_adapte
         await session.commit()
         await session.refresh(scan_run)
 
-        provider, model = await resolve_provider_and_model(session, scan_run)
+        provider, model_router = await resolve_provider_and_model(session, scan_run)
         assert isinstance(provider, GenericOpenAIAdapter)
-        assert model == "llama3.1:8b"
+        assert model_router.specialist == "llama3.1:8b"
 
 
 async def test_resolve_prefers_scan_runs_own_config_over_the_orgs_default(db_adapter):
@@ -121,9 +122,9 @@ async def test_resolve_prefers_scan_runs_own_config_over_the_orgs_default(db_ada
         await session.commit()
         await session.refresh(scan_run)
 
-        provider, model = await resolve_provider_and_model(session, scan_run)
+        provider, model_router = await resolve_provider_and_model(session, scan_run)
         assert isinstance(provider, GenericOpenAIAdapter)
-        assert model == "llama3.1:8b"
+        assert model_router.specialist == "llama3.1:8b"
 
 
 async def test_resolve_uses_attached_custom_provider_config(db_adapter):
@@ -151,9 +152,9 @@ async def test_resolve_uses_attached_custom_provider_config(db_adapter):
         await session.commit()
         await session.refresh(scan_run)
 
-        provider, model = await resolve_provider_and_model(session, scan_run)
+        provider, model_router = await resolve_provider_and_model(session, scan_run)
         assert isinstance(provider, GenericOpenAIAdapter)
-        assert model == "llama3.1:8b"
+        assert model_router.specialist == "llama3.1:8b"
 
 
 async def test_resolve_falls_back_when_attached_config_was_deleted(db_adapter, monkeypatch):
@@ -198,6 +199,113 @@ def test_get_ai_provider_custom_requires_base_url(monkeypatch):
     get_ai_provider.cache_clear()
     try:
         with pytest.raises(RuntimeError, match="CUSTOM_LLM_BASE_URL"):
+            get_ai_provider()
+    finally:
+        get_ai_provider.cache_clear()
+
+
+def test_get_ai_provider_builds_spark_adapter_for_bearer_token(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_provider", "spark")
+    monkeypatch.setattr(settings, "spark_auth_mode", "bearer_token")
+    monkeypatch.setattr(settings, "spark_bearer_token", "test-bearer-token")
+    monkeypatch.setattr(settings, "spark_app_id", "SPGCKDPE99C")
+    get_ai_provider.cache_clear()
+    try:
+        assert isinstance(get_ai_provider(), SparkAdapter)
+    finally:
+        get_ai_provider.cache_clear()
+
+
+def test_get_ai_provider_builds_spark_adapter_for_api_key(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_provider", "spark")
+    monkeypatch.setattr(settings, "spark_auth_mode", "api_key")
+    monkeypatch.setattr(settings, "spark_bearer_token", None)
+    monkeypatch.setattr(settings, "spark_api_key", "test-api-key")
+    monkeypatch.setattr(settings, "spark_app_id", "SPGCKDPE99C")
+    get_ai_provider.cache_clear()
+    try:
+        assert isinstance(get_ai_provider(), SparkAdapter)
+    finally:
+        get_ai_provider.cache_clear()
+
+
+def test_get_ai_provider_api_key_mode_requires_app_id(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_provider", "spark")
+    monkeypatch.setattr(settings, "spark_auth_mode", "api_key")
+    monkeypatch.setattr(settings, "spark_bearer_token", None)
+    monkeypatch.setattr(settings, "spark_api_key", "test-api-key")
+    monkeypatch.setattr(settings, "spark_app_id", None)
+    get_ai_provider.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="SPARK_APP_ID"):
+            get_ai_provider()
+    finally:
+        get_ai_provider.cache_clear()
+
+
+def test_get_ai_provider_bearer_token_mode_also_requires_app_id(monkeypatch):
+    # Re-confirmed 2026-09 directly against sparkapi.spglobal.com: Spark
+    # rejects every request without an app_id, bearer token or not — a
+    # prior version of this test asserted the opposite on a
+    # since-disproven assumption. See SparkAdapter's docstring for the
+    # empirical proof.
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_provider", "spark")
+    monkeypatch.setattr(settings, "spark_auth_mode", "bearer_token")
+    monkeypatch.setattr(settings, "spark_bearer_token", "test-bearer-token")
+    monkeypatch.setattr(settings, "spark_app_id", None)
+    get_ai_provider.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="SPARK_APP_ID"):
+            get_ai_provider()
+    finally:
+        get_ai_provider.cache_clear()
+
+
+def test_get_ai_provider_uses_uat_credentials_when_spark_environment_is_uat(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_provider", "spark")
+    monkeypatch.setattr(settings, "spark_environment", "uat")
+    monkeypatch.setattr(settings, "spark_uat_auth_mode", "api_key")
+    monkeypatch.setattr(settings, "spark_uat_api_key", "uat-key")
+    monkeypatch.setattr(settings, "spark_uat_app_id", "SPGCKDPE99C")
+    # PROD credentials deliberately left unset/wrong to prove UAT's own
+    # fields are what actually got used, not a silent fallback to prod.
+    monkeypatch.setattr(settings, "spark_bearer_token", None)
+    monkeypatch.setattr(settings, "spark_api_key", None)
+    get_ai_provider.cache_clear()
+    try:
+        adapter = get_ai_provider()
+        assert isinstance(adapter, SparkAdapter)
+    finally:
+        get_ai_provider.cache_clear()
+
+
+def test_get_ai_provider_uat_requires_a_token(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_provider", "spark")
+    monkeypatch.setattr(settings, "spark_environment", "uat")
+    monkeypatch.setattr(settings, "spark_uat_auth_mode", "bearer_token")
+    monkeypatch.setattr(settings, "spark_uat_bearer_token", None)
+    get_ai_provider.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="SPARK_UAT_BEARER_TOKEN"):
+            get_ai_provider()
+    finally:
+        get_ai_provider.cache_clear()
+
+
+def test_get_ai_provider_spark_requires_a_token(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_provider", "spark")
+    monkeypatch.setattr(settings, "spark_auth_mode", "bearer_token")
+    monkeypatch.setattr(settings, "spark_bearer_token", None)
+    get_ai_provider.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="SPARK_BEARER_TOKEN"):
             get_ai_provider()
     finally:
         get_ai_provider.cache_clear()
@@ -256,6 +364,22 @@ def test_build_adapter_from_config_maps_grok():
     assert isinstance(build_adapter_from_config(config), GrokAdapter)
 
 
+def test_build_adapter_from_config_maps_spark():
+    config = AIProviderConfig(
+        org_id=uuid.uuid4(),
+        label="Spark",
+        provider="spark",
+        model="gpt-4o-mini",
+        base_url=None,  # falls back to Settings.spark_base_url
+        auth_type="bearer_token",
+        app_id="SPGCKDPE99C",  # required for every Spark request, bearer or api_key
+        encrypted_api_key=encrypt_secret("test-bearer-token"),
+        masked_reference="****oken",
+    )
+    adapter = build_adapter_from_config(config)
+    assert isinstance(adapter, SparkAdapter)
+
+
 def test_build_adapter_from_config_honors_bearer_token_auth_type_for_custom():
     config = AIProviderConfig(
         org_id=uuid.uuid4(),
@@ -269,6 +393,67 @@ def test_build_adapter_from_config_honors_bearer_token_auth_type_for_custom():
     )
     adapter = build_adapter_from_config(config)
     assert isinstance(adapter, GenericOpenAIAdapter)
+
+
+async def test_resolve_returns_tier_overrides_from_the_default_config(db_adapter, monkeypatch):
+    import app.ai.provider as provider_module
+
+    monkeypatch.setattr(provider_module, "get_ai_provider", lambda: NullAIProviderAdapter())
+
+    async with session_scope(db_adapter) as session:
+        _org, version = await _make_org_project_version(session)
+        default_config = AIProviderConfig(
+            org_id=_org.id,
+            label="Org default",
+            provider="spark",
+            model="gpt-4o-mini",
+            model_reasoning="gpt-4o",
+            model_classification="gpt-4o-nano",
+            auth_type="bearer_token",
+            encrypted_api_key=encrypt_secret("test-bearer-token"),
+            masked_reference="****oken",
+            is_default=True,
+        )
+        session.add(default_config)
+        scan_run = ScanRun(version_id=version.id, status="pending", requested_by=uuid.uuid4())
+        session.add(scan_run)
+        await session.commit()
+        await session.refresh(scan_run)
+
+        _provider, model_router = await resolve_provider_and_model(session, scan_run)
+        assert model_router.specialist == "gpt-4o-mini"
+        assert model_router.reasoning == "gpt-4o"
+        assert model_router.classification == "gpt-4o-nano"
+        assert model_router.for_role("business_logic") == "gpt-4o"
+        assert model_router.for_role("injection") == "gpt-4o-mini"
+
+
+async def test_resolve_tier_overrides_fall_back_to_the_base_model_when_unset(db_adapter, monkeypatch):
+    import app.ai.provider as provider_module
+
+    monkeypatch.setattr(provider_module, "get_ai_provider", lambda: NullAIProviderAdapter())
+
+    async with session_scope(db_adapter) as session:
+        _org, version = await _make_org_project_version(session)
+        default_config = AIProviderConfig(
+            org_id=_org.id,
+            label="Org default",
+            provider="custom",
+            model="llama3.1:8b",
+            base_url="http://localhost:11434/v1",
+            encrypted_api_key=encrypt_secret("sk-abc"),
+            masked_reference="****abc",
+            is_default=True,
+        )
+        session.add(default_config)
+        scan_run = ScanRun(version_id=version.id, status="pending", requested_by=uuid.uuid4())
+        session.add(scan_run)
+        await session.commit()
+        await session.refresh(scan_run)
+
+        _provider, model_router = await resolve_provider_and_model(session, scan_run)
+        assert model_router.for_role("business_logic") == "llama3.1:8b"
+        assert model_router.for_role("injection") == "llama3.1:8b"
 
 
 def test_build_adapter_from_config_honors_api_key_auth_type_for_custom():

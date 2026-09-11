@@ -5,7 +5,15 @@ from typing import Literal
 from pydantic import BaseModel
 
 TrafficSource = Literal[
-    "manual", "burp_live", "har", "burp_file", "zst_traffic", "webinspect_macro", "agent"
+    "manual",
+    "burp_live",
+    "har",
+    "burp_file",
+    "zst_traffic",
+    "webinspect_macro",
+    "agent",
+    "openapi_import",
+    "postman_import",
 ]
 
 

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -30,6 +30,14 @@ class ScanRun(Base):
     warning: Mapped[str | None] = mapped_column(Text)
     # Running total of estimated LLM spend for this run (§10.5 budget guardrail).
     llm_cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal(0))
+    # Running totals of actual token usage across every LLM call this run
+    # made (accumulated in the same place as llm_cost_usd — see
+    # app.ai.budget.BudgetGuard.guarded_complete, the single choke point
+    # every agent's LLM call goes through). BigInteger: a long scan across
+    # 20+ LLM-calling agent nodes can plausibly add up past Integer's
+    # ~2.1B ceiling given enough retries/re-runs over the run's lifetime.
+    llm_input_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    llm_output_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
     # Generated lazily on first report request and cached here (§8) so
     # repeated report.json/html/pdf/docx requests don't re-spend LLM
     # budget regenerating the same text — see app.reporting.executive_summary.

@@ -10,7 +10,7 @@ from app.agents.evidence_screenshot import capture_and_store_evidence_screenshot
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient, ScopeViolationError
 from app.agents.idor import find_numeric_id_segment, nearby_ids, substitute_path_segment
 from app.agents.matrix import Identity, build_identities
-from app.ai.budget import BudgetExceededError, BudgetGuard
+from app.ai.budget import BudgetExceededError, BudgetGuard, ProviderUnavailableError
 from app.ai.prompts.loader import render_prompt
 from app.ai.verdict import parse_verdict
 from app.models.business_rule import BusinessRule
@@ -305,6 +305,7 @@ class BusinessLogicAgent:
         self._ai_model = ai_model
         self._identities = build_identities(sessions, credential_labels)
         self.budget_exceeded = False
+        self.budget_stop_reason: str | None = None
 
     async def run(self, rules: list[BusinessRule]) -> list[Finding]:
         findings: list[Finding] = []
@@ -323,8 +324,11 @@ class BusinessLogicAgent:
                 continue
             try:
                 finding = await self._triage_and_confirm(candidate, detect_fn)
-            except BudgetExceededError:
+            except (BudgetExceededError, ProviderUnavailableError) as exc:
                 self.budget_exceeded = True
+                self.budget_stop_reason = (
+                    "provider_unavailable" if isinstance(exc, ProviderUnavailableError) else "budget_exceeded"
+                )
                 break
             if finding is not None:
                 findings.append(finding)

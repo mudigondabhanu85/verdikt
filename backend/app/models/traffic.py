@@ -14,6 +14,8 @@ TRAFFIC_SOURCES = (
     "zst_traffic",
     "agent",
     "webinspect_macro",
+    "openapi_import",
+    "postman_import",
 )
 
 

@@ -9,9 +9,39 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 
-from playwright.async_api import Page, async_playwright
+from playwright.async_api import Browser, Page, Playwright, async_playwright
 
 from app.agents.http_client import AuthenticatedSession
+
+# Chromium's own sandbox needs kernel namespace privileges Docker's
+# default seccomp/capability profile doesn't grant — without
+# --no-sandbox, launch() can fail/crash immediately inside a container
+# (the standard, widely-documented Playwright-in-Docker gotcha; this is
+# also exactly why a Chromium crash previously showed up in the browser
+# as a misleading CORS error rather than any real message — a hard
+# process crash drops the connection before app.main's global exception
+# handler ever gets a chance to run). --disable-dev-shm-usage avoids a
+# second, independent crash mode: Docker's default /dev/shm is only
+# 64MB, too small for Chromium's shared memory needs under real
+# rendering (as opposed to headless, which needs much less) — this
+# makes it fall back to /tmp instead. The container is already Docker's
+# own isolation boundary, so disabling Chromium's inner sandbox here
+# doesn't remove process isolation, only one further layer of it —
+# same tradeoff every "run headed Chromium in Docker" guide accepts.
+# --disable-gpu/--disable-software-rasterizer: this container's Xvfb
+# virtual display has no real GPU behind it — Chromium's GPU process
+# crashing (rather than falling back cleanly) is a separate, common
+# failure mode on top of the sandbox/shm ones above, and specific to
+# headed mode rendering into a real (virtual) display; headless mode's
+# rendering path doesn't hit this, which is why the existing
+# headless-only agents (clickjacking/xss/dom_xss proofs) never needed
+# these flags.
+_CHROMIUM_DOCKER_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-software-rasterizer",
+]
 
 _RECORDER_INIT_SCRIPT = """
 (() => {
@@ -99,6 +129,36 @@ def _infer_field_roles(steps: list[MacroStep]) -> list[MacroStep]:
     return steps
 
 
+def _build_steps(start_url: str, raw_steps: list[dict]) -> list[MacroStep]:
+    steps = [MacroStep(action="goto", url=start_url)]
+    for raw in raw_steps:
+        field_role = "password" if raw.get("input_type") == "password" else None
+        steps.append(
+            MacroStep(
+                action=raw["action"],
+                selector=raw.get("selector"),
+                value=raw.get("value"),
+                field_role=field_role,
+            )
+        )
+    return _infer_field_roles(steps)
+
+
+@dataclass
+class RecordingHandle:
+    """Handle for a MacroRecorder.start()'d session, passed to finish()
+    (or cancel()) once the analyst is done — see start()'s docstring for
+    why recording is split into two phases instead of one call that
+    blocks until the browser closes.
+    """
+
+    playwright: Playwright
+    browser: Browser
+    page: Page
+    raw_steps: list[dict]
+    start_url: str
+
+
 class MacroRecorder:
     """Records a login action sequence. `drive`, if given, is awaited
     with the Page instead of waiting for a human to close the browser —
@@ -116,7 +176,7 @@ class MacroRecorder:
         raw_steps: list[dict] = []
 
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=headless)
+            browser = await playwright.chromium.launch(headless=headless, args=_CHROMIUM_DOCKER_ARGS)
             page = await browser.new_page()
             await page.expose_function("__verdikt_record_step__", lambda step: raw_steps.append(step))
             await page.add_init_script(_RECORDER_INIT_SCRIPT)
@@ -130,18 +190,75 @@ class MacroRecorder:
                 # (including any manual OTP entry) and closes the browser.
                 await page.wait_for_event("close", timeout=0)
 
-        steps = [MacroStep(action="goto", url=start_url)]
-        for raw in raw_steps:
-            field_role = "password" if raw.get("input_type") == "password" else None
-            steps.append(
-                MacroStep(
-                    action=raw["action"],
-                    selector=raw.get("selector"),
-                    value=raw.get("value"),
-                    field_role=field_role,
-                )
-            )
-        return _infer_field_roles(steps)
+        return _build_steps(start_url, raw_steps)
+
+    async def start(self, start_url: str, *, headless: bool = False) -> RecordingHandle:
+        """Split-phase counterpart to record(), for the interactive HTTP
+        flow (app.api.routes.credentials' record-macro/start + .../finish):
+        launches the browser and returns immediately instead of blocking
+        a single HTTP request until someone closes it.
+
+        record()'s "block until the browser closes" design assumed the
+        analyst could reliably find and click the browser window's own
+        close button — true on a real local display, but not once that
+        window is only reachable through a VNC-streamed, scaled-down
+        canvas (app.agents.macro's Docker/Xvfb path): a dropped VNC
+        connection, or simply not finding the remote window's close
+        button through the scaling, meant record()'s
+        page.wait_for_event("close") sometimes never fired at all —
+        silently losing the whole recording with no error, since the
+        HTTP request itself was still just... waiting. finish() below
+        closes the browser explicitly, itself, the moment the analyst
+        clicks "Finish recording" in the Verdikt UI — no dependency on
+        finding a control inside the remote view at all.
+        """
+        playwright = await async_playwright().start()
+        try:
+            browser = await playwright.chromium.launch(headless=headless, args=_CHROMIUM_DOCKER_ARGS)
+            raw_steps: list[dict] = []
+            # Internal staging/pre-prod targets routinely sit behind a
+            # self-signed or internal-CA cert Chromium doesn't trust out
+            # of the box (a real incident: net::ERR_CERT_AUTHORITY_INVALID
+            # crashed this whole endpoint with an unhandled exception,
+            # which — same as the earlier Playwright-crash-looks-like-CORS
+            # incident — surfaces client-side as a misleading CORS error,
+            # not the real cert problem). This is an authorized analyst
+            # recording a login flow against a target they already have
+            # scope over, not a real end-user's browser, so ignoring cert
+            # trust here is the correct call, not a security downgrade.
+            context = await browser.new_context(ignore_https_errors=True)
+            page = await context.new_page()
+            await page.expose_function("__verdikt_record_step__", lambda step: raw_steps.append(step))
+            await page.add_init_script(_RECORDER_INIT_SCRIPT)
+            await page.goto(start_url)
+        except Exception:
+            await playwright.stop()
+            raise
+        return RecordingHandle(
+            playwright=playwright, browser=browser, page=page, raw_steps=raw_steps, start_url=start_url
+        )
+
+    async def finish(self, handle: RecordingHandle) -> list[MacroStep]:
+        """Closes the browser server-side and builds the same MacroStep
+        list record() would have. Idempotent-ish in intent but not
+        actually safe to call twice — the route layer is responsible for
+        popping the handle out of its registry before calling this, so
+        a second call can't happen (see credentials.py).
+        """
+        try:
+            await handle.browser.close()
+        finally:
+            await handle.playwright.stop()
+        return _build_steps(handle.start_url, handle.raw_steps)
+
+    async def cancel(self, handle: RecordingHandle) -> None:
+        """Analyst-initiated abort — closes the browser, discards
+        whatever was captured so far, no LoginMacro row created.
+        """
+        try:
+            await handle.browser.close()
+        finally:
+            await handle.playwright.stop()
 
 
 class MacroPlayer:
@@ -162,8 +279,11 @@ class MacroPlayer:
         headless: bool = True,
     ) -> AuthenticatedSession | None:
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=headless)
-            context = await browser.new_context()
+            browser = await playwright.chromium.launch(headless=headless, args=_CHROMIUM_DOCKER_ARGS)
+            # See MacroRecorder.start's identical rationale — replay hits
+            # the same real (possibly self-signed/internal-CA) target
+            # every scan's login step, not a real end-user's browser.
+            context = await browser.new_context(ignore_https_errors=True)
             page = await context.new_page()
 
             for step in steps:

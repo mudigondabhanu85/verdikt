@@ -161,7 +161,11 @@ async def attempt_browser_proof(
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=headless)
-        context = await browser.new_context()
+        # See app.agents.macro's identical fix/rationale — an internal
+        # staging target's self-signed/internal-CA cert shouldn't fail
+        # this check when the analyst already has authorized, scoped
+        # access to it.
+        context = await browser.new_context(ignore_https_errors=True)
         page = await context.new_page()
         if session is not None and session.bearer_token:
             await page.set_extra_http_headers({"Authorization": f"Bearer {session.bearer_token}"})
@@ -228,7 +232,7 @@ async def attempt_dom_xss_fragment_proof(
     try:
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=headless)
-            context = await browser.new_context()
+            context = await browser.new_context(ignore_https_errors=True)
             if session is not None and session.cookies:
                 await context.add_cookies(
                     [{"name": name, "value": value, "url": url} for name, value in session.cookies.items()]

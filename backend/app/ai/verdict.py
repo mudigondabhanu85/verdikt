@@ -22,18 +22,33 @@ class Verdict(BaseModel):
     reasoning: str
 
 
+def extract_json_objects(raw_content: str) -> list[dict]:
+    """Strips markdown code fences (see _CODE_FENCE_RE's rationale above)
+    and returns every fenced/bare block that parses as a JSON object,
+    most-recent-first — reused by parse_verdict below and by
+    app.agents.business_logic_planner's hypothesis parsing, since real
+    model output has the same "wrapped in ```json ... ```, sometimes
+    twice" quirks regardless of which prompt produced it.
+    """
+    candidates = _CODE_FENCE_RE.findall(raw_content) or [raw_content]
+    parsed: list[dict] = []
+    for candidate in reversed(candidates):
+        try:
+            data = json.loads(candidate.strip())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            parsed.append(data)
+    return parsed
+
+
 def parse_verdict(raw_content: str) -> Verdict | None:
     """Every triage/validation prompt asks for a strict JSON verdict. If
     the model doesn't return parseable JSON matching the schema, treat it
     as "couldn't confirm" (None) — fail safe, never guess a Finding into
     existence from unparseable model output.
     """
-    candidates = _CODE_FENCE_RE.findall(raw_content) or [raw_content]
-    for candidate in reversed(candidates):
-        try:
-            data = json.loads(candidate.strip())
-        except json.JSONDecodeError:
-            continue
+    for data in extract_json_objects(raw_content):
         try:
             return Verdict(**data)
         except ValidationError:

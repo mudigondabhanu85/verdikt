@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import ForeignKey, JSON, LargeBinary, String
+from sqlalchemy import ForeignKey, Integer, JSON, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -46,5 +46,16 @@ class CredentialSet(Base):
     # independent of session/auth state) — without this, such a target
     # can only ever be scanned at whatever its cookie-absent default is.
     extra_cookies: Mapped[dict[str, str] | None] = mapped_column(JSON)
+
+    # Optional, analyst-set — higher number means more privileged. NULL
+    # (the default) means "not ranked", which excludes this credential
+    # from app.agents.access_control's role-vs-role vertical escalation
+    # check entirely: without an explicit ranking there's no ground
+    # truth for which of two authenticated identities is "supposed" to
+    # have more access, so nothing can safely be called an escalation.
+    # Set this on at least two credentials with different values (e.g.
+    # "Standard User"=1, "Admin"=10) to enable that check for this
+    # version — comparing every pair where one out-ranks the other.
+    privilege_rank: Mapped[int | None] = mapped_column(Integer)
 
     version = relationship("Version")

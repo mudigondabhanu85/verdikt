@@ -85,10 +85,12 @@ export function canWrite(role: string | undefined): boolean {
   return role === 'org_admin' || role === 'project_lead'
 }
 
-// review_candidate is the one resource analysts get "update" on (per
-// the real matrix in app/auth/rbac.py) — promote/dismiss should stay
+// review_candidate and finding are the two resources analysts get
+// "update" on (per the real matrix in app/auth/rbac.py) — promote/
+// dismiss and mark-false-positive/risk-accepted/reopen should stay
 // visible for them even though canWrite() above (org_admin/
-// project_lead only) hides everything else.
+// project_lead only) hides everything else. Finding delete is NOT
+// covered by this — that stays canWrite()-gated, same as review.
 export function canReview(role: string | undefined): boolean {
   return role !== 'viewer' && role !== undefined
 }

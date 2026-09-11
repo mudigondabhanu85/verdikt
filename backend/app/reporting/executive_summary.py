@@ -6,7 +6,7 @@ budget (§10.5) as the scan's own agents, via the same BudgetGuard.
 """
 
 from app.ai.adapters.null import NullAIProviderAdapter
-from app.ai.budget import BudgetExceededError, BudgetGuard
+from app.ai.budget import BudgetExceededError, BudgetGuard, ProviderUnavailableError
 from app.ai.prompts.loader import render_prompt
 from app.models.finding import Finding
 from app.schemas.scan import ScanRunDetail
@@ -81,7 +81,7 @@ async def generate_executive_summary(
     )
     try:
         response = await budget_guard.guarded_complete(messages, model=ai_model, max_tokens=400)
-    except BudgetExceededError:
+    except (BudgetExceededError, ProviderUnavailableError):
         return _fallback_summary(findings)
 
     return response.content.strip() or _fallback_summary(findings)

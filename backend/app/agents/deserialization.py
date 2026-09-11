@@ -10,6 +10,17 @@ provable the way a SQLi/XSS payload's effect is, so per §2's
 Confirmed-Only Findings Policy this can never become a Finding on its
 own — it's queued as a ReviewCandidate for an analyst to manually assess,
 the same treatment XSS gets before browser-proof.
+
+An LLM triage pass (added 2026-09, matching injection.py's triage
+pattern) still runs on every signal — not to promote it to a Finding
+(the active-exploitation ban above makes that structurally impossible;
+there's no safe re-execution step the way injection.py has), but to
+replace the previously-static, templated `llm_reasoning` text with a
+real per-signal assessment (plausibility, likely false-positive
+patterns e.g. framework session tokens that happen to match the byte
+signature) — genuine AI participation in triage, same as every other
+check, without weakening the safety guarantee that this can never
+self-confirm into a Finding.
 """
 
 import re
@@ -20,6 +31,9 @@ import httpx
 
 from app.agents.http_client import ScopedHttpClient
 from app.agents.recon import FormInfo
+from app.ai.budget import BudgetExceededError, BudgetGuard, ProviderUnavailableError
+from app.ai.prompts.loader import render_prompt
+from app.ai.verdict import parse_verdict
 from app.models.review_candidate import ReviewCandidate
 
 _JAVA_B64_PREFIX = "rO0AB"
@@ -84,8 +98,10 @@ def detect_from_forms(forms: list[FormInfo]) -> list[SerializationSignal]:
 
 
 class DeserializationAgent:
-    """No LLM triage — a passive pattern match is queued straight to
-    ReviewCandidate (never a Finding, see module docstring)."""
+    """LLM triage refines llm_reasoning/llm_confidence on every signal
+    (see module docstring) — but can never turn one into a Finding; that
+    would require active exploitation, which is deliberately never
+    attempted here."""
 
     def __init__(
         self,
@@ -94,11 +110,17 @@ class DeserializationAgent:
         scan_run_id: uuid.UUID,
         agent_job_id: uuid.UUID,
         db_session,
+        budget_guard: BudgetGuard,
+        ai_model: str,
     ):
         self._client = client
         self._scan_run_id = scan_run_id
         self._agent_job_id = agent_job_id
         self._session = db_session
+        self._budget_guard = budget_guard
+        self._ai_model = ai_model
+        self.budget_exceeded = False
+        self.budget_stop_reason: str | None = None
 
     async def run(
         self, discovered_responses: dict[str, httpx.Response], forms: list[FormInfo]
@@ -109,7 +131,45 @@ class DeserializationAgent:
             candidates.append(await self._persist(signal))
         return candidates
 
+    async def _triage(self, signal: SerializationSignal) -> tuple[str, str]:
+        """Returns (llm_reasoning, llm_confidence) — falls back to the
+        old static template text if the budget's exhausted or the model
+        response doesn't parse, same fail-safe discipline as every other
+        triage call (app.ai.verdict.parse_verdict never guesses)."""
+        fallback_reasoning = (
+            f"Deterministic pattern match against a known {signal.kind} serialization "
+            "signature — not independently confirmed. Active deserialization exploitation "
+            "isn't automated (§1.2 safe-by-default: a gadget chain is target-specific and "
+            "can be destructive), so this needs manual review to assess exploitability."
+        )
+        if self.budget_exceeded:
+            return fallback_reasoning, "medium"
+        messages = render_prompt(
+            "deterministic_signal_triage",
+            check_type=f"insecure deserialization ({signal.kind})",
+            url=signal.endpoint,
+            deterministic_signal=(
+                f"A {signal.source} value matches the known {signal.kind} serialized-object "
+                f"byte signature: {signal.sample!r}"
+            ),
+            evidence_before="(passive observation — no probe was sent, this is naturally-occurring traffic)",
+            evidence_after=f"sample value: {signal.sample}",
+        )
+        try:
+            response = await self._budget_guard.guarded_complete(messages, model=self._ai_model)
+        except (BudgetExceededError, ProviderUnavailableError) as exc:
+            self.budget_exceeded = True
+            self.budget_stop_reason = (
+                "provider_unavailable" if isinstance(exc, ProviderUnavailableError) else "budget_exceeded"
+            )
+            return fallback_reasoning, "medium"
+        verdict = parse_verdict(response.content)
+        if verdict is None:
+            return fallback_reasoning, "medium"
+        return verdict.reasoning, verdict.confidence
+
     async def _persist(self, signal: SerializationSignal) -> ReviewCandidate:
+        llm_reasoning, llm_confidence = await self._triage(signal)
         candidate = ReviewCandidate(
             scan_run_id=self._scan_run_id,
             agent_job_id=self._agent_job_id,
@@ -119,13 +179,8 @@ class DeserializationAgent:
             affected_endpoint=signal.endpoint,
             request_raw=f"(passive observation — not an active probe) {signal.source} at {signal.endpoint}",
             response_raw=f"sample value: {signal.sample}",
-            llm_reasoning=(
-                f"Deterministic pattern match against a known {signal.kind} serialization "
-                "signature — not independently confirmed. Active deserialization exploitation "
-                "isn't automated (§1.2 safe-by-default: a gadget chain is target-specific and "
-                "can be destructive), so this needs manual review to assess exploitability."
-            ),
-            llm_confidence="medium",
+            llm_reasoning=llm_reasoning,
+            llm_confidence=llm_confidence,
             status="pending",
         )
         async with self._client.session_lock:

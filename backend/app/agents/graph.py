@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.access_control import AccessControlAgent
 from app.agents.auth_agent import AuthAgent
 from app.agents.business_logic import BusinessLogicAgent
+from app.agents.business_logic_planner import BusinessLogicPlannerAgent
 from app.agents.cache_poisoning import CachePoisoningAgent
 from app.agents.clickjacking import ClickjackingAgent
 from app.agents.cors import CorsAgent
@@ -27,6 +28,7 @@ from app.agents.login import SessionManager
 from app.agents.oauth import OAuthAgent
 from app.agents.prototype_pollution import PrototypePollutionAgent
 from app.agents.recon import DiscoveredParameter, FormInfo, ReconAgent
+from app.agents.recon_planner import ReconPlannerAgent
 from app.agents.request_smuggling import RequestSmugglingAgent
 from app.agents.ssrf import SsrfAgent
 from app.agents.stored_xss import StoredXssAgent
@@ -35,6 +37,7 @@ from app.agents.websocket_security import WebSocketAgent
 from app.agents.xss import XSSAgent
 from app.agents.xxe import XxeAgent
 from app.ai.budget import BudgetGuard
+from app.ai.model_routing import ModelRouter
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
 from app.models.finding import Finding
@@ -54,6 +57,28 @@ class ScanState(TypedDict, total=False):
     sessions: dict[uuid.UUID, AuthenticatedSession]
     findings: Annotated[list[Finding], operator.add]
     review_candidates: Annotated[list[ReviewCandidate], operator.add]
+    # AI-proposed BusinessRule rows (app.agents.business_logic_planner) —
+    # merged with the analyst-authored `business_rules` closure variable
+    # by business_logic_node. Provenance-tagged (source="ai_generated")
+    # but otherwise indistinguishable to the detection pipeline.
+    ai_generated_business_rules: list[BusinessRule]
+
+
+def _budget_stop_error(agent) -> str | None:
+    """agent.budget_exceeded covers two genuinely different stop
+    conditions (see app.ai.budget.ProviderUnavailableError's
+    docstring) — a real spend-cap hit vs. a transient LLM-provider
+    failure (network/timeout/5xx). Reporting both as a flat "budget
+    exceeded" was actively misleading: a real incident showed this
+    exact label on a Spark scan where estimate_cost() always returns
+    $0, making a genuine budget-cap hit structurally impossible — the
+    actual cause was a provider connection error, not spend.
+    """
+    if not agent.budget_exceeded:
+        return None
+    if getattr(agent, "budget_stop_reason", None) == "provider_unavailable":
+        return "LLM provider unavailable (network/connection error) — not a budget issue"
+    return "budget exceeded"
 
 
 def build_graph(
@@ -61,30 +86,38 @@ def build_graph(
     client: ScopedHttpClient,
     session: AsyncSession,
     scan_run_id: uuid.UUID,
+    version_id: uuid.UUID,
     targets: list[Target],
     credential_sets: list[CredentialSet],
     business_rules: list[BusinessRule],
     budget_guard: BudgetGuard,
-    ai_model: str,
+    model_router: ModelRouter,
     scope_entries: list[ScopeEntry],
 ):
     """Wires the agent graph: recon fans out to every check that only
     needs its output — [header_config, host_header, cors, clickjacking,
     xxe, graphql, deserialization, dom_xss, ssrf, prototype_pollution,
     request_smuggling, oauth, cache_poisoning, login] — in parallel;
-    once login has sessions established, it fans out to [injection, xss,
-    auth, access_control, business_logic, csrf, stored_xss, file_upload,
-    websocket] in parallel too (§10.2's "single biggest lever" — real
-    parallel fan-out, not Phase 1's sequential loop). csrf/stored_xss/
-    file_upload/websocket need both discovered forms/endpoints and
-    established sessions, so unlike the other post-recon-only checks
-    they wait on login like the other identity-aware agents.
+    once login has sessions established, authenticated_recon re-crawls,
+    then recon_planner (one LLM call suggesting additional unlinked
+    paths, each verified for real before being added anywhere — see
+    app.agents.recon_planner) runs as a single gate before the big
+    post-login fan-out to [injection, xss, auth, access_control,
+    business_logic, csrf, stored_xss, file_upload, websocket] in
+    parallel (§10.2's "single biggest lever" — real parallel fan-out,
+    not Phase 1's sequential loop), so anything recon_planner confirms
+    becomes real testing surface for every one of those, not just a
+    UI-only suggestion. csrf/stored_xss/file_upload/websocket need both
+    discovered forms/endpoints and established sessions, so unlike the
+    other post-recon-only checks they wait on login like the other
+    identity-aware agents.
 
     Each node still creates/updates its own AgentJob row — orchestration
     engine changed, the audit trail shape didn't.
     """
 
     credential_labels = {c.id: c.label for c in credential_sets}
+    credential_ranks = {c.id: c.privilege_rank for c in credential_sets}
 
     async def _start_job(agent_type: str) -> AgentJob:
         job = AgentJob(
@@ -121,7 +154,19 @@ def build_graph(
 
     async def recon_node(_state: ScanState) -> dict:
         job = await _start_job("recon")
-        agent = ReconAgent(client, targets)
+        # §14 validation gap fix: previously-imported traffic (HAR/Burp/
+        # manual/Zest) never fed into what a scan actually tests — this
+        # is what makes a client-rendered SPA (whose real API surface
+        # never shows up in a GET / response's static HTML) testable at
+        # all. See app.agents.traffic_seed. Fetched *before* the crawl
+        # (not just unioned in afterward) and passed in as extra crawl
+        # seeds — the crawler actually explores links reachable *from*
+        # a traffic-imported URL now, not just the URL itself.
+        async with client.session_lock:
+            seeded_endpoints, seeded_parameters, seeded_websocket_endpoints = (
+                await seed_from_imported_traffic(session, version_id)
+            )
+        agent = ReconAgent(client, targets, extra_seed_urls=seeded_endpoints)
         try:
             endpoints = await agent.run()
         except Exception as exc:
@@ -136,16 +181,13 @@ def build_graph(
         async with client.session_lock:
             scan_run = await session.get(ScanRun, scan_run_id)
             scan_run.tech_stack_fingerprint = fingerprint
-            # §14 validation gap fix: previously-imported traffic (HAR/
-            # Burp/manual/Zest) never fed into what a scan actually
-            # tests — this is what makes a client-rendered SPA (whose
-            # real API surface never shows up in a GET / response's
-            # static HTML) testable at all. See app.agents.traffic_seed.
-            seeded_endpoints, seeded_parameters, seeded_websocket_endpoints = (
-                await seed_from_imported_traffic(session, scan_run.version_id)
-            )
             await session.commit()
 
+        # Safety-net union — a seeded URL that 404s or is out of scope
+        # during the crawl's own fresh fetch still counts as discovered
+        # (traffic import already proved it's real via a captured past
+        # request/response), same as before this seeded-as-crawl-seed
+        # change.
         all_endpoints = list(dict.fromkeys(endpoints + seeded_endpoints))
         all_parameters = agent.discovered_parameters + seeded_parameters
         all_websocket_endpoints = list(
@@ -326,7 +368,12 @@ def build_graph(
     async def deserialization_node(state: ScanState) -> dict:
         job = await _start_job("deserialization")
         agent = DeserializationAgent(
-            client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session
+            client,
+            scan_run_id=scan_run_id,
+            agent_job_id=job.id,
+            db_session=session,
+            budget_guard=budget_guard,
+            ai_model=model_router.for_role("deserialization"),
         )
         try:
             candidates = await agent.run(
@@ -376,7 +423,12 @@ def build_graph(
     async def request_smuggling_node(state: ScanState) -> dict:
         job = await _start_job("request_smuggling")
         agent = RequestSmugglingAgent(
-            client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session
+            client,
+            scan_run_id=scan_run_id,
+            agent_job_id=job.id,
+            db_session=session,
+            budget_guard=budget_guard,
+            ai_model=model_router.for_role("request_smuggling"),
         )
         try:
             candidates = await agent.run(state.get("discovered_endpoints", []))
@@ -446,7 +498,14 @@ def build_graph(
         # per-credential behavior differences (that's Access Control's
         # job, which already juggles every session itself).
         auth_session = next(iter(sessions.values()))
-        agent = ReconAgent(client, targets, session=auth_session)
+        # Same extra_seed_urls treatment as recon_node — continue
+        # exploring from every endpoint discovered so far (pre-login
+        # crawl + traffic import), now with a session, so pages only
+        # linked from one of those (rather than found by this crawl's
+        # own link-following) still get discovered.
+        agent = ReconAgent(
+            client, targets, session=auth_session, extra_seed_urls=state.get("discovered_endpoints", [])
+        )
         try:
             endpoints = await agent.run()
         except Exception as exc:
@@ -496,6 +555,49 @@ def build_graph(
             "discovered_websocket_endpoints": merged_websocket_endpoints,
         }
 
+    async def recon_planner_node(state: ScanState) -> dict:
+        """One LLM call reviewing the crawl's own site map to suggest
+        additional, unlinked-but-plausible paths (app.agents.recon_planner)
+        — every suggestion still has to actually resolve against the
+        real target before it's added anywhere, so a wrong guess just
+        404s and gets silently dropped, never fabricated into the site
+        map. Sits between authenticated_recon and every consumer of
+        discovered_endpoints/parameters, so anything confirmed here
+        becomes real testing surface for injection/xss/access_control/etc.,
+        not just a UI-only suggestion list.
+        """
+        job = await _start_job("recon_planner")
+        sessions = state.get("sessions", {})
+        auth_session = next(iter(sessions.values()), None)
+        agent = ReconPlannerAgent(
+            client,
+            targets,
+            budget_guard=budget_guard,
+            ai_model=model_router.for_role("recon_planner"),
+            session=auth_session,
+        )
+        try:
+            confirmed = await agent.run(
+                discovered_endpoints=state.get("discovered_endpoints", []),
+                discovered_forms=state.get("discovered_forms", []),
+                tech_stack_fingerprint=state.get("tech_stack_fingerprint"),
+            )
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        status = "skipped" if agent.budget_exceeded else "completed"
+        await _finish_job(
+            job,
+            status=status,
+            stats={"endpoints_suggested_and_confirmed": len(confirmed)},
+            error=_budget_stop_error(agent),
+        )
+        merged_endpoints = list(dict.fromkeys(state.get("discovered_endpoints", []) + confirmed))
+        return {
+            "discovered_endpoints": merged_endpoints,
+            "discovered_parameters": state.get("discovered_parameters", []) + agent.discovered_parameters,
+        }
+
     async def injection_node(state: ScanState) -> dict:
         job = await _start_job("injection")
         agent = InjectionAgent(
@@ -504,13 +606,14 @@ def build_graph(
             agent_job_id=job.id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=ai_model,
+            ai_model=model_router.for_role("injection"),
         )
         try:
             findings = await agent.run(
                 state.get("discovered_parameters", []),
                 state.get("discovered_forms", []),
                 state.get("sessions", {}),
+                tech_stack_fingerprint=state.get("tech_stack_fingerprint"),
             )
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
@@ -520,7 +623,7 @@ def build_graph(
             job,
             status=status,
             stats={"findings_confirmed": len(findings)},
-            error="budget exceeded" if agent.budget_exceeded else None,
+            error=_budget_stop_error(agent),
         )
         return {"findings": findings}
 
@@ -532,13 +635,14 @@ def build_graph(
             agent_job_id=job.id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=ai_model,
+            ai_model=model_router.for_role("xss"),
         )
         try:
             candidates = await agent.run(
                 state.get("discovered_parameters", []),
                 state.get("discovered_forms", []),
                 state.get("sessions", {}),
+                tech_stack_fingerprint=state.get("tech_stack_fingerprint"),
             )
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
@@ -548,7 +652,7 @@ def build_graph(
             job,
             status=status,
             stats={"candidates_queued": len(candidates), "findings_confirmed": len(agent.findings)},
-            error="budget exceeded" if agent.budget_exceeded else None,
+            error=_budget_stop_error(agent),
         )
         return {"review_candidates": candidates, "findings": agent.findings}
 
@@ -571,11 +675,14 @@ def build_graph(
             agent_job_id=job.id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=ai_model,
+            ai_model=model_router.for_role("access_control"),
         )
         try:
             findings = await agent.run(
-                state.get("discovered_endpoints", []), state.get("sessions", {}), credential_labels
+                state.get("discovered_endpoints", []),
+                state.get("sessions", {}),
+                credential_labels,
+                credential_ranks,
             )
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
@@ -585,9 +692,45 @@ def build_graph(
             job,
             status=status,
             stats={"findings_confirmed": len(findings)},
-            error="budget exceeded" if agent.budget_exceeded else None,
+            error=_budget_stop_error(agent),
         )
         return {"findings": findings}
+
+    async def ai_business_logic_plan_node(state: ScanState) -> dict:
+        """Proposes additional BusinessRule rows from the site map/tech
+        stack (app.agents.business_logic_planner) so business_logic_node
+        downstream has something to test even when the analyst never
+        hand-wrote a single rule — an AI-widened testing surface, not an
+        AI-widened confirmation surface: every proposal here still has
+        to survive business_logic_node's unmodified deterministic-
+        detector -> LLM-triage -> adversarial-validation gate.
+        """
+        job = await _start_job("ai_business_logic_plan")
+        agent = BusinessLogicPlannerAgent(
+            version_id=version_id,
+            db_session=session,
+            budget_guard=budget_guard,
+            ai_model=model_router.for_role("business_logic_planner"),
+            session_lock=client.session_lock,
+        )
+        try:
+            rules = await agent.run(
+                discovered_endpoints=state.get("discovered_endpoints", []),
+                discovered_forms=state.get("discovered_forms", []),
+                discovered_parameters=state.get("discovered_parameters", []),
+                tech_stack_fingerprint=state.get("tech_stack_fingerprint"),
+            )
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        status = "skipped" if agent.budget_exceeded else "completed"
+        await _finish_job(
+            job,
+            status=status,
+            stats={"hypotheses_proposed": len(rules)},
+            error=_budget_stop_error(agent),
+        )
+        return {"ai_generated_business_rules": rules}
 
     async def business_logic_node(state: ScanState) -> dict:
         job = await _start_job("business_logic")
@@ -597,12 +740,13 @@ def build_graph(
             agent_job_id=job.id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=ai_model,
+            ai_model=model_router.for_role("business_logic"),
             sessions=state.get("sessions", {}),
             credential_labels=credential_labels,
         )
+        all_rules = business_rules + state.get("ai_generated_business_rules", [])
         try:
-            findings = await agent.run(business_rules)
+            findings = await agent.run(all_rules)
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
@@ -611,13 +755,14 @@ def build_graph(
             job,
             status=status,
             stats={"findings_confirmed": len(findings)},
-            error="budget exceeded" if agent.budget_exceeded else None,
+            error=_budget_stop_error(agent),
         )
         return {"findings": findings}
 
     graph = StateGraph(ScanState)
     graph.add_node("recon", recon_node)
     graph.add_node("authenticated_recon", authenticated_recon_node)
+    graph.add_node("recon_planner", recon_planner_node)
     graph.add_node("header_config", header_config_node)
     graph.add_node("host_header", host_header_node)
     graph.add_node("cors", cors_node)
@@ -636,6 +781,7 @@ def build_graph(
     graph.add_node("xss", xss_node)
     graph.add_node("auth", auth_node)
     graph.add_node("access_control", access_control_node)
+    graph.add_node("ai_business_logic_plan", ai_business_logic_plan_node)
     graph.add_node("business_logic", business_logic_node)
     graph.add_node("csrf", csrf_node)
     graph.add_node("stored_xss", stored_xss_node)
@@ -657,16 +803,18 @@ def build_graph(
     graph.add_edge("recon", "cache_poisoning")
     graph.add_edge("recon", "login")
     graph.add_edge("login", "authenticated_recon")
-    graph.add_edge("authenticated_recon", "dom_xss")
-    graph.add_edge("authenticated_recon", "injection")
-    graph.add_edge("authenticated_recon", "xss")
-    graph.add_edge("authenticated_recon", "auth")
-    graph.add_edge("authenticated_recon", "access_control")
-    graph.add_edge("authenticated_recon", "business_logic")
-    graph.add_edge("authenticated_recon", "csrf")
-    graph.add_edge("authenticated_recon", "stored_xss")
-    graph.add_edge("authenticated_recon", "file_upload")
-    graph.add_edge("authenticated_recon", "websocket")
+    graph.add_edge("authenticated_recon", "recon_planner")
+    graph.add_edge("recon_planner", "dom_xss")
+    graph.add_edge("recon_planner", "injection")
+    graph.add_edge("recon_planner", "xss")
+    graph.add_edge("recon_planner", "auth")
+    graph.add_edge("recon_planner", "access_control")
+    graph.add_edge("recon_planner", "ai_business_logic_plan")
+    graph.add_edge("ai_business_logic_plan", "business_logic")
+    graph.add_edge("recon_planner", "csrf")
+    graph.add_edge("recon_planner", "stored_xss")
+    graph.add_edge("recon_planner", "file_upload")
+    graph.add_edge("recon_planner", "websocket")
     graph.add_edge("header_config", END)
     graph.add_edge("host_header", END)
     graph.add_edge("cors", END)

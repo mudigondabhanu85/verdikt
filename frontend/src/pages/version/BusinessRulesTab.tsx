@@ -72,7 +72,10 @@ export function BusinessRulesTab({ versionId }: { versionId: string }) {
   return (
     <div>
       <p className="mb-4 text-sm text-gray-500">
-        Business logic rules the AI can't infer on its own — pointed at real, analyst-supplied endpoints/values.
+        Hand-author a rule below, pointed at a real endpoint/value — or let AI propose some itself from the site
+        map once a scan's recon runs (look for the "AI-generated" tag). Either way, a rule is just an input to the
+        same deterministic-detector → LLM-triage → adversarial-validation pipeline — an AI-proposed rule gets no
+        shortcut to becoming a Finding.
       </p>
       {canWrite(user?.role) && (
         <form onSubmit={handleSubmit} className="mb-6 space-y-3 rounded border border-gray-200 bg-white p-4">
@@ -140,6 +143,11 @@ export function BusinessRulesTab({ versionId }: { versionId: string }) {
               <span>
                 <span className="font-medium">{rule.title}</span>
                 <span className="ml-2 text-xs text-gray-400">{RULE_TYPE_LABELS[rule.rule_type] ?? rule.rule_type}</span>
+                {rule.source === 'ai_generated' && (
+                  <span className="ml-2 rounded-full border border-purple-300 bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-800">
+                    AI-generated
+                  </span>
+                )}
               </span>
               {canWrite(user?.role) && (
                 <button
