@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 import httpx
@@ -338,8 +339,35 @@ async def test_login(
 # (same simplicity the old synchronous record-macro endpoint already
 # leaned on). Keyed by a fresh recording_id, not the credential_id, so
 # nothing breaks if an analyst opens a second recording (e.g. after a
-# mistake) before finishing the first.
-_ACTIVE_RECORDINGS: dict[uuid.UUID, RecordingHandle] = {}
+# mistake) before finishing the first. Value is (handle, started_at) so
+# _reap_stale_recordings can find abandoned ones (closed tab, crashed
+# client, browser closed out-of-band) without a background task loop.
+_ACTIVE_RECORDINGS: dict[uuid.UUID, tuple[RecordingHandle, datetime]] = {}
+_MAX_RECORDING_AGE = timedelta(minutes=30)
+
+
+async def _reap_stale_recordings() -> None:
+    """Best-effort cleanup for recordings nobody ever finished or
+    cancelled — no client, tab-close, or crash notifies this server, so
+    without this a headed Chromium/Playwright process leaks indefinitely.
+    Called opportunistically at the start of every recording-lifecycle
+    endpoint rather than run as a background task loop, which would need
+    its own startup/shutdown wiring in app.main's lifespan for a leak
+    this rare — piggybacking on requests that are already happening is
+    simpler and just as effective for a single-analyst-at-a-time tool.
+    """
+    now = datetime.now(timezone.utc)
+    stale_ids = [
+        rid for rid, (_handle, started_at) in _ACTIVE_RECORDINGS.items()
+        if now - started_at > _MAX_RECORDING_AGE
+    ]
+    for rid in stale_ids:
+        handle, _started_at = _ACTIVE_RECORDINGS.pop(rid, (None, None))
+        if handle is not None:
+            try:
+                await MacroRecorder().cancel(handle)
+            except Exception:  # noqa: BLE001 — best-effort; never block a real request on this
+                pass
 
 
 @router.post("/{credential_id}/record-macro/start", response_model=RecordingStartedOut, status_code=201)
@@ -361,13 +389,14 @@ async def start_recording_macro(
     Verdikt itself does, on an explicit signal, not something that has
     to happen inside the remote view.
     """
+    await _reap_stale_recordings()
     await get_version_or_404(session, version_id, user.org_id)
     await _get_credential_or_404(session, version_id, credential_id)
 
     recorder = MacroRecorder()
     handle = await recorder.start(payload.start_url, headless=False)
     recording_id = uuid.uuid4()
-    _ACTIVE_RECORDINGS[recording_id] = handle
+    _ACTIVE_RECORDINGS[recording_id] = (handle, datetime.now(timezone.utc))
     return RecordingStartedOut(recording_id=recording_id)
 
 
@@ -381,12 +410,20 @@ async def finish_recording_macro(
 ) -> LoginMacroOut:
     """The analyst's "Finish recording" click — closes the browser
     server-side and persists whatever was captured as a LoginMacro.
+    Ownership is validated BEFORE the handle is popped: popping first and
+    validating after meant a 404 here (stale/mismatched ids, or the
+    version/credential deleted mid-recording) left the handle popped but
+    never closed — a leaked headed Chromium/Playwright process, and a
+    silent no-op for any later cancel attempt since the entry was
+    already gone.
     """
-    handle = _ACTIVE_RECORDINGS.pop(recording_id, None)
-    if handle is None:
+    if recording_id not in _ACTIVE_RECORDINGS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No active recording with that id")
     await get_version_or_404(session, version_id, user.org_id)
     credential = await _get_credential_or_404(session, version_id, credential_id)
+    handle, _started_at = _ACTIVE_RECORDINGS.pop(recording_id, (None, None))
+    if handle is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No active recording with that id")
 
     recorder = MacroRecorder()
     steps = await recorder.finish(handle)
@@ -427,7 +464,7 @@ async def cancel_recording_macro(
 ) -> None:
     await get_version_or_404(session, version_id, user.org_id)
     await _get_credential_or_404(session, version_id, credential_id)
-    handle = _ACTIVE_RECORDINGS.pop(recording_id, None)
+    handle, _started_at = _ACTIVE_RECORDINGS.pop(recording_id, (None, None))
     if handle is not None:
         await MacroRecorder().cancel(handle)
 

@@ -402,12 +402,10 @@ export const api = {
       api_key: string
       base_url?: string
       auth_type?: string
-      app_id?: string
-      secondary_api_key?: string
     }) => request<AIProviderConfigOut>('/ai-provider-configs', { method: 'POST', body }),
     setDefault: (id: string) =>
       request<AIProviderConfigOut>(`/ai-provider-configs/${id}/set-default`, { method: 'POST' }),
-    rotateSecret: (id: string, body: { api_key?: string; secondary_api_key?: string; app_id?: string }) =>
+    rotateSecret: (id: string, body: { api_key?: string }) =>
       request<AIProviderConfigOut>(`/ai-provider-configs/${id}/rotate-secret`, { method: 'POST', body }),
     // Routes different agent roles (business-logic reasoning vs.
     // mechanical classification vs. the specialist-tier default) to

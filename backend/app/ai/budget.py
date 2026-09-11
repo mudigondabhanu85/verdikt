@@ -1,11 +1,54 @@
 import asyncio
 from decimal import Decimal
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.adapters.base import AgentResponse, AIProviderAdapter, Message
 from app.config import get_settings
 from app.models.scan import ScanRun
+
+_TRANSIENT_HTTPX_ERRORS = (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError)
+_TRANSIENT_SDK_EXCEPTION_NAMES = frozenset({"APIConnectionError", "APITimeoutError"})
+
+
+def _is_transient_provider_error(exc: Exception) -> bool:
+    """Genuinely transient failures (network blips, timeouts, provider-side
+    5xx, rate limiting) should degrade a scan gracefully via
+    ProviderUnavailableError. Permanent failures (a bad API key, a
+    malformed request, an adapter bug) must propagate as themselves so
+    they're visible and actionable — silently absorbing them as "the
+    provider is down" hides exactly the errors an analyst most needs to see.
+
+    Duck-typed against the anthropic/openai SDKs' shared exception shape
+    (both stainless-generated, same class names/attributes) rather than
+    importing either SDK here — every adapter's own errors are handled
+    identically regardless of which one fired, so budget.py doesn't need
+    a hard dependency on any specific provider SDK to classify them.
+    """
+    # Builtin socket-level errors (ConnectionError and its subclasses
+    # ConnectionRefusedError/ConnectionResetError/BrokenPipeError,
+    # builtin TimeoutError) — genuine OS/network-level transience, not
+    # an application error, regardless of which adapter/SDK is in play.
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    if isinstance(exc, _TRANSIENT_HTTPX_ERRORS):
+        return True
+    # APIStatusError subclasses (anthropic/openai SDKs) carry a real
+    # status_code directly; httpx.HTTPStatusError (raised by
+    # GeminiAdapter's response.raise_for_status()) carries it one level
+    # down on .response instead. Either way: 429 (rate limited) and 5xx
+    # (provider-side failure) are retryable/transient; every other 4xx
+    # (bad key, bad request, no such model/deployment) is a permanent
+    # misconfiguration, not an outage.
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None and isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+    if isinstance(status_code, int):
+        return status_code == 429 or status_code >= 500
+    # APIConnectionError/APITimeoutError carry no status_code at all (no
+    # HTTP response was ever received) — always transient.
+    return type(exc).__name__ in _TRANSIENT_SDK_EXCEPTION_NAMES
 
 
 class BudgetExceededError(Exception):
@@ -21,8 +64,8 @@ class ProviderUnavailableError(Exception):
     """Raised when the LLM provider call itself fails (network blip,
     DNS hiccup, provider-side 5xx, timeout — anything transient, not a
     programming bug) — real incident: a scan-crashing "Connection
-    error." reaching Spark from inside request_smuggling's AI triage,
-    because guarded_complete previously let ANY exception from the
+    error." reaching a custom/self-hosted provider from inside
+    request_smuggling's AI triage, because guarded_complete previously let ANY exception from the
     provider call propagate raw, and none of the ~9 call sites across
     app/agents/ catch anything but BudgetExceededError. A transient
     provider outage should degrade exactly the same way running out of
@@ -82,12 +125,8 @@ class BudgetGuard:
             except BudgetExceededError:
                 raise
             except Exception as exc:
-                # Deliberately broad — every adapter (Claude/OpenAI/
-                # Gemini/Grok/GenericOpenAI/Spark) can raise its own
-                # SDK-specific exception type for a network/timeout/
-                # 5xx failure, and none of them are worth enumerating
-                # here: the handling is identical regardless of which
-                # one fired (see ProviderUnavailableError's docstring).
+                if not _is_transient_provider_error(exc):
+                    raise
                 raise ProviderUnavailableError(str(exc)) from exc
             cost = self._provider.estimate_cost(response.input_tokens, response.output_tokens, model)
             self._scan_run.llm_cost_usd = self.spent + cost
@@ -95,3 +134,23 @@ class BudgetGuard:
             self._scan_run.llm_output_tokens = (self._scan_run.llm_output_tokens or 0) + response.output_tokens
             await self._session.commit()
             return response
+
+
+def budget_stop_error(agent) -> str | None:
+    """agent.budget_exceeded covers two genuinely different stop
+    conditions — a real spend-cap hit vs. a transient LLM-provider
+    failure (network/timeout/5xx, see ProviderUnavailableError above).
+    Reporting both as a flat "budget exceeded" is actively misleading: a
+    real incident showed this exact label on a scan using a custom/
+    self-hosted provider where estimate_cost() always returns $0, making
+    a genuine budget-cap hit structurally impossible — the actual cause
+    was a provider connection error, not spend. Shared by every graph
+    node (app.agents.graph) and the post-graph chain-analysis step
+    (app.agents.runner._run_chain_analysis) so the two can't drift back
+    out of sync with each other.
+    """
+    if not agent.budget_exceeded:
+        return None
+    if getattr(agent, "budget_stop_reason", None) == "provider_unavailable":
+        return "LLM provider unavailable (network/connection error) — not a budget issue"
+    return "budget exceeded"

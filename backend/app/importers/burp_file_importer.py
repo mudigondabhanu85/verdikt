@@ -2,6 +2,8 @@ import base64
 from datetime import datetime, timezone
 from xml.etree import ElementTree
 
+from defusedxml.ElementTree import parse as parse_xml_safely
+
 from app.importers.base import TrafficImporter
 from app.schemas.traffic import HttpInteraction, HttpRequest, HttpResponse
 
@@ -27,6 +29,13 @@ class BurpFileImporter(TrafficImporter):
     _BINARY_PROJECT_ERROR). The two are told apart by the first bytes:
     this XML export always starts with an XML declaration; the binary
     project format never does.
+
+    Parsed via defusedxml, not the bare stdlib xml.etree — this file is
+    untrusted, analyst-uploaded input on a security-scanning platform,
+    so DOCTYPE/external-entity resolution (XXE) and entity-expansion
+    (billion-laughs) are disabled outright rather than relying on the
+    stdlib's own mitigations, which are a property of the Python/expat
+    version installed, not a guarantee this code makes itself.
     """
 
     def parse(self, file_path: str) -> list[HttpInteraction]:
@@ -35,7 +44,7 @@ class BurpFileImporter(TrafficImporter):
         if not head.startswith(b"<?xml"):
             raise NotImplementedError(_BINARY_PROJECT_ERROR)
 
-        root = ElementTree.parse(file_path).getroot()
+        root = parse_xml_safely(file_path).getroot()
         if root.tag != "items":
             raise ValueError("not a Burp 'Save items' XML export (no top-level <items>)")
 

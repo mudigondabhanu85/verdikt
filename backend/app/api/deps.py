@@ -3,6 +3,7 @@ import uuid
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.audit import AuditLogEntry
 from app.models.finding import Finding
@@ -51,6 +52,7 @@ async def get_finding_or_404(session: AsyncSession, finding_id: uuid.UUID, org_i
         .join(Version, ScanRun.version_id == Version.id)
         .join(Project, Version.project_id == Project.id)
         .where(Finding.id == finding_id, Project.org_id == org_id)
+        .options(selectinload(Finding.evidence))
     )
     finding = result.scalar_one_or_none()
     if finding is None:

@@ -17,7 +17,21 @@ from app.models.traffic import TrafficInteraction
 class ScopeViolationError(Exception):
     """Raised when an agent attempts to request a URL outside the
     Version's scope allow-list. This must never be silently swallowed —
-    it means an agent tried to do something §1.1 explicitly forbids."""
+    it means an agent tried to do something §1.1 explicitly forbids.
+
+    Also raised (by _request/post_multipart) for a URL httpx itself
+    refuses to parse (httpx.InvalidURL, e.g. "path must be empty or
+    begin with '/'") — is_in_scope()'s own check uses the stdlib's far
+    more lenient urlsplit, which happily extracts a host/port from
+    strings httpx's stricter parser rejects outright once a request is
+    actually attempted. A URL nothing can actually send a request to is
+    functionally identical to one outside scope from every calling
+    agent's point of view (~50 call sites across every agent already
+    treat ScopeViolationError as "skip this one, not a crash") — a real,
+    live-found bug: an AI-suggested-and-crawler-confirmed endpoint
+    (app.agents.recon_planner) fed a syntactically-odd URL into later
+    agents that reached this exact case and crashed the whole scan run.
+    """
 
 
 def _strip_nul_bytes(value: str | None) -> str | None:
@@ -266,6 +280,8 @@ class ScopedHttpClient:
                 f"Hard backstop timeout ({_HARD_REQUEST_TIMEOUT_SECONDS}s) exceeded for POST {url}",
                 request=httpx.Request("POST", url),
             ) from exc
+        except httpx.InvalidURL as exc:
+            raise ScopeViolationError(f"URL httpx refuses to parse: {url} ({exc})") from exc
         finally:
             # See _request's identical fix for why this matters.
             self._client.cookies.clear()
@@ -322,6 +338,8 @@ class ScopedHttpClient:
                 f"Hard backstop timeout ({_HARD_REQUEST_TIMEOUT_SECONDS}s) exceeded for {method} {url}",
                 request=httpx.Request(method, url),
             ) from exc
+        except httpx.InvalidURL as exc:
+            raise ScopeViolationError(f"URL httpx refuses to parse: {url} ({exc})") from exc
         finally:
             # httpx.AsyncClient auto-extracts and persists every
             # Set-Cookie it ever sees into its own implicit jar,

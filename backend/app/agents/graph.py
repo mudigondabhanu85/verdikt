@@ -36,7 +36,7 @@ from app.agents.traffic_seed import seed_from_imported_traffic
 from app.agents.websocket_security import WebSocketAgent
 from app.agents.xss import XSSAgent
 from app.agents.xxe import XxeAgent
-from app.ai.budget import BudgetGuard
+from app.ai.budget import BudgetGuard, budget_stop_error
 from app.ai.model_routing import ModelRouter
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
@@ -62,23 +62,6 @@ class ScanState(TypedDict, total=False):
     # by business_logic_node. Provenance-tagged (source="ai_generated")
     # but otherwise indistinguishable to the detection pipeline.
     ai_generated_business_rules: list[BusinessRule]
-
-
-def _budget_stop_error(agent) -> str | None:
-    """agent.budget_exceeded covers two genuinely different stop
-    conditions (see app.ai.budget.ProviderUnavailableError's
-    docstring) — a real spend-cap hit vs. a transient LLM-provider
-    failure (network/timeout/5xx). Reporting both as a flat "budget
-    exceeded" was actively misleading: a real incident showed this
-    exact label on a Spark scan where estimate_cost() always returns
-    $0, making a genuine budget-cap hit structurally impossible — the
-    actual cause was a provider connection error, not spend.
-    """
-    if not agent.budget_exceeded:
-        return None
-    if getattr(agent, "budget_stop_reason", None) == "provider_unavailable":
-        return "LLM provider unavailable (network/connection error) — not a budget issue"
-    return "budget exceeded"
 
 
 def build_graph(
@@ -382,7 +365,13 @@ def build_graph(
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
-        await _finish_job(job, status="completed", stats={"candidates_queued": len(candidates)})
+        status = "skipped" if agent.budget_exceeded else "completed"
+        await _finish_job(
+            job,
+            status=status,
+            stats={"candidates_queued": len(candidates)},
+            error=budget_stop_error(agent),
+        )
         return {"review_candidates": candidates}
 
     async def dom_xss_node(state: ScanState) -> dict:
@@ -435,7 +424,13 @@ def build_graph(
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
-        await _finish_job(job, status="completed", stats={"candidates_queued": len(candidates)})
+        status = "skipped" if agent.budget_exceeded else "completed"
+        await _finish_job(
+            job,
+            status=status,
+            stats={"candidates_queued": len(candidates)},
+            error=budget_stop_error(agent),
+        )
         return {"review_candidates": candidates}
 
     async def oauth_node(state: ScanState) -> dict:
@@ -590,7 +585,7 @@ def build_graph(
             job,
             status=status,
             stats={"endpoints_suggested_and_confirmed": len(confirmed)},
-            error=_budget_stop_error(agent),
+            error=budget_stop_error(agent),
         )
         merged_endpoints = list(dict.fromkeys(state.get("discovered_endpoints", []) + confirmed))
         return {
@@ -623,7 +618,7 @@ def build_graph(
             job,
             status=status,
             stats={"findings_confirmed": len(findings)},
-            error=_budget_stop_error(agent),
+            error=budget_stop_error(agent),
         )
         return {"findings": findings}
 
@@ -652,7 +647,7 @@ def build_graph(
             job,
             status=status,
             stats={"candidates_queued": len(candidates), "findings_confirmed": len(agent.findings)},
-            error=_budget_stop_error(agent),
+            error=budget_stop_error(agent),
         )
         return {"review_candidates": candidates, "findings": agent.findings}
 
@@ -692,7 +687,7 @@ def build_graph(
             job,
             status=status,
             stats={"findings_confirmed": len(findings)},
-            error=_budget_stop_error(agent),
+            error=budget_stop_error(agent),
         )
         return {"findings": findings}
 
@@ -728,7 +723,7 @@ def build_graph(
             job,
             status=status,
             stats={"hypotheses_proposed": len(rules)},
-            error=_budget_stop_error(agent),
+            error=budget_stop_error(agent),
         )
         return {"ai_generated_business_rules": rules}
 
@@ -755,7 +750,7 @@ def build_graph(
             job,
             status=status,
             stats={"findings_confirmed": len(findings)},
-            error=_budget_stop_error(agent),
+            error=budget_stop_error(agent),
         )
         return {"findings": findings}
 

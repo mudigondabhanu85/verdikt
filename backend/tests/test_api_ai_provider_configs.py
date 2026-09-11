@@ -45,98 +45,6 @@ async def test_custom_provider_requires_base_url(client):
     assert resp.status_code == 422
 
 
-async def test_spark_bearer_token_mode_falls_back_to_deployment_app_id(client):
-    # Every Spark request needs an app_id (re-confirmed 2026-09 directly
-    # against sparkapi.spglobal.com — a raw curl with no app_id path
-    # segment got "app_id: <garbage> is not valid" instead of
-    # succeeding), but it's a deployment-wide constant (SPARK_APP_ID)
-    # this org falls back to automatically — see
-    # app.ai.provider.build_adapter_from_config — same pattern as
-    # base_url falling back to SPARK_BASE_URL. Not setting one here is
-    # the common case, not an error.
-    admin = await register_org_admin(client)
-
-    created = await client.post(
-        "/ai-provider-configs",
-        json={
-            "label": "Spark",
-            "provider": "spark",
-            "model": "gpt-4o-mini",
-            "api_key": "test-bearer-token",
-            "auth_type": "bearer_token",
-        },
-        headers=admin["headers"],
-    )
-    assert created.status_code == 201, created.text
-    assert created.json()["app_id"] is None
-
-
-async def test_spark_bearer_token_mode_can_override_app_id_per_org(client):
-    admin = await register_org_admin(client)
-
-    created = await client.post(
-        "/ai-provider-configs",
-        json={
-            "label": "Spark",
-            "provider": "spark",
-            "model": "gpt-4o-mini",
-            "api_key": "test-bearer-token",
-            "auth_type": "bearer_token",
-            "app_id": "SPGCKDPE99C",
-        },
-        headers=admin["headers"],
-    )
-    assert created.status_code == 201, created.text
-    body = created.json()
-    assert body["app_id"] == "SPGCKDPE99C"
-    assert body["has_secondary_api_key"] is False
-
-
-async def test_spark_api_key_mode_also_falls_back_to_deployment_app_id(client):
-    # api_key mode has no different requirement here than bearer_token —
-    # dast-automation's SparkConfig uses the identical deployment-wide
-    # default_app_id for both, with no auth-mode branch at all.
-    admin = await register_org_admin(client)
-
-    created = await client.post(
-        "/ai-provider-configs",
-        json={
-            "label": "Spark",
-            "provider": "spark",
-            "model": "gpt-4o-mini",
-            "api_key": "primary-key",
-            "auth_type": "api_key",
-        },
-        headers=admin["headers"],
-    )
-    assert created.status_code == 201, created.text
-    assert created.json()["app_id"] is None
-
-
-async def test_spark_api_key_mode_with_secondary_key(client):
-    admin = await register_org_admin(client)
-
-    created = await client.post(
-        "/ai-provider-configs",
-        json={
-            "label": "Spark",
-            "provider": "spark",
-            "model": "gpt-4o-mini",
-            "api_key": "primary-key",
-            "auth_type": "api_key",
-            "app_id": "SPGCKDPE99C",
-            "secondary_api_key": "secondary-key",
-        },
-        headers=admin["headers"],
-    )
-    assert created.status_code == 201, created.text
-    body = created.json()
-    assert body["app_id"] == "SPGCKDPE99C"
-    assert body["has_secondary_api_key"] is True
-    assert "secondary-key" not in created.text
-    assert "primary-key" not in created.text
-
-
 async def test_unknown_provider_type_rejected(client):
     admin = await register_org_admin(client)
 
@@ -154,12 +62,12 @@ async def test_rotate_secret_preserves_default_and_updates_masked_reference(clie
     created = await client.post(
         "/ai-provider-configs",
         json={
-            "label": "Spark",
-            "provider": "spark",
-            "model": "gpt-4o-mini",
+            "label": "In-house Llama",
+            "provider": "custom",
+            "model": "llama3.1:8b",
             "api_key": "old-bearer-token",
             "auth_type": "bearer_token",
-            "app_id": "SPGCKDPE99C",
+            "base_url": "http://localhost:11434/v1",
         },
         headers=admin["headers"],
     )
@@ -184,43 +92,8 @@ async def test_rotate_secret_preserves_default_and_updates_masked_reference(clie
     assert body["masked_reference"].endswith("oken")
     # label/provider/model/is_default all untouched by a secret-only rotation.
     assert body["is_default"] is True
-    assert body["label"] == "Spark"
-    assert body["provider"] == "spark"
-
-
-async def test_rotate_secret_fixes_a_wrong_app_id(client):
-    # Real incident this guards against: "openai" typed into App ID
-    # instead of the actual Spark App ID (Spark's model names look like
-    # OpenAI's, e.g. gpt-4o-mini, which is an easy mix-up) — should be
-    # fixable without a full delete-and-recreate.
-    admin = await register_org_admin(client)
-
-    created = await client.post(
-        "/ai-provider-configs",
-        json={
-            "label": "Spark",
-            "provider": "spark",
-            "model": "gpt-4o-mini",
-            "api_key": "primary-key",
-            "auth_type": "api_key",
-            "app_id": "openai",
-        },
-        headers=admin["headers"],
-    )
-    assert created.status_code == 201, created.text
-    config_id = created.json()["id"]
-    assert created.json()["app_id"] == "openai"
-
-    rotated = await client.post(
-        f"/ai-provider-configs/{config_id}/rotate-secret",
-        json={"app_id": "SPGCKDPE99C"},
-        headers=admin["headers"],
-    )
-    assert rotated.status_code == 200, rotated.text
-    body = rotated.json()
-    assert body["app_id"] == "SPGCKDPE99C"
-    # api_key-only fields untouched by an app_id-only rotation.
-    assert body["masked_reference"].endswith("-key")
+    assert body["label"] == "In-house Llama"
+    assert body["provider"] == "custom"
 
 
 async def test_rotate_secret_rejects_other_orgs_config(client):

@@ -3,7 +3,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from app.ai.adapters.base import AgentResponse, AIProviderAdapter, Message
+from app.ai.adapters.base import AgentResponse, AIProviderAdapter, Message, estimate_tokens
 
 
 class GenericOpenAIAdapter(AIProviderAdapter):
@@ -66,10 +66,20 @@ class GenericOpenAIAdapter(AIProviderAdapter):
         )
         content = response.choices[0].message.content or ""
         usage = response.usage
+        if usage:
+            input_tokens, output_tokens = usage.prompt_tokens, usage.completion_tokens
+        else:
+            # Some self-hosted/in-house OpenAI-compatible gateways omit
+            # `usage` from otherwise-successful responses — falling back
+            # to a flat 0 here makes real, successful LLM work look like
+            # "the AI didn't run" in every cost/token report. Estimate
+            # instead, same rationale as every other adapter's fallback.
+            input_tokens = estimate_tokens("".join(m.content for m in messages))
+            output_tokens = estimate_tokens(content)
         return AgentResponse(
             content=content,
-            input_tokens=usage.prompt_tokens if usage else 0,
-            output_tokens=usage.completion_tokens if usage else 0,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             model=model,
         )
 

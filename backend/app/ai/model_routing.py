@@ -1,7 +1,7 @@
 """Per-agent-role model selection (multi-agent §0/§10 follow-up — a
-single Spark/Claude/OpenAI account can usually reach several model
-sizes, e.g. Spark's gpt-4o family; before this module every agent in a
-scan shared one hardcoded model string end to end, so an org paying for
+single provider account can usually reach several model sizes (e.g. an
+OpenAI-compatible gateway's whole gpt-4o family); before this module
+every agent in a scan shared one hardcoded model string end to end, so an org paying for
 a bigger reasoning model got no benefit from it on cheap mechanical
 work, and couldn't opt a stronger model into hard reasoning tasks
 without repointing the *whole* scan at it). Modeled directly on

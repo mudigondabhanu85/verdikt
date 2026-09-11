@@ -145,7 +145,7 @@ export interface RaceConditionConfig {
   credential_set_id?: string | null
 }
 
-export type ScanRunStatus = 'running' | 'completed' | 'failed'
+export type ScanRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 
 export interface ScanRunOut {
   id: string
@@ -268,7 +268,7 @@ export interface ApiKeyOut {
   revoked_at: string | null
 }
 
-export const AI_PROVIDER_TYPES = ['claude', 'openai', 'gemini', 'grok', 'custom', 'spark'] as const
+export const AI_PROVIDER_TYPES = ['claude', 'openai', 'gemini', 'grok', 'custom'] as const
 export type AiProviderType = (typeof AI_PROVIDER_TYPES)[number]
 export const AI_PROVIDER_AUTH_TYPES = ['api_key', 'bearer_token'] as const
 export type AiProviderAuthType = (typeof AI_PROVIDER_AUTH_TYPES)[number]
@@ -285,12 +285,10 @@ export interface AIProviderConfigOut {
   model_classification: string | null
   base_url: string | null
   auth_type: AiProviderAuthType
-  app_id: string | null
-  has_secondary_api_key: boolean
   masked_reference: string
   is_default: boolean
-  // When the secret was last created/rotated — only meaningful (shown
-  // as an expiry countdown) for provider="spark" auth_type="bearer_token".
+  // When the secret was last created/rotated, shown so an analyst can
+  // see at a glance how stale a stored key/token is.
   secret_rotated_at: string | null
 }
 

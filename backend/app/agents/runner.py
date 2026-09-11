@@ -8,7 +8,7 @@ from app.agents.chain_analysis import ChainAnalysisAgent
 from app.agents.graph import build_graph
 from app.agents.http_client import ScopedHttpClient, install_commit_backstop
 from app.ai import provider as ai_provider
-from app.ai.budget import BudgetGuard
+from app.ai.budget import BudgetGuard, budget_stop_error
 from app.ai.model_routing import ModelRouter
 from app.db import session as db_session
 from app.models.business_rule import BusinessRule
@@ -67,7 +67,7 @@ async def _run_chain_analysis(
 
     job.status = "skipped" if agent.budget_exceeded else "completed"
     job.stats = {"chains_confirmed": len(chains)}
-    job.error = "budget exceeded" if agent.budget_exceeded else None
+    job.error = budget_stop_error(agent)
     job.completed_at = datetime.now(timezone.utc)
     await session.commit()
 
@@ -190,6 +190,24 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
             if client is not None:
                 await client.aclose()
             scan_run.completed_at = datetime.now(timezone.utc)
-            await session.commit()
+            try:
+                await session.commit()
+            except Exception:
+                # A concurrent node's exception (asyncio.gather's default
+                # cancel-the-rest-of-the-group behavior on one task
+                # raising) can hit a sibling mid-flush with a real
+                # asyncio.CancelledError — which install_commit_backstop's
+                # own recovery deliberately doesn't swallow (Cancelled
+                # Error is BaseException, not Exception; re-raising a
+                # cancellation instead of eating it is correct), leaving
+                # the shared session poisoned for this final commit too.
+                # Without this, that leaves a scan permanently stuck
+                # showing "running" forever with no error at all — worse
+                # than any of the outcomes above. Roll back once and
+                # retry so the scan's real terminal status always gets
+                # recorded, no matter what already went wrong on this
+                # shared session.
+                await session.rollback()
+                await session.commit()
             await notify_scan_completed(session, scan_run)
             await push_findings_to_vgs(session, scan_run)

@@ -38,10 +38,6 @@ async def create_ai_provider_config(
         auth_type=payload.auth_type,
         encrypted_api_key=encrypt_secret(payload.api_key),
         masked_reference=mask_secret(payload.api_key),
-        app_id=payload.app_id,
-        encrypted_secondary_api_key=(
-            encrypt_secret(payload.secondary_api_key) if payload.secondary_api_key else None
-        ),
         secret_rotated_at=datetime.now(timezone.utc),
     )
     session.add(config)
@@ -77,11 +73,10 @@ async def rotate_ai_provider_config_secret(
     user: User = Depends(require_permission("ai_provider_config", "update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> AIProviderConfig:
-    """Updates just the secret(s)/app_id on an existing row — label,
-    provider, model, base_url, and (crucially) is_default all stay
-    unchanged. Covers the routine "my Spark bearer token expired, here's
-    a new one" action, and fixing a wrong app_id (e.g. a typo) — either
-    way, no delete-and-recreate, no re-picking "set default".
+    """Updates just the secret on an existing row — label, provider,
+    model, base_url, and (crucially) is_default all stay unchanged.
+    Covers the routine "my token expired, here's a new one" action
+    without a delete-and-recreate or re-picking "set default".
     """
     config = await session.get(AIProviderConfig, config_id)
     if config is None or config.org_id != user.org_id:
@@ -93,12 +88,6 @@ async def rotate_ai_provider_config_secret(
         config.masked_reference = mask_secret(payload.api_key)
         config.secret_rotated_at = datetime.now(timezone.utc)
         updated_fields.append("api_key")
-    if payload.secondary_api_key is not None:
-        config.encrypted_secondary_api_key = encrypt_secret(payload.secondary_api_key)
-        updated_fields.append("secondary_api_key")
-    if payload.app_id is not None:
-        config.app_id = payload.app_id
-        updated_fields.append("app_id")
 
     if updated_fields:
         # Never log the secret itself — just which field(s) changed (§1.5).

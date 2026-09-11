@@ -424,16 +424,16 @@ async def test_get_scan_run_reports_real_llm_token_and_cost_usage(client, fixtur
 
 
 async def test_full_scan_flow_completes_and_produces_report(client, fixture_site, monkeypatch):
-    # Isolate from this dev environment's real deployment-wide
-    # AI_PROVIDER=spark setting (a real incident: recon_planner and
-    # ai_business_logic_plan always fire an LLM call regardless of
-    # what's discovered, unlike most other agents which only call the
-    # LLM when they find something to triage — so this test started
-    # hitting Spark's real network with a stale/invalid test token and
-    # getting a genuine 401, which the ProviderUnavailableError fix
-    # correctly turns into a "skipped" AgentJob rather than a crash,
-    # but that still isn't "completed", failing this test's own
-    # all-jobs-completed assertion below). NullAIProviderAdapter always
+    # Isolate from this dev environment's real deployment-wide AI_PROVIDER
+    # setting (a real incident: recon_planner and ai_business_logic_plan
+    # always fire an LLM call regardless of what's discovered, unlike most
+    # other agents which only call the LLM when they find something to
+    # triage — so this test started hitting a real provider's network
+    # with a stale/invalid test key and getting a genuine 401, which the
+    # ProviderUnavailableError fix correctly turns into a "skipped"
+    # AgentJob rather than a crash, but that still isn't "completed",
+    # failing this test's own all-jobs-completed assertion below).
+    # NullAIProviderAdapter always
     # succeeds with a harmless "not vulnerable" verdict at zero cost —
     # exactly what a fresh checkout with no API keys configured gets.
     from app.ai.provider import get_ai_provider

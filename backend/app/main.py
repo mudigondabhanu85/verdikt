@@ -85,13 +85,12 @@ app.add_middleware(
 
 
 @app.exception_handler(Exception)
-async def unhandled_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     # Without this, an unhandled exception falls through to Starlette's
-    # default ServerErrorMiddleware, which — being the outermost layer,
-    # wrapping CORSMiddleware rather than sitting inside it — returns its
-    # 500 with no Access-Control-Allow-Origin header at all. The browser
-    # then reports "blocked by CORS policy" instead of the real error,
-    # which is exactly as misleading for a genuine backend bug (e.g. the
+    # default ServerErrorMiddleware, which returns a bare 500 with no
+    # Access-Control-Allow-Origin header. The browser then reports
+    # "blocked by CORS policy" instead of the real error, which is
+    # exactly as misleading for a genuine backend bug (e.g. the
     # in-container Playwright headed-browser launch in
     # app.api.routes.credentials.start_recording_macro, or any future
     # unexpected 500) as it would be for an actual CORS misconfiguration
@@ -99,8 +98,23 @@ async def unhandled_exception_handler(_request: Request, exc: Exception) -> JSON
     # handler's own registered @app.exception_handler(SomeSpecificError)
     # (if any) still takes precedence over this catch-all; this only
     # catches what nothing more specific already handled.
+    #
+    # Registering this handler is NOT enough by itself: Starlette installs
+    # a bare-Exception handler into ServerErrorMiddleware, which is the
+    # outermost layer and wraps CORSMiddleware from the outside — so a
+    # response built here still never passes back through CORSMiddleware
+    # to get its headers added. The CORS header has to be set by hand,
+    # right here, matching what CORSMiddleware itself would have done for
+    # this same Origin — an exact allow-list match (this deployment's
+    # CORSMiddleware is configured with a specific single allowed origin,
+    # never a wildcard), never blindly echoing an arbitrary Origin back.
     logger.exception("Unhandled exception", exc_info=exc)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    response = JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    origin = request.headers.get("origin")
+    if origin is not None and origin == get_settings().frontend_origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+    return response
 
 app.include_router(auth.router)
 app.include_router(organizations.router)

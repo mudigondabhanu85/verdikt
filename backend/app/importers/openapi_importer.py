@@ -126,12 +126,31 @@ def _stringify(value: Any) -> str:
     return json.dumps(value)
 
 
+def _resolve_server_variables(url: str, variables: object) -> str:
+    """OpenAPI 3.x server URLs can contain {variable} templates (common
+    in generated specs, e.g. "{environment}.api.example.com" or
+    "https://api.example.com/{basePath}") — each declared in
+    servers[0].variables with a required `default` value per the spec.
+    Left unresolved, these produce interaction URLs with literal,
+    permanently-unresolvable placeholder text (can never resolve via
+    DNS/HTTP) instead of a real, usable base URL.
+    """
+    if not isinstance(variables, dict):
+        return url
+    for name, var_spec in variables.items():
+        if isinstance(var_spec, dict) and "default" in var_spec:
+            url = url.replace(f"{{{name}}}", str(var_spec["default"]))
+    return url
+
+
 def _base_url(spec: dict) -> str:
     servers = spec.get("servers")  # OpenAPI 3.x
     if isinstance(servers, list) and servers and isinstance(servers[0], dict):
-        url = servers[0].get("url")
+        server = servers[0]
+        url = server.get("url")
         if url:
-            return str(url).rstrip("/")
+            url = _resolve_server_variables(str(url), server.get("variables"))
+            return url.rstrip("/")
     # Swagger 2.0
     host = spec.get("host")
     if host:

@@ -5,7 +5,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from app.agents.http_client import ScopedHttpClient, install_commit_backstop
+from app.agents.http_client import ScopedHttpClient, ScopeViolationError, install_commit_backstop
 from app.models.project import ScopeEntry
 from app.models.traffic import TrafficInteraction
 from tests.conftest import session_scope
@@ -256,4 +256,61 @@ async def test_ordinary_request_still_succeeds_within_backstop(db_adapter):
         response = await client.get("http://site.test/")
         assert response.status_code == 200
         assert response.text == "ok"
+        await client.aclose()
+
+
+async def _raise_invalid_url(*args, **kwargs):
+    # Reproduces httpx's own real error for a URL its stricter parser
+    # rejects (a scheme with no netloc and a path not starting with
+    # "/") — is_in_scope()'s far more lenient stdlib urlsplit-based
+    # check happily extracts a host/port from such a string and lets it
+    # through, so the exception can only ever surface here, once httpx
+    # itself actually tries to parse/build the request.
+    raise httpx.InvalidURL("For absolute URLs, path must be empty or begin with '/'")
+
+
+async def test_malformed_url_that_passes_scope_check_raises_scope_violation_not_invalid_url(db_adapter):
+    """Real, live-found bug: an AI-suggested-and-crawler-confirmed
+    endpoint (app.agents.recon_planner) fed a syntactically-odd URL
+    into later agents. is_in_scope()'s lenient urlsplit-based check let
+    it through (a real host/port were still extractable), but httpx's
+    own stricter parser refused it once a request was actually
+    attempted, raising a bare httpx.InvalidURL that none of the ~50
+    `except (ScopeViolationError, httpx.HTTPError)` call sites across
+    every agent catch (InvalidURL is a plain Exception subclass, NOT an
+    HTTPError subclass) — crashing the entire scan run outright, and
+    (via LangGraph's cancel-the-rest-of-the-group-on-one-failure
+    semantics) leaving several sibling nodes' AgentJob rows stuck
+    "running" forever with the shared session left permanently poisoned
+    for even the scan's own final status-recording commit. Translating
+    this to ScopeViolationError here means every one of those call
+    sites already handles it correctly, with no changes needed there.
+    """
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(lambda r: httpx.Response(200)),  # never actually reached
+        )
+        client._client.request = _raise_invalid_url
+        with pytest.raises(ScopeViolationError):
+            await client.get("http://site.test/some-malformed-endpoint")
+        await client.aclose()
+
+
+async def test_malformed_url_in_post_multipart_also_raises_scope_violation(db_adapter):
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(lambda r: httpx.Response(200)),
+        )
+        client._client.request = _raise_invalid_url
+        with pytest.raises(ScopeViolationError):
+            await client.post_multipart(
+                "http://site.test/some-malformed-endpoint",
+                files={"file": ("a.txt", b"data", "text/plain")},
+            )
         await client.aclose()

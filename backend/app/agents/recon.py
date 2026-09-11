@@ -7,6 +7,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient, ScopeViolationError
+from app.config import get_settings
 from app.models.target import Target
 
 _ROBOTS_DISALLOW_RE = re.compile(r"^\s*Disallow:\s*(\S+)", re.IGNORECASE | re.MULTILINE)
@@ -115,7 +116,8 @@ def _seed_urls_for_target(target: Target) -> list[str]:
 class ReconAgent:
     """Same-origin crawl from each in-scope Target, bounded (§1.2
     safe-by-default) rather than unbounded even against fully authorized
-    targets: depth 2, max 40 pages, modest concurrency. run() returns the
+    targets: configurable depth/page limits (Settings.crawl_max_depth/
+    crawl_max_pages, default 6/300), modest concurrency. run() returns the
     endpoints discovered (status < 400); discovered_parameters and
     discovered_forms are populated as a side effect of the same crawl for
     later agents (Injection/XSS probe parameters, login auto-discovery).
@@ -137,8 +139,13 @@ class ReconAgent:
     # short of "the entire application" for anything beyond a small
     # demo target. Still bounded (§1.2 safe-by-default — never truly
     # unbounded even against a fully authorized target), just a much
-    # more realistic ceiling; CONCURRENCY unchanged since it controls
-    # request rate against the live target, not coverage.
+    # more realistic ceiling — and configurable (Settings.crawl_max_pages/
+    # crawl_max_depth) rather than hardcoded, since this is a real
+    # scan-duration/request-volume tradeoff a deployment may want to dial
+    # back for a smaller or rate-sensitive target. These class-level
+    # values are just the fallback defaults if unset. CONCURRENCY
+    # unchanged since it controls request rate against the live target,
+    # not coverage.
     MAX_PAGES = 300
     MAX_DEPTH = 6
     CONCURRENCY = 5
@@ -163,6 +170,9 @@ class ReconAgent:
         # here means the crawl actually continues from them, same as
         # any page it found itself.
         self._extra_seed_urls = extra_seed_urls or []
+        settings = get_settings()
+        self.MAX_PAGES = settings.crawl_max_pages
+        self.MAX_DEPTH = settings.crawl_max_depth
         self._semaphore = asyncio.Semaphore(self.CONCURRENCY)
         self.discovered_parameters: list[DiscoveredParameter] = []
         self.discovered_forms: list[FormInfo] = []

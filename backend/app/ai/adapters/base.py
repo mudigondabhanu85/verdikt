@@ -5,6 +5,17 @@ from typing import Literal
 
 Role = Literal["system", "user", "assistant"]
 
+# ~4 chars/token is the standard rough estimate for English text with
+# GPT-style tokenizers — used by any adapter whose provider's response
+# doesn't include real `usage` data. Never exact, but far more honest
+# for budget/usage visibility than a flat 0, which reads as "the AI
+# didn't run" for a call that demonstrably did.
+_CHARS_PER_TOKEN_ESTIMATE = 4
+
+
+def estimate_tokens(text: str) -> int:
+    return max(1, len(text) // _CHARS_PER_TOKEN_ESTIMATE) if text else 0
+
 
 @dataclass
 class Message:

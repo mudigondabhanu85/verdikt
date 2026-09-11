@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     # OpenAI-chat-completions-compatible endpoint (the same GenericOpenAIAdapter
     # an org's own AIProviderConfig rows already use per-scan — this is just
     # the deployment-wide default, for when nothing overrides it per scan run).
-    ai_provider: Literal["claude", "openai", "custom", "spark", "fake"] = "fake"
+    ai_provider: Literal["claude", "openai", "custom", "fake"] = "fake"
     ai_model: str = "claude-haiku-4-5"
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
@@ -62,54 +62,6 @@ class Settings(BaseSettings):
     # sends the key in a raw "api-key" header instead, for gateways that
     # use that convention. See GenericOpenAIAdapter.
     custom_llm_auth_type: Literal["bearer_token", "api_key"] = "bearer_token"
-
-    # Spark — S&P Global's internal Azure-OpenAI-compatible LLM gateway
-    # (ported from the dast-automation reference implementation's
-    # SparkProvider). Set ai_provider="spark" plus one of
-    # spark_bearer_token/spark_api_key below to use it as the
-    # deployment-wide default. See app.ai.adapters.spark.SparkAdapter for
-    # why both auth modes are sent as the same "api-key"+"app_id" header
-    # pair rather than a real Authorization header.
-    spark_base_url: str = "https://sparkapi.spglobal.com"
-    spark_api_version: str = "2024-02-01"
-    # Required for every Spark request, bearer token or API key alike
-    # (see SparkAdapter's docstring — re-confirmed 2026-09 directly
-    # against the gateway). "sparkassist" is dast-automation's own
-    # confirmed-working deployment-wide default (its config.py's
-    # hardcoded default AND its README's documented current value) —
-    # copied here rather than guessed. A prior version of this comment
-    # removed that default on a mistaken theory that it was the actual
-    # root cause of an unrelated app_id incident (that incident was a
-    # per-org api_key-mode app_id being wrong for its Spark tenant, not
-    # this deployment-wide bearer-mode default being wrong).
-    spark_app_id: str | None = "sparkassist"
-    # Selects which field below get_ai_provider() reads the token from —
-    # does not change the header shape sent to Spark (see SparkAdapter).
-    spark_auth_mode: Literal["bearer_token", "api_key"] = "bearer_token"
-    spark_bearer_token: str | None = None
-    spark_api_key: str | None = None
-    # api_key mode only — a second, independent Spark API key SparkAdapter
-    # retries with once if the primary key gets a 401 (see SparkAdapter's
-    # fallback_token). None means "no fallback configured", the same as
-    # today's behavior.
-    spark_api_key_secondary: str | None = None
-
-    # Spark has two separate tenants (PROD/UAT), each with its own
-    # app_id/key registrations — an app_id valid on one gets Spark's own
-    # "The provided app_id: ... is not valid" 401 on the other. Mirrors
-    # dast-automation's SparkConfig.for_environment: one provider, one
-    # "spark" key, just a second base_url/credential set to pick between,
-    # never a second registered provider. Empty api_version/app_id below
-    # means "inherit the prod value" (S&P's own UAT tenant uses the same
-    # ones in practice unless told otherwise).
-    spark_environment: Literal["prod", "uat"] = "prod"
-    spark_uat_base_url: str = "https://sparkuatapi.spglobal.com"
-    spark_uat_api_version: str | None = None
-    spark_uat_app_id: str | None = None
-    spark_uat_auth_mode: Literal["bearer_token", "api_key"] | None = None
-    spark_uat_bearer_token: str | None = None
-    spark_uat_api_key: str | None = None
-    spark_uat_api_key_secondary: str | None = None
 
     # §10.5 visible budget guardrail — per-scan-run cap on estimated LLM
     # spend. Once exceeded, remaining LLM-dependent agent nodes are skipped
@@ -124,6 +76,16 @@ class Settings(BaseSettings):
     # own address", which is enough for same-network targets like a
     # local Juice Shop instance but not for an internet-hosted target.
     ssrf_callback_host: str | None = None
+
+    # Crawl bounds (app.agents.recon.ReconAgent) — deliberately
+    # configurable rather than hardcoded, since 300 pages at depth 6 is a
+    # substantial jump from this project's original 40/2 and can run
+    # meaningfully longer/heavier against a large or rate-limited target
+    # than an analyst may expect by default. Override per-deployment
+    # (e.g. dial back for a smaller/rate-sensitive target) without a
+    # code change.
+    crawl_max_pages: int = 300
+    crawl_max_depth: int = 6
 
 
 @lru_cache
