@@ -45,7 +45,7 @@ export function ProjectDetailPage() {
 
       <h2 className="mb-3 text-lg font-medium text-gray-800">Versions</h2>
       <p className="mb-4 text-sm text-gray-500">
-        A Version is one engagement — its own scope, targets, credentials, authorization record, and scan runs.
+        A Version is one engagement — its own scope, targets, credentials, and scan runs.
       </p>
 
       {canWrite(user?.role) && (

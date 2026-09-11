@@ -179,8 +179,8 @@ input.
 
 **Storage:** PostgreSQL for all structured data; a pluggable
 `ObjectStorageAdapter` (local disk by default, S3-compatible for
-production) for screenshots, uploaded authorization letters, and uploaded
-traffic files.
+production) for evidence screenshots, VGS report attachments, and
+uploaded traffic files.
 
 ---
 
