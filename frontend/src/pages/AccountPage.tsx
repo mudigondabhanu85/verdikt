@@ -150,93 +150,6 @@ function RotateSecretControl({ configId }: { configId: string }) {
   )
 }
 
-// Lets an org route different agent roles to different models on the
-// same provider account after the fact — heavier reasoning
-// (business-logic hypothesis generation, attack-chain analysis) to a
-// stronger/costlier model, cheap mechanical classification to a
-// smaller/faster one — without touching the secret (RotateSecretControl's
-// job) or re-picking "set default". Same open/closed pattern as that
-// component, for the same reason (per-row state without a parent array).
-function ModelTiersControl({
-  configId,
-  currentModel,
-  currentReasoning,
-  currentClassification,
-}: {
-  configId: string
-  currentModel: string
-  currentReasoning: string | null
-  currentClassification: string | null
-}) {
-  const queryClient = useQueryClient()
-  const [open, setOpen] = useState(false)
-  const [model, setModel] = useState('')
-  const [reasoning, setReasoning] = useState('')
-  const [classification, setClassification] = useState('')
-
-  const updateMutation = useMutation({
-    mutationFn: () =>
-      api.aiProviderConfigs.updateModels(configId, {
-        model: model.trim() || undefined,
-        model_reasoning: reasoning.trim(),
-        model_classification: classification.trim(),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['ai-provider-configs'] })
-      setOpen(false)
-    },
-  })
-
-  if (!open) {
-    return (
-      <button
-        onClick={() => {
-          setModel(currentModel)
-          setReasoning(currentReasoning ?? '')
-          setClassification(currentClassification ?? '')
-          setOpen(true)
-        }}
-        className="text-xs text-purple-700 hover:underline"
-      >
-        Route models by task
-      </button>
-    )
-  }
-
-  const tierInput = (value: string, onChange: (v: string) => void, placeholder: string, width: string) => (
-    <input
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-      className={`${width} rounded border border-gray-300 px-2 py-1 text-xs focus:border-purple-500 focus:outline-none`}
-    />
-  )
-
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault()
-        updateMutation.mutate()
-      }}
-      className="flex items-center gap-1"
-    >
-      {tierInput(model, setModel, 'specialist model (default)', 'w-48')}
-      {tierInput(reasoning, setReasoning, 'reasoning model (blank = default)', 'w-48')}
-      {tierInput(classification, setClassification, 'classification model (blank = default)', 'w-48')}
-      <button
-        type="submit"
-        disabled={updateMutation.isPending}
-        className="text-xs text-purple-700 hover:underline disabled:opacity-50"
-      >
-        Save
-      </button>
-      <button type="button" onClick={() => setOpen(false)} className="text-xs text-gray-400 hover:underline">
-        cancel
-      </button>
-    </form>
-  )
-}
-
 function AiProviderConfigsSection() {
   const queryClient = useQueryClient()
   const [label, setLabel] = useState('')
@@ -365,22 +278,10 @@ function AiProviderConfigsSection() {
               )}
               <span className="ml-2 text-xs text-gray-400">{cfg.provider} / {cfg.model}</span>
               <span className="ml-2 text-xs text-gray-400">({cfg.auth_type})</span>
-              {cfg.model_reasoning && (
-                <span className="ml-2 text-xs text-gray-400">reasoning={cfg.model_reasoning}</span>
-              )}
-              {cfg.model_classification && (
-                <span className="ml-2 text-xs text-gray-400">classification={cfg.model_classification}</span>
-              )}
               <span className="ml-2 font-mono text-xs text-gray-400">{cfg.masked_reference}</span>
             </span>
             <span className="flex items-center gap-3">
               <RotateSecretControl configId={cfg.id} />
-              <ModelTiersControl
-                configId={cfg.id}
-                currentModel={cfg.model}
-                currentReasoning={cfg.model_reasoning}
-                currentClassification={cfg.model_classification}
-              />
               {!cfg.is_default && (
                 <button
                   onClick={() => setDefaultMutation.mutate(cfg.id)}

@@ -31,20 +31,11 @@ class AIProviderConfig(Base):
     org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"))
     label: Mapped[str] = mapped_column(String(100))
     provider: Mapped[str] = mapped_column(String(20))
-    # The specialist-tier model (injection/XSS/access-control-style
-    # agents) — also the fallback for the two tiers below when an org
-    # hasn't bothered picking distinct models, so a config keeps working
-    # exactly as before if it only ever sets this one field.
+    # The one model every agent in a scan run uses — no per-task manual
+    # model routing. Pick a capable model here if heavier reasoning
+    # tasks (business-logic hypothesis generation, attack-chain
+    # analysis, adversarial finding validation) matter for this org.
     model: Mapped[str] = mapped_column(String(100))
-    # Optional per-tier overrides — a single provider account can
-    # usually reach several model sizes, so route
-    # heavy reasoning (business-logic hypothesis generation, attack-chain
-    # analysis, adversarial finding validation) to a stronger/costlier
-    # model and cheap mechanical classification to a smaller/faster one,
-    # instead of paying reasoning-model prices for every single call.
-    # See app.ai.model_routing.ModelRouter / AGENT_ROLE_TIER.
-    model_reasoning: Mapped[str | None] = mapped_column(String(100))
-    model_classification: Mapped[str | None] = mapped_column(String(100))
     # Required (and only meaningful) when provider == "custom" — a
     # self-hosted/in-house model's base URL (vLLM, Ollama, LM Studio, TGI,
     # etc.), or an override base URL for a named provider.

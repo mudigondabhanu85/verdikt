@@ -279,10 +279,6 @@ export interface AIProviderConfigOut {
   label: string
   provider: AiProviderType
   model: string
-  // Optional per-task overrides — unset means every agent role just
-  // uses `model`. See backend app.ai.model_routing.ModelRouter.
-  model_reasoning: string | null
-  model_classification: string | null
   base_url: string | null
   auth_type: AiProviderAuthType
   masked_reference: string

@@ -37,7 +37,6 @@ from app.agents.websocket_security import WebSocketAgent
 from app.agents.xss import XSSAgent
 from app.agents.xxe import XxeAgent
 from app.ai.budget import BudgetGuard, budget_stop_error
-from app.ai.model_routing import ModelRouter
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
 from app.models.finding import Finding
@@ -74,7 +73,7 @@ def build_graph(
     credential_sets: list[CredentialSet],
     business_rules: list[BusinessRule],
     budget_guard: BudgetGuard,
-    model_router: ModelRouter,
+    ai_model: str,
     scope_entries: list[ScopeEntry],
 ):
     """Wires the agent graph: recon fans out to every check that only
@@ -356,7 +355,7 @@ def build_graph(
             agent_job_id=job.id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=model_router.for_role("deserialization"),
+            ai_model=ai_model,
         )
         try:
             candidates = await agent.run(
@@ -417,7 +416,7 @@ def build_graph(
             agent_job_id=job.id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=model_router.for_role("request_smuggling"),
+            ai_model=ai_model,
         )
         try:
             candidates = await agent.run(state.get("discovered_endpoints", []))
@@ -568,7 +567,7 @@ def build_graph(
             client,
             targets,
             budget_guard=budget_guard,
-            ai_model=model_router.for_role("recon_planner"),
+            ai_model=ai_model,
             session=auth_session,
         )
         try:
@@ -601,7 +600,7 @@ def build_graph(
             agent_job_id=job.id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=model_router.for_role("injection"),
+            ai_model=ai_model,
         )
         try:
             findings = await agent.run(
@@ -630,7 +629,7 @@ def build_graph(
             agent_job_id=job.id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=model_router.for_role("xss"),
+            ai_model=ai_model,
         )
         try:
             candidates = await agent.run(
@@ -670,7 +669,7 @@ def build_graph(
             agent_job_id=job.id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=model_router.for_role("access_control"),
+            ai_model=ai_model,
         )
         try:
             findings = await agent.run(
@@ -705,7 +704,7 @@ def build_graph(
             version_id=version_id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=model_router.for_role("business_logic_planner"),
+            ai_model=ai_model,
             session_lock=client.session_lock,
         )
         try:
@@ -735,7 +734,7 @@ def build_graph(
             agent_job_id=job.id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=model_router.for_role("business_logic"),
+            ai_model=ai_model,
             sessions=state.get("sessions", {}),
             credential_labels=credential_labels,
         )

@@ -81,6 +81,71 @@ async def test_report_csv_contains_one_row_per_finding(client, db_adapter):
     assert check_ids == {"missing-hsts", "sql-injection"}
 
 
+async def test_report_vgs_docx_generates_without_a_curated_draft(client, db_adapter):
+    """The Reports tab's per-scan-run VGS export must work immediately
+    after a scan completes — no VgsReportDraft, no manual curation
+    through the VGS workspace, unlike the real workspace's own
+    equivalent (GET /versions/{id}/vgs-report-draft/report.docx)."""
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+    scan_run_id = await _seed_scan_run_with_findings(
+        db_adapter,
+        version_id,
+        findings=[
+            {"check_id": "missing-hsts", "severity": "Low"},
+            {"check_id": "sql-injection", "severity": "Critical", "affected_endpoints": ["http://site.test/search?q=1"]},
+        ],
+    )
+
+    resp = await client.get(f"/scan-runs/{scan_run_id}/report.vgs.docx", headers=admin["headers"])
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert "attachment" in resp.headers["content-disposition"]
+    assert len(resp.content) > 0
+
+    # Nothing curated should have been persisted by a one-shot export.
+    from sqlalchemy import select as _select
+
+    from app.models.vgs_vulnerability import VgsReportDraft as _VgsReportDraft
+
+    async with session_scope(db_adapter) as session:
+        drafts = (
+            await session.execute(_select(_VgsReportDraft).where(_VgsReportDraft.version_id == uuid.UUID(version_id)))
+        ).scalars().all()
+        assert drafts == []
+
+
+async def test_report_vgs_docx_groups_findings_by_check_and_title(client, db_adapter):
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+    scan_run_id = await _seed_scan_run_with_findings(
+        db_adapter,
+        version_id,
+        findings=[
+            {"check_id": "missing-hsts", "severity": "Low", "affected_endpoints": ["http://site.test/a"]},
+            {"check_id": "missing-hsts", "severity": "Low", "affected_endpoints": ["http://site.test/b"]},
+        ],
+    )
+
+    resp = await client.get(f"/scan-runs/{scan_run_id}/report.vgs.docx", headers=admin["headers"])
+    assert resp.status_code == 200, resp.text
+
+    from docx import Document
+
+    document = Document(io.BytesIO(resp.content))
+    full_text = "\n".join(p.text for p in document.paragraphs)
+    # Grouped into one vulnerability *detail section*, not one per
+    # endpoint instance — "CVSS Score:" is only emitted once per detail
+    # section, so two would mean grouping silently regressed to one row
+    # per endpoint. Both endpoints still show up in the merged
+    # description text either way.
+    assert full_text.count("CVSS Score:") == 1
+    assert "site.test/a" in full_text
+    assert "site.test/b" in full_text
+
+
 async def test_diff_report_classifies_new_fixed_and_still_open(client, db_adapter):
     admin = await register_org_admin(client)
     _, version_id = await create_project_and_version(client, admin["headers"])

@@ -9,7 +9,6 @@ from app.agents.graph import build_graph
 from app.agents.http_client import ScopedHttpClient, install_commit_backstop
 from app.ai import provider as ai_provider
 from app.ai.budget import BudgetGuard, budget_stop_error
-from app.ai.model_routing import ModelRouter
 from app.db import session as db_session
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
@@ -22,7 +21,7 @@ from app.notifications.vgs_push import push_findings_to_vgs
 
 
 async def _run_chain_analysis(
-    session, *, scan_run: ScanRun, budget_guard: BudgetGuard, model_router: ModelRouter
+    session, *, scan_run: ScanRun, budget_guard: BudgetGuard, ai_model: str
 ) -> None:
     """§2's Chain Analysis Agent runs after every other agent has fully
     finished (not as a graph fan-in node — LangGraph's join semantics
@@ -54,7 +53,7 @@ async def _run_chain_analysis(
         agent_job_id=job.id,
         db_session=session,
         budget_guard=budget_guard,
-        ai_model=model_router.for_role("chain_analysis"),
+        ai_model=ai_model,
     )
     try:
         chains = await agent.run(findings)
@@ -152,7 +151,7 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
                 db_session=session,
                 session_lock=session_lock,
             )
-            provider, model_router = await ai_provider.resolve_provider_and_model(session, scan_run)
+            provider, ai_model = await ai_provider.resolve_provider_and_model(session, scan_run)
             budget_guard = BudgetGuard(scan_run, session, provider, lock=session_lock)
 
             graph = build_graph(
@@ -164,12 +163,12 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
                 credential_sets=credential_sets,
                 business_rules=business_rules,
                 budget_guard=budget_guard,
-                model_router=model_router,
+                ai_model=ai_model,
                 scope_entries=scope_entries,
             )
             await graph.ainvoke({})
             await _run_chain_analysis(
-                session, scan_run=scan_run, budget_guard=budget_guard, model_router=model_router
+                session, scan_run=scan_run, budget_guard=budget_guard, ai_model=ai_model
             )
 
             scan_run.status = "completed"

@@ -19,19 +19,25 @@ from app.auth.rbac import require_permission
 from app.db.session import get_db_session
 from app.models.ai_provider_config import AIProviderConfig
 from app.models.attack_chain import AttackChain
-from app.models.finding import Finding
+from app.models.finding import Evidence, Finding
+from app.models.org_branding import OrgBranding
 from app.models.organization import User
+from app.models.project import Project, ScopeEntry, Version
 from app.models.scan import AgentJob, ScanRun
 from app.models.target import Target
+from app.models.vgs_vulnerability import VgsEvidenceStep, VgsReportDraft, VgsReportVulnerability
 from app.reporting.csv_report import render_csv_report
 from app.reporting.docx_report import render_docx_report
 from app.reporting.executive_summary import generate_executive_summary
-from app.reporting.html_report import render_html_report
+from app.reporting.grouping import group_findings
+from app.reporting.html_report import BrandingInfo, render_html_report
 from app.reporting.pdf_report import render_pdf_report
 from app.reporting.screenshots import load_screenshots_by_finding
+from app.reporting.vgs_docx_report import build_vulnerability_from_group, render_vgs_docx_report
 from app.schemas.attack_chain import AttackChainOut
 from app.schemas.finding import FindingOut
 from app.schemas.scan import AgentJobOut, ScanRunCreate, ScanRunDetail, ScanRunDiffOut, ScanRunOut
+from app.storage.local_disk import get_object_storage
 
 router = APIRouter(tags=["scans"])
 
@@ -324,13 +330,13 @@ async def _get_or_generate_executive_summary(
     if scan_run.executive_summary:
         return scan_run.executive_summary
 
-    provider, model_router = await resolve_provider_and_model(session, scan_run)
+    provider, ai_model = await resolve_provider_and_model(session, scan_run)
     guard = BudgetGuard(scan_run, session, provider)
     summary = await generate_executive_summary(
         scan_run=detail,
         findings=findings,
         budget_guard=guard,
-        ai_model=model_router.for_role("reporting"),
+        ai_model=ai_model,
     )
     scan_run.executive_summary = summary
     await session.commit()
@@ -427,6 +433,112 @@ async def get_report_docx(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="verdikt-report-{scan_run_id}.docx"'},
+    )
+
+
+@router.get("/scan-runs/{scan_run_id}/report.vgs.docx")
+async def get_report_vgs_docx(
+    scan_run_id: uuid.UUID,
+    user: User = Depends(require_permission("scan", "read")),
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    """The same VGS-shaped export (severity pie chart, numbered summary
+    table, version-history table — see app.reporting.vgs_docx_report)
+    the native VGS workspace produces, but generated fresh from this
+    ONE scan run's own confirmed findings — no VgsReportDraft to curate
+    first through the Vulnerability Picker/Manage Vulnerabilities/
+    Evidence workflow. Nothing here is persisted: the draft/vulnerability/
+    evidence-step objects below exist only for the duration of this
+    request, unlike the real workspace's own equivalent
+    (GET /versions/{id}/vgs-report-draft/report.docx), which reads back
+    an analyst-curated, persisted draft. Use this for a quick VGS-format
+    copy of one specific scan; use the workspace when curation (picking
+    a subset, editing write-ups, adding evidence steps by hand) matters.
+    """
+    scan_run = await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    findings = await _list_findings(session, scan_run_id)
+    groups = group_findings(findings)
+
+    version = await session.get(Version, scan_run.version_id)
+    project = await session.get(Project, version.project_id) if version is not None else None
+    targets = list(
+        (await session.execute(select(Target).where(Target.version_id == scan_run.version_id))).scalars()
+    )
+    scope_entries = list(
+        (await session.execute(select(ScopeEntry).where(ScopeEntry.version_id == scan_run.version_id))).scalars()
+    )
+
+    draft = VgsReportDraft(
+        id=uuid.uuid4(),
+        version_id=scan_run.version_id,
+        app_title=f"{project.name} — {version.name}" if project and version else "Verdikt Scan",
+        scope=", ".join(f"{e.host}:{e.port}" if e.port else e.host for e in scope_entries) or "See Scope tab",
+        urls=", ".join(t.base_url or f"{t.host}:{t.port}" for t in targets) or "See Targets tab",
+        analyst_name="Verdikt (automated)",
+        requester_name=user.email,
+    )
+
+    vulnerabilities = [
+        build_vulnerability_from_group(draft.id, group, order_index)
+        for order_index, group in enumerate(groups)
+    ]
+
+    evidence_steps_by_vuln_id: dict[uuid.UUID, list[VgsEvidenceStep]] = {}
+    screenshot_object_keys: set[str] = set()
+    for vuln, group in zip(vulnerabilities, groups):
+        evidence_result = await session.execute(
+            select(Evidence).where(Evidence.finding_id == group.shared.id)
+        )
+        evidence = evidence_result.scalar_one_or_none()
+        steps: list[VgsEvidenceStep] = []
+        if evidence is not None and evidence.screenshot_refs:
+            steps.append(
+                VgsEvidenceStep(
+                    id=uuid.uuid4(),
+                    report_vulnerability_id=vuln.id,
+                    step_order=0,
+                    comment=evidence.additional_notes or "Captured automatically from the scan finding.",
+                    screenshot_object_keys=list(evidence.screenshot_refs),
+                )
+            )
+            screenshot_object_keys.update(evidence.screenshot_refs)
+        evidence_steps_by_vuln_id[vuln.id] = steps
+
+    storage = get_object_storage()
+    screenshot_bytes_by_object_key: dict[str, bytes] = {}
+    for key in screenshot_object_keys:
+        try:
+            screenshot_bytes_by_object_key[key] = await storage.get(key)
+        except OSError:
+            continue
+
+    branding_result = await session.execute(select(OrgBranding).where(OrgBranding.org_id == user.org_id))
+    org_branding = branding_result.scalar_one_or_none()
+    branding = None
+    if org_branding is not None:
+        logo_bytes = None
+        if org_branding.logo_object_key:
+            try:
+                logo_bytes = await storage.get(org_branding.logo_object_key)
+            except OSError:
+                logo_bytes = None
+        branding = BrandingInfo(
+            company_name=org_branding.company_name,
+            primary_color_hex=org_branding.primary_color_hex,
+            logo_bytes=logo_bytes,
+        )
+
+    docx_bytes = render_vgs_docx_report(
+        draft=draft,
+        vulnerabilities=vulnerabilities,
+        evidence_steps_by_vuln_id=evidence_steps_by_vuln_id,
+        screenshot_bytes_by_object_key=screenshot_bytes_by_object_key,
+        branding=branding,
+    )
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="vgs-report-{scan_run_id}.docx"'},
     )
 
 

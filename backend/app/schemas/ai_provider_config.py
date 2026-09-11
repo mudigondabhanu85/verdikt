@@ -10,14 +10,6 @@ class AIProviderConfigCreate(BaseModel):
     label: str
     provider: str  # "claude" | "openai" | "gemini" | "grok" | "custom"
     model: str
-    # Optional per-task overrides — see app.ai.model_routing.ModelRouter.
-    # Leave unset and every agent role just uses `model`, same as before
-    # this existed. Set them to route heavier reasoning (business-logic
-    # hypothesis generation, attack-chain analysis) to a stronger model
-    # and cheap mechanical classification to a smaller/faster one on the
-    # same provider account.
-    model_reasoning: str | None = None
-    model_classification: str | None = None
     api_key: str
     base_url: str | None = None  # required (and only meaningful) for "custom"; optional override for "gemini"
     auth_type: str = "api_key"  # "api_key" | "bearer_token" — see AIProviderConfig.auth_type
@@ -46,28 +38,12 @@ class AIProviderConfigRotateSecret(BaseModel):
     api_key: str | None = None
 
 
-class AIProviderConfigUpdateModels(BaseModel):
-    """Body for PATCH .../{config_id}/models — lets an org route
-    different agent roles to different models on the same provider
-    account after the fact, without touching the secret/app_id (that's
-    rotate-secret's job) or re-picking "set default". See
-    app.ai.model_routing.ModelRouter. Any field left unset (None)
-    clears that tier override, falling back to `model`.
-    """
-
-    model: str | None = None
-    model_reasoning: str | None = None
-    model_classification: str | None = None
-
-
 class AIProviderConfigOut(BaseModel):
     id: uuid.UUID
     org_id: uuid.UUID
     label: str
     provider: str
     model: str
-    model_reasoning: str | None
-    model_classification: str | None
     base_url: str | None
     auth_type: str
     masked_reference: str

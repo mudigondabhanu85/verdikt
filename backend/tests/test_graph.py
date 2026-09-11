@@ -9,7 +9,6 @@ from sqlalchemy import select
 from app.agents.graph import build_graph
 from app.agents.http_client import ScopedHttpClient
 from app.ai.budget import BudgetGuard
-from app.ai.model_routing import ModelRouter
 from app.models.credential import CredentialSet
 from app.models.project import ScopeEntry
 from app.models.scan import AgentJob, ScanRun
@@ -94,7 +93,7 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             credential_sets=[credential],
             business_rules=[],
             budget_guard=guard,
-            model_router=ModelRouter.single_model("fake-model"),
+            ai_model="fake-model",
             scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
         )
         final_state = await graph.ainvoke({})

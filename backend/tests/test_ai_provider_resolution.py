@@ -51,9 +51,9 @@ async def test_resolve_falls_back_to_global_default_when_no_config_attached(db_a
         await session.commit()
         await session.refresh(scan_run)
 
-        provider, model_router = await resolve_provider_and_model(session, scan_run)
+        provider, ai_model = await resolve_provider_and_model(session, scan_run)
         assert isinstance(provider, NullAIProviderAdapter)
-        assert model_router.specialist  # global default ai_model string, every tier the same
+        assert ai_model  # global default ai_model string
 
 
 async def test_resolve_uses_the_orgs_default_config_when_none_attached(db_adapter, monkeypatch):
@@ -81,9 +81,9 @@ async def test_resolve_uses_the_orgs_default_config_when_none_attached(db_adapte
         await session.commit()
         await session.refresh(scan_run)
 
-        provider, model_router = await resolve_provider_and_model(session, scan_run)
+        provider, ai_model = await resolve_provider_and_model(session, scan_run)
         assert isinstance(provider, GenericOpenAIAdapter)
-        assert model_router.specialist == "llama3.1:8b"
+        assert ai_model == "llama3.1:8b"
 
 
 async def test_resolve_prefers_scan_runs_own_config_over_the_orgs_default(db_adapter):
@@ -121,9 +121,9 @@ async def test_resolve_prefers_scan_runs_own_config_over_the_orgs_default(db_ada
         await session.commit()
         await session.refresh(scan_run)
 
-        provider, model_router = await resolve_provider_and_model(session, scan_run)
+        provider, ai_model = await resolve_provider_and_model(session, scan_run)
         assert isinstance(provider, GenericOpenAIAdapter)
-        assert model_router.specialist == "llama3.1:8b"
+        assert ai_model == "llama3.1:8b"
 
 
 async def test_resolve_uses_attached_custom_provider_config(db_adapter):
@@ -151,9 +151,9 @@ async def test_resolve_uses_attached_custom_provider_config(db_adapter):
         await session.commit()
         await session.refresh(scan_run)
 
-        provider, model_router = await resolve_provider_and_model(session, scan_run)
+        provider, ai_model = await resolve_provider_and_model(session, scan_run)
         assert isinstance(provider, GenericOpenAIAdapter)
-        assert model_router.specialist == "llama3.1:8b"
+        assert ai_model == "llama3.1:8b"
 
 
 async def test_resolve_falls_back_when_attached_config_was_deleted(db_adapter, monkeypatch):
@@ -271,7 +271,9 @@ def test_build_adapter_from_config_honors_bearer_token_auth_type_for_custom():
     assert isinstance(adapter, GenericOpenAIAdapter)
 
 
-async def test_resolve_returns_tier_overrides_from_the_default_config(db_adapter, monkeypatch):
+async def test_resolve_returns_the_default_configs_model(db_adapter, monkeypatch):
+    """Every agent in a scan uses this one model — no per-task manual
+    model routing to resolve or override."""
     import app.ai.provider as provider_module
 
     monkeypatch.setattr(provider_module, "get_ai_provider", lambda: NullAIProviderAdapter())
@@ -283,8 +285,6 @@ async def test_resolve_returns_tier_overrides_from_the_default_config(db_adapter
             label="Org default",
             provider="claude",
             model="gpt-4o-mini",
-            model_reasoning="gpt-4o",
-            model_classification="gpt-4o-nano",
             auth_type="api_key",
             encrypted_api_key=encrypt_secret("test-key"),
             masked_reference="****-key",
@@ -296,40 +296,8 @@ async def test_resolve_returns_tier_overrides_from_the_default_config(db_adapter
         await session.commit()
         await session.refresh(scan_run)
 
-        _provider, model_router = await resolve_provider_and_model(session, scan_run)
-        assert model_router.specialist == "gpt-4o-mini"
-        assert model_router.reasoning == "gpt-4o"
-        assert model_router.classification == "gpt-4o-nano"
-        assert model_router.for_role("business_logic") == "gpt-4o"
-        assert model_router.for_role("injection") == "gpt-4o-mini"
-
-
-async def test_resolve_tier_overrides_fall_back_to_the_base_model_when_unset(db_adapter, monkeypatch):
-    import app.ai.provider as provider_module
-
-    monkeypatch.setattr(provider_module, "get_ai_provider", lambda: NullAIProviderAdapter())
-
-    async with session_scope(db_adapter) as session:
-        _org, version = await _make_org_project_version(session)
-        default_config = AIProviderConfig(
-            org_id=_org.id,
-            label="Org default",
-            provider="custom",
-            model="llama3.1:8b",
-            base_url="http://localhost:11434/v1",
-            encrypted_api_key=encrypt_secret("sk-abc"),
-            masked_reference="****abc",
-            is_default=True,
-        )
-        session.add(default_config)
-        scan_run = ScanRun(version_id=version.id, status="pending", requested_by=uuid.uuid4())
-        session.add(scan_run)
-        await session.commit()
-        await session.refresh(scan_run)
-
-        _provider, model_router = await resolve_provider_and_model(session, scan_run)
-        assert model_router.for_role("business_logic") == "llama3.1:8b"
-        assert model_router.for_role("injection") == "llama3.1:8b"
+        _provider, ai_model = await resolve_provider_and_model(session, scan_run)
+        assert ai_model == "gpt-4o-mini"
 
 
 def test_build_adapter_from_config_honors_api_key_auth_type_for_custom():

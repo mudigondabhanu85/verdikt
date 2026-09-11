@@ -21,7 +21,7 @@ from app.models.vgs_vulnerability import (
 )
 from app.reporting.grouping import FindingGroup, group_findings
 from app.reporting.html_report import BrandingInfo
-from app.reporting.vgs_docx_report import render_vgs_docx_report
+from app.reporting.vgs_docx_report import build_vulnerability_from_group, render_vgs_docx_report
 from app.schemas.finding import FindingOut
 from app.schemas.vgs_vulnerability import (
     AvailableFindingOut,
@@ -303,46 +303,6 @@ async def add_report_vulnerability(
     return vuln
 
 
-_MAX_LISTED_ENDPOINTS = 20
-
-
-def _build_vulnerability_from_group(
-    draft: VgsReportDraft, group: FindingGroup, order_index: int
-) -> VgsReportVulnerability:
-    """One report vulnerability per (check_id, title) group, not per raw
-    Finding row — a scan confirms the same vulnerability class across
-    every crawled endpoint, and app.reporting.grouping.group_findings is
-    the codebase's existing fix for exactly this ("a real 291-finding
-    scan produced a 629-page PDF"), already relied on by the DOCX/PDF/HTML
-    reports. Reused here instead of reinvented so the VGS report doesn't
-    get one entry per endpoint instance (thousands of near-duplicate rows
-    for a single vulnerability class)."""
-    representative = group.shared
-    endpoints = sorted({ep for finding in group.instances for ep in finding.affected_endpoints})
-
-    description = representative.plain_language_summary or representative.technical_description
-    if len(endpoints) > 1:
-        shown = endpoints[:_MAX_LISTED_ENDPOINTS]
-        endpoint_block = "\n".join(f"- {endpoint}" for endpoint in shown)
-        remainder = len(endpoints) - len(shown)
-        if remainder > 0:
-            endpoint_block += f"\n...and {remainder} more"
-        description = f"{description}\n\nAffected endpoints ({len(endpoints)}):\n{endpoint_block}"
-
-    return VgsReportVulnerability(
-        report_draft_id=draft.id,
-        source_finding_id=representative.id,
-        order_index=order_index,
-        title=representative.title,
-        severity=representative.severity,
-        cvss_score=str(representative.cvss_score),
-        cvss_vector=representative.cvss_vector,
-        description=description,
-        recommendation=representative.remediation,
-        reference=representative.portswigger_reference_url or "\n".join(representative.references),
-    )
-
-
 async def _attach_finding_evidence(session: AsyncSession, vuln: VgsReportVulnerability, finding: Finding) -> None:
     evidence_result = await session.execute(select(Evidence).where(Evidence.finding_id == finding.id))
     evidence = evidence_result.scalar_one_or_none()
@@ -405,7 +365,7 @@ async def _auto_seed_findings_into_draft(
         for group in groups:
             if any(finding.id in already_ids for finding in group.instances):
                 continue
-            vuln = _build_vulnerability_from_group(draft, group, order_index)
+            vuln = build_vulnerability_from_group(draft.id, group, order_index)
             order_index += 1
             session.add(vuln)
             await session.flush()
@@ -523,7 +483,7 @@ async def add_report_vulnerability_from_finding(
     )
     order_index = len(list(count_result.scalars().all()))
 
-    vuln = _build_vulnerability_from_group(draft, group, order_index)
+    vuln = build_vulnerability_from_group(draft.id, group, order_index)
     session.add(vuln)
     await session.flush()
     await _attach_finding_evidence(session, vuln, group.shared)

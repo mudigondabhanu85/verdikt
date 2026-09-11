@@ -145,7 +145,7 @@ export async function fetchObjectBlobUrl(objectKey: string): Promise<string | nu
 // Authorization header to a browser-navigated download).
 export async function downloadReport(
   scanRunId: string,
-  format: 'json' | 'html' | 'pdf' | 'docx' | 'csv',
+  format: 'json' | 'html' | 'pdf' | 'docx' | 'csv' | 'vgs.docx',
 ): Promise<void> {
   const token = getToken()
   const response = await fetch(`${BASE_URL}/scan-runs/${scanRunId}/report.${format}`, {
@@ -397,8 +397,6 @@ export const api = {
       label: string
       provider: string
       model: string
-      model_reasoning?: string
-      model_classification?: string
       api_key: string
       base_url?: string
       auth_type?: string
@@ -407,15 +405,6 @@ export const api = {
       request<AIProviderConfigOut>(`/ai-provider-configs/${id}/set-default`, { method: 'POST' }),
     rotateSecret: (id: string, body: { api_key?: string }) =>
       request<AIProviderConfigOut>(`/ai-provider-configs/${id}/rotate-secret`, { method: 'POST', body }),
-    // Routes different agent roles (business-logic reasoning vs.
-    // mechanical classification vs. the specialist-tier default) to
-    // different models on the same provider account — see
-    // app.ai.model_routing.ModelRouter on the backend. An empty string
-    // clears a tier override back to following the base `model`.
-    updateModels: (
-      id: string,
-      body: { model?: string; model_reasoning?: string; model_classification?: string }
-    ) => request<AIProviderConfigOut>(`/ai-provider-configs/${id}/models`, { method: 'PATCH', body }),
     delete: (id: string) => request<void>(`/ai-provider-configs/${id}`, { method: 'DELETE' }),
   },
 

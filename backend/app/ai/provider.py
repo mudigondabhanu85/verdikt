@@ -11,7 +11,6 @@ from app.ai.adapters.generic_openai import GenericOpenAIAdapter
 from app.ai.adapters.grok import GrokAdapter
 from app.ai.adapters.null import NullAIProviderAdapter
 from app.ai.adapters.openai import OpenAIAdapter
-from app.ai.model_routing import ModelRouter
 from app.config import get_settings
 from app.models.ai_provider_config import AIProviderConfig
 from app.models.project import Project, Version
@@ -72,7 +71,7 @@ def build_adapter_from_config(config: AIProviderConfig) -> AIProviderAdapter:
 
 async def resolve_provider_and_model(
     session: AsyncSession, scan_run: ScanRun
-) -> tuple[AIProviderAdapter, ModelRouter]:
+) -> tuple[AIProviderAdapter, str]:
     """The one place scan execution (app.agents.runner) and report
     generation (executive summary) both go to pick a provider+model for
     a given ScanRun — keeps them from drifting into two different
@@ -86,6 +85,11 @@ async def resolve_provider_and_model(
        in-house OpenAI-compatible gateway) once, with no .env editing.
     3. The deployment-wide AI_PROVIDER .env setting — the final
        fallback for an org that hasn't configured one of its own.
+
+    Every agent in the scan uses this one model — no per-task manual
+    model routing. An org that wants heavier reasoning for harder tasks
+    picks a capable model here; there's no separate tier configuration
+    to maintain.
     """
     if scan_run.ai_provider_config_id is not None:
         config = await session.get(AIProviderConfig, scan_run.ai_provider_config_id)
@@ -95,7 +99,7 @@ async def resolve_provider_and_model(
                 "provider=%s label=%r",
                 scan_run.id, config.id, config.provider, config.label,
             )
-            return build_adapter_from_config(config), _model_router_from_config(config)
+            return build_adapter_from_config(config), config.model
         logger.warning(
             "ai_provider_config_id=%s attached to scan_run_id=%s no longer exists — "
             "falling through to org default / deployment .env",
@@ -127,23 +131,11 @@ async def resolve_provider_and_model(
                 "provider=%s label=%r",
                 scan_run.id, org_id, default_config.id, default_config.provider, default_config.label,
             )
-            return build_adapter_from_config(default_config), _model_router_from_config(default_config)
+            return build_adapter_from_config(default_config), default_config.model
         logger.warning(
             "ai_provider_resolved via=deployment_env_fallback scan_run_id=%s org_id=%s "
             "reason=no_default_config_for_org ai_provider=%s",
             scan_run.id, org_id, get_settings().ai_provider,
         )
 
-    return get_ai_provider(), ModelRouter.single_model(get_settings().ai_model)
-
-
-def _model_router_from_config(config: AIProviderConfig) -> ModelRouter:
-    """A config only has to set `model`; the two tier overrides are
-    optional, so an org that never touches them keeps the pre-routing
-    behavior of one model for every task.
-    """
-    return ModelRouter(
-        specialist=config.model,
-        reasoning=config.model_reasoning or config.model,
-        classification=config.model_classification or config.model,
-    )
+    return get_ai_provider(), get_settings().ai_model

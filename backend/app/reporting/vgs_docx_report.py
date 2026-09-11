@@ -23,7 +23,55 @@ from docx.shared import Inches, Pt, RGBColor
 from matplotlib.patches import Patch
 
 from app.models.vgs_vulnerability import VgsEvidenceStep, VgsReportDraft, VgsReportVulnerability
+from app.reporting.grouping import FindingGroup
 from app.reporting.html_report import BrandingInfo
+
+_MAX_LISTED_ENDPOINTS = 20
+
+
+def build_vulnerability_from_group(
+    report_draft_id: uuid.UUID, group: FindingGroup, order_index: int
+) -> VgsReportVulnerability:
+    """One report vulnerability per (check_id, title) group, not per raw
+    Finding row — a scan confirms the same vulnerability class across
+    every crawled endpoint, and app.reporting.grouping.group_findings is
+    the codebase's existing fix for exactly this ("a real 291-finding
+    scan produced a 629-page PDF"), already relied on by the DOCX/PDF/HTML
+    reports. Reused here (both by the curated VGS workspace's own report
+    generation and by the Reports tab's per-scan-run VGS export) instead
+    of reinvented, so neither gets one entry per endpoint instance
+    (thousands of near-duplicate rows for a single vulnerability class).
+    Returns a transient, unsaved VgsReportVulnerability — the caller
+    decides whether to persist it (the curated workspace does; a
+    one-shot per-scan-run export never does) — so `.id` is always set
+    explicitly here rather than left for a DB-side default that only
+    fires on flush.
+    """
+    representative = group.shared
+    endpoints = sorted({ep for finding in group.instances for ep in finding.affected_endpoints})
+
+    description = representative.plain_language_summary or representative.technical_description
+    if len(endpoints) > 1:
+        shown = endpoints[:_MAX_LISTED_ENDPOINTS]
+        endpoint_block = "\n".join(f"- {endpoint}" for endpoint in shown)
+        remainder = len(endpoints) - len(shown)
+        if remainder > 0:
+            endpoint_block += f"\n...and {remainder} more"
+        description = f"{description}\n\nAffected endpoints ({len(endpoints)}):\n{endpoint_block}"
+
+    return VgsReportVulnerability(
+        id=uuid.uuid4(),
+        report_draft_id=report_draft_id,
+        source_finding_id=representative.id,
+        order_index=order_index,
+        title=representative.title,
+        severity=representative.severity,
+        cvss_score=str(representative.cvss_score),
+        cvss_vector=representative.cvss_vector,
+        description=description,
+        recommendation=representative.remediation,
+        reference=representative.portswigger_reference_url or "\n".join(representative.references),
+    )
 
 _SEVERITY_ORDER = ["Critical", "High", "Medium", "Low"]
 _SEVERITY_COLORS = {

@@ -431,9 +431,9 @@ class InjectionAgent:
     ai_confirmed Findings without browser proof.
 
     Also generates one extra batch of AI-suggested SQLi-error payloads
-    per run() (not per parameter/target — see the research behind
-    app.ai.model_routing: per-parameter LLM calls would burn through the
-    scan-wide budget long before later parameters are ever reached), informed
+    per run() (not per parameter/target — a per-parameter LLM call would
+    burn through the scan-wide budget long before later parameters are
+    ever reached), informed
     by this scan's actual discovered parameter names and tech-stack
     fingerprint, supplementing (never replacing) the fixed payload
     battery above. A wrong/ineffective suggestion just never triggers
