@@ -101,6 +101,62 @@ async def test_import_openapi_yaml_file(client):
     assert resp.json()["imported_count"] == 1
 
 
+async def test_import_openapi_spec_with_no_servers_resolves_against_the_version_target(client):
+    """Regression test for a real gap found live: a spec auto-generated
+    by a framework like FastAPI that never declares `servers` (3.x) or
+    `host` (2.0) makes OpenApiImporter's own base_url fallback bottom
+    out at "", so every imported interaction got a bare relative-path
+    URL (e.g. "/reviews") that ScopedHttpClient could never actually
+    request — the scan ran to completion with zero requests ever sent
+    to any endpoint the import was supposed to add, a silent
+    false-negative. Import must now resolve a bare path against the
+    version's own Target base_url."""
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+    await client.post(
+        f"/versions/{version_id}/targets",
+        json={"host": "localhost", "port": 8899, "base_url": "http://localhost:8899/"},
+        headers=admin["headers"],
+    )
+
+    spec = {
+        "openapi": "3.0.0",
+        "info": {"title": "Sample", "version": "1.0"},
+        "paths": {"/reviews": {"get": {}}},
+    }
+    resp = await client.post(
+        f"/versions/{version_id}/traffic/import",
+        files={"file": ("api.json", json.dumps(spec).encode(), "application/json")},
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 201, resp.text
+
+    listed = await client.get(f"/versions/{version_id}/traffic", headers=admin["headers"])
+    assert listed.json()[0]["request"]["url"] == "http://localhost:8899/reviews"
+
+
+async def test_import_openapi_spec_with_no_servers_and_no_target_leaves_url_relative(client):
+    """No Target configured yet means there's nothing to resolve
+    against — the bare path is left as-is (best-effort, not a crash)."""
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+
+    spec = {
+        "openapi": "3.0.0",
+        "info": {"title": "Sample", "version": "1.0"},
+        "paths": {"/reviews": {"get": {}}},
+    }
+    resp = await client.post(
+        f"/versions/{version_id}/traffic/import",
+        files={"file": ("api.json", json.dumps(spec).encode(), "application/json")},
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 201, resp.text
+
+    listed = await client.get(f"/versions/{version_id}/traffic", headers=admin["headers"])
+    assert listed.json()[0]["request"]["url"] == "/reviews"
+
+
 async def test_read_upload_capped_rejects_oversized_file_without_buffering_it_all():
     # A tiny max_bytes keeps this fast — the real MAX_TRAFFIC_IMPORT_BYTES
     # cap (2GB) is exercised by this same code path, just with a smaller

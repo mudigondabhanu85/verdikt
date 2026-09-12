@@ -1,6 +1,7 @@
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 import yaml
 
@@ -61,11 +62,27 @@ class OpenApiImporter(TrafficImporter):
                     for p in params
                     if isinstance(p, dict) and p.get("in") == "header" and p.get("name")
                 }
+                url = base_url + resolved_path
+                if query_params:
+                    # app.agents.traffic_seed.seed_from_imported_traffic
+                    # (the only thing that ever turns an imported
+                    # interaction into a fuzzable DiscoveredParameter)
+                    # reads query params out of the URL's own querystring
+                    # via app.agents.recon._extract_query_params — never
+                    # out of this request's separate structured
+                    # query_params field. A real gap found live: every
+                    # query-string parameter an OpenAPI spec declared
+                    # (e.g. a "?product_id=&q=" search endpoint) silently
+                    # never got fuzzed at all, because the URL itself
+                    # carried no querystring for a HAR/Postman/Burp
+                    # capture would always have baked in. query_params
+                    # stays populated too, for any other consumer.
+                    url = f"{url}?{urlencode(query_params)}"
                 interactions.append(
                     HttpInteraction(
                         request=HttpRequest(
                             method=method.upper(),
-                            url=base_url + resolved_path,
+                            url=url,
                             headers=headers,
                             query_params=query_params,
                             body=_request_body_example(operation, params),

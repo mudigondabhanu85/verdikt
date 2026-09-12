@@ -8,7 +8,14 @@ import httpx
 from app.agents.evidence import format_request_raw, format_response_raw
 from app.agents.evidence_screenshot import capture_and_store_evidence_screenshot
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient, ScopeViolationError
-from app.agents.idor import find_numeric_id_segment, nearby_ids, substitute_path_segment
+from app.agents.idor import (
+    find_numeric_id_segment,
+    find_query_identifier,
+    nearby_ids,
+    sibling_values,
+    substitute_path_segment,
+    substitute_query_param,
+)
 from app.agents.matrix import Identity, build_identities
 from app.ai.budget import BudgetExceededError, BudgetGuard, ProviderUnavailableError
 from app.ai.prompts.loader import render_prompt
@@ -124,32 +131,77 @@ async def _detect_resource_isolation(
 ) -> BusinessLogicCandidate | None:
     url = rule.config["url"]
     id_info = find_numeric_id_segment(url)
-    if id_info is None:
-        return None
-    index, value = id_info
-    authed = [i for i in identities if i.session is not None]
+    if id_info is not None:
+        index, value = id_info
+        authed = [i for i in identities if i.session is not None]
 
-    for identity in authed:
+        for identity in authed:
+            try:
+                original_resp = await client.get(url, session=identity.session)
+            except (ScopeViolationError, httpx.HTTPError):
+                continue
+            if original_resp.status_code >= 300:
+                continue
+            for candidate_id in nearby_ids(value):
+                alt_url = substitute_path_segment(url, index, candidate_id)
+                try:
+                    alt_resp = await client.get(alt_url, session=identity.session)
+                except (ScopeViolationError, httpx.HTTPError):
+                    continue
+                if alt_resp.status_code < 300 and len(alt_resp.text) > 20:
+                    return BusinessLogicCandidate(
+                        rule=rule,
+                        identities=identities,
+                        deterministic_signal=(
+                            f"{identity.label} was able to fetch {alt_url} — an adjacent "
+                            f"resource ID to {url} — and received a successful, substantive "
+                            f"response ({len(alt_resp.text)} bytes, status {alt_resp.status_code})."
+                        ),
+                        evidence_response=alt_resp,
+                        endpoint=alt_url,
+                    )
+        return None
+
+    # No numeric path segment — real gap found live: a lookup endpoint
+    # keyed by a query-string identifier (e.g. "?email=") rather than a
+    # REST-style numeric path segment fell straight through the check
+    # above with nothing ever tested. Tried across EVERY identity,
+    # including the unauthenticated baseline (identities[0], session=
+    # None — filtered OUT of `authed` above): a query-parameter-keyed
+    # endpoint that returns substantive per-identifier data to a fully
+    # anonymous caller is the more severe, at-least-as-common real-world
+    # shape (found live: a "/loyalty/points?email=" endpoint returning
+    # any customer's balance with zero authentication) that the
+    # authenticated-only, path-segment-only check above structurally
+    # cannot reach.
+    query_id = find_query_identifier(url)
+    if query_id is None:
+        return None
+    name, value = query_id
+    for identity in identities:
         try:
             original_resp = await client.get(url, session=identity.session)
         except (ScopeViolationError, httpx.HTTPError):
             continue
         if original_resp.status_code >= 300:
             continue
-        for candidate_id in nearby_ids(value):
-            alt_url = substitute_path_segment(url, index, candidate_id)
+        for candidate_value in sibling_values(value):
+            alt_url = substitute_query_param(url, name, candidate_value)
             try:
                 alt_resp = await client.get(alt_url, session=identity.session)
             except (ScopeViolationError, httpx.HTTPError):
                 continue
             if alt_resp.status_code < 300 and len(alt_resp.text) > 20:
+                who = "An unauthenticated request" if identity.session is None else identity.label
                 return BusinessLogicCandidate(
                     rule=rule,
                     identities=identities,
                     deterministic_signal=(
-                        f"{identity.label} was able to fetch {alt_url} — an adjacent "
-                        f"resource ID to {url} — and received a successful, substantive "
-                        f"response ({len(alt_resp.text)} bytes, status {alt_resp.status_code})."
+                        f'{who} was able to fetch {alt_url} — the same lookup endpoint as '
+                        f'{url}, with only its "{name}" query parameter changed to a value '
+                        f"never associated with this request — and received a successful, "
+                        f"substantive response ({len(alt_resp.text)} bytes, status "
+                        f"{alt_resp.status_code})."
                     ),
                     evidence_response=alt_resp,
                     endpoint=alt_url,

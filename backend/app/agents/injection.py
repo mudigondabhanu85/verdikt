@@ -230,6 +230,32 @@ async def _probe_sqli_error(
             probe_response=probe,
             probe_fn=_probe_sqli_error,
         )
+    # Real gap found live: a raw "'" genuinely breaks a naively-built
+    # SQL query (confirmed: SQLite raised OperationalError) but a
+    # framework's generic unhandled-exception handler often returns a
+    # bland "Internal Server Error" body with no recognizable SQL
+    # wording at all — _matches_sqli_error, and therefore the check
+    # above, never fires even though the injection is completely real.
+    # A single quote flipping an otherwise-clean 2xx/4xx baseline into
+    # an unhandled 5xx is itself the same signal sqlmap/Burp treat as
+    # error-based evidence when the message body is suppressed — still
+    # just a candidate for the LLM-triage/adversarial-validation gate
+    # downstream, not a shortcut to a Finding.
+    if probe.status_code >= 500 and baseline.status_code < 500:
+        return InjectionCandidate(
+            payload_type="sqli-error",
+            target=target,
+            payload=payload,
+            deterministic_signal=(
+                f"Injecting a single quote turned a clean {baseline.status_code} baseline "
+                f"response into an unhandled {probe.status_code} server error, consistent with "
+                "breaking a malformed SQL query even though no recognizable SQL error text "
+                "appeared in the response body."
+            ),
+            baseline_response=baseline,
+            probe_response=probe,
+            probe_fn=_probe_sqli_error,
+        )
     return None
 
 
@@ -267,30 +293,50 @@ async def _probe_sqli_error_ai(
     return None
 
 
+# Two distinct injection contexts, tried in order. The bare pair alone
+# (found live to be the only pair ever tried) assumes the parameter
+# sits at the very end of its quoted literal, e.g. `WHERE col =
+# '{value}'` — real, but far from the only shape. A parameter wrapped
+# in a LIKE search (`LIKE '%{value}%'`, one of the most common patterns
+# for a "search" feature) or followed by more clause text leaves a
+# trailing `%'`/other SQL after the injected value that neither the
+# true nor the false bare payload ever neutralizes, so both produce the
+# *same* (non-matching) result and the comparison sees no difference at
+# all — a real SQLi missed outright. The `-- ` (SQL line-comment)
+# variant comments out whatever the template puts after the injection
+# point, so it still isolates the true/false condition even in that
+# wrapped shape; it's tried second since it changes the query's meaning
+# more than the bare pair does, so the bare pair stays preferred when
+# it alone is sufficient to show a difference.
+_SQLI_BOOLEAN_PAYLOAD_PAIRS = [
+    ("verdikt1' OR '1'='1", "verdikt1' OR '1'='2"),
+    ("verdikt1' OR '1'='1' -- ", "verdikt1' OR '1'='2' -- "),
+]
+
+
 async def _probe_sqli_boolean(
     client: ScopedHttpClient, target: ProbeTarget, session: AuthenticatedSession | None = None
 ) -> InjectionCandidate | None:
-    true_payload = "verdikt1' OR '1'='1"
-    false_payload = "verdikt1' OR '1'='2"
-    true_resp = await fetch_with_value(client, target, true_payload, session)
-    false_resp = await fetch_with_value(client, target, false_payload, session)
-    if true_resp.status_code != false_resp.status_code:
-        return None
-    len_true, len_false = len(true_resp.text), len(false_resp.text)
-    if abs(len_true - len_false) > max(20, 0.05 * max(len_true, len_false, 1)):
-        return InjectionCandidate(
-            payload_type="sqli-boolean",
-            target=target,
-            payload=true_payload,
-            deterministic_signal=(
-                f"Response length differs meaningfully between a true condition "
-                f"({len_true} bytes) and a false condition ({len_false} bytes) "
-                f"injected into the same parameter."
-            ),
-            baseline_response=false_resp,
-            probe_response=true_resp,
-            probe_fn=_probe_sqli_boolean,
-        )
+    for true_payload, false_payload in _SQLI_BOOLEAN_PAYLOAD_PAIRS:
+        true_resp = await fetch_with_value(client, target, true_payload, session)
+        false_resp = await fetch_with_value(client, target, false_payload, session)
+        if true_resp.status_code != false_resp.status_code:
+            continue
+        len_true, len_false = len(true_resp.text), len(false_resp.text)
+        if abs(len_true - len_false) > max(20, 0.05 * max(len_true, len_false, 1)):
+            return InjectionCandidate(
+                payload_type="sqli-boolean",
+                target=target,
+                payload=true_payload,
+                deterministic_signal=(
+                    f"Response length differs meaningfully between a true condition "
+                    f"({len_true} bytes) and a false condition ({len_false} bytes) "
+                    f"injected into the same parameter."
+                ),
+                baseline_response=false_resp,
+                probe_response=true_resp,
+                probe_fn=_probe_sqli_boolean,
+            )
     return None
 
 

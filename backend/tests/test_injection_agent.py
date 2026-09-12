@@ -91,6 +91,36 @@ def _handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text="Error: You have an error in your SQL syntax near '1=1--'")
         return httpx.Response(200, text="Item details page")
 
+    if parsed.path == "/search-reviews":
+        # Models a real, live-found gap: a naive `LIKE '%{q}%'`-wrapped
+        # search parameter. A raw "'" genuinely breaks the query (a real
+        # SQLite OperationalError, confirmed live) but the app's generic
+        # exception handler returns a bland message with no recognizable
+        # SQL wording — only an unhandled-5xx-vs-clean-baseline signal
+        # can catch it, not a text-pattern match. Separately, the fixed
+        # bare true/false payload pair (`...OR '1'='1`/`...OR '1'='2`,
+        # with nothing neutralizing the template's trailing `%'`) always
+        # produces the *same* no-match result regardless of which one is
+        # sent — only a comment-terminated pair (`...OR '1'='1' -- `)
+        # that comments out the trailing `%'` actually distinguishes
+        # true from false.
+        value = query.get("q", [""])[0]
+        if value == "'":
+            return httpx.Response(500, text="Internal Server Error")
+        if value.endswith("-- ") and "OR '1'='1'" in value:
+            return httpx.Response(200, text="Reviews: " + "x" * 500)
+        return httpx.Response(200, text="Reviews: none matching")
+
+    if parsed.path == "/browse-items":
+        # Isolates the boolean-only fix from the error-based one above:
+        # a raw "'" here produces an ordinary 200 (no error signal at
+        # all, unlike /search-reviews), so this path can only ever be
+        # caught by the comment-terminated boolean payload pair.
+        value = query.get("q", [""])[0]
+        if value.endswith("-- ") and "OR '1'='1'" in value:
+            return httpx.Response(200, text="Items: " + "x" * 500)
+        return httpx.Response(200, text="Items: none matching")
+
     if parsed.path == "/ping" and request.method == "POST":
         body = request.content.decode()
         params = parse_qs(body)
@@ -191,6 +221,59 @@ async def test_ai_suggested_payload_catches_what_the_fixed_battery_misses(db_ada
         assert "sqli-error" in check_ids
         finding = next(f for f in findings if f.affected_endpoints == ["http://site.test/legacy_item?item_id=42"])
         assert "AI-suggested" in finding.technical_description
+
+        await client.aclose()
+
+
+async def test_sqli_error_detected_via_status_code_when_message_is_generic(db_adapter):
+    """Regression test for a real gap found live: a raw "'" genuinely
+    breaks a naively-built SQL query (confirmed against a real SQLite
+    OperationalError), but a framework's generic unhandled-exception
+    handler returns a bland "Internal Server Error" body with no
+    recognizable SQL wording — the text-pattern check alone never fires.
+    The clean-baseline-to-unhandled-5xx signal must catch this too."""
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "looks vulnerable"}'
+        )
+        agent, client, _scan_run = await _make_agent(session, provider)
+
+        parameters = [
+            DiscoveredParameter(
+                url="http://site.test/search-reviews?q=example", method="GET", name="q"
+            )
+        ]
+        findings = await agent.run(parameters, [])
+
+        check_ids = {f.check_id for f in findings}
+        assert "sqli-error" in check_ids
+
+        await client.aclose()
+
+
+async def test_sqli_boolean_detected_behind_a_like_wrapped_search_parameter(db_adapter):
+    """Regression test for a real gap found live: a parameter wrapped in
+    a LIKE search (`LIKE '%{value}%'`, one of the most common shapes for
+    a "search" feature) leaves trailing template text after the
+    injection point that the original bare true/false payload pair
+    never neutralizes — both payloads produce the identical no-match
+    result, so the length-difference check never distinguishes them,
+    missing a real, exploitable boolean-blind SQLi outright."""
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "looks vulnerable"}'
+        )
+        agent, client, _scan_run = await _make_agent(session, provider)
+
+        parameters = [
+            DiscoveredParameter(
+                url="http://site.test/browse-items?q=example", method="GET", name="q"
+            )
+        ]
+        findings = await agent.run(parameters, [])
+
+        check_ids = {f.check_id for f in findings}
+        assert "sqli-boolean" in check_ids
 
         await client.aclose()
 

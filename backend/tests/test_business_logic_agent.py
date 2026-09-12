@@ -1,6 +1,6 @@
 import json
 import uuid
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from sqlalchemy import select
@@ -105,6 +105,76 @@ async def test_resource_isolation_safe(db_adapter):
             rule_type="resource_isolation",
             title="A user should never see another user's basket",
             config={"url": "http://site.test/rest/basket/6"},
+        )
+
+        findings = await agent.run([rule])
+        assert findings == []
+        await client.aclose()
+
+
+def _handler_loyalty_points(vulnerable: bool):
+    """Models a real, live-found gap: a lookup endpoint keyed by a
+    query-string identifier ("?email=") rather than a numeric path
+    segment. "vulnerable" returns real, substantive data for ANY email
+    with no ownership check at all — "safe" only does so for the one
+    email the request actually belongs to, rejecting anything else."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        parsed = urlsplit(str(request.url))
+        if parsed.path != "/loyalty/points":
+            return httpx.Response(404)
+        email = parse_qs(parsed.query).get("email", [""])[0]
+        if vulnerable:
+            return httpx.Response(
+                200, text=f"<html>Points for {email}: 1250 pts, Orders: #1001,#1014</html>"
+            )
+        if email == "known@example.com":
+            return httpx.Response(200, text="<html>Points for known@example.com: 1250 pts</html>")
+        return httpx.Response(403, text="forbidden")
+
+    return handler
+
+
+async def test_resource_isolation_query_param_vulnerable_and_unauthenticated(db_adapter):
+    """Regression test for a real gap found live: find_numeric_id_segment
+    returns None for a query-string identifier (no numeric path segment
+    at all), so the old code returned None immediately — never testing
+    the endpoint. Passing no sessions/labels at all (matching the real
+    bug: a version with zero credentials configured) proves this is
+    caught for a fully anonymous caller too, not just an authenticated
+    one — the identities list always includes the unauthenticated
+    baseline, but the old code explicitly filtered it out."""
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(_vulnerable_verdict())
+        agent, client = await _make_agent(
+            session, provider, _handler_loyalty_points(True), sessions={}, labels={}
+        )
+        rule = BusinessRule(
+            version_id=uuid.uuid4(),
+            rule_type="resource_isolation",
+            title="Loyalty points should only be visible to their own customer",
+            config={"url": "http://site.test/loyalty/points?email=known@example.com"},
+        )
+
+        findings = await agent.run([rule])
+        assert len(findings) == 1
+        assert findings[0].check_id == "business-logic-resource_isolation"
+        assert "unauthenticated" in findings[0].technical_description.lower()
+
+        await client.aclose()
+
+
+async def test_resource_isolation_query_param_safe(db_adapter):
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(_vulnerable_verdict())
+        agent, client = await _make_agent(
+            session, provider, _handler_loyalty_points(False), sessions={}, labels={}
+        )
+        rule = BusinessRule(
+            version_id=uuid.uuid4(),
+            rule_type="resource_isolation",
+            title="Loyalty points should only be visible to their own customer",
+            config={"url": "http://site.test/loyalty/points?email=known@example.com"},
         )
 
         findings = await agent.run([rule])

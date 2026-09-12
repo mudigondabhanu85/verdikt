@@ -555,3 +555,99 @@ async def test_form_login_sends_live_csrf_token_and_submit_field(db_adapter):
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+
+class _PasswordOnlyGateHandler(BaseHTTPRequestHandler):
+    """Models a real gate shape found live against Shopify's storefront
+    password-protection page (used to lock an unlaunched dev store): a
+    single shared secret with no per-user identity at all — just a
+    password field and a session-bound CSRF token, no username field on
+    the form. The old _login_via_form required a username field to be
+    found before it would even attempt a login, so it silently returned
+    None 100% of the time against a gate like this."""
+
+    _tokens_by_session: dict[str, str] = {}
+
+    def do_GET(self):  # noqa: N802
+        if self.path != "/password":
+            self.send_response(404)
+            self.end_headers()
+            return
+        session_id = secrets.token_hex(8)
+        token = secrets.token_hex(8)
+        self._tokens_by_session[session_id] = token
+        body = (
+            "<form action='/password' method='post'>"
+            f"<input type='hidden' name='authenticity_token' value='{token}'>"
+            "<input name='password' type='password'>"
+            "</form>"
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Set-Cookie", f"_shop_session={session_id}; Path=/")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):  # noqa: N802
+        length = int(self.headers.get("Content-Length", 0))
+        fields = parse_qs(self.rfile.read(length).decode())
+        cookie_header = self.headers.get("Cookie", "")
+        session_id = (
+            cookie_header.removeprefix("_shop_session=") if "_shop_session=" in cookie_header else None
+        )
+        expected_token = self._tokens_by_session.get(session_id or "")
+
+        authenticated = (
+            fields.get("authenticity_token", [None])[0] == expected_token
+            and expected_token is not None
+            and fields.get("password", [None])[0] == "shaung"
+        )
+        if authenticated:
+            self.send_response(200)
+            self.send_header("Set-Cookie", f"storefront_digest={session_id}-unlocked; Path=/")
+            self.end_headers()
+            self.wfile.write(b"Welcome to the store")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"<title>Enter store password</title>")
+
+
+async def test_password_only_gate_with_no_username_field_logs_in(db_adapter):
+    """Regression test for the real Shopify-storefront-password-page gap
+    found live: a login form with only a password field (no username at
+    all) used to be rejected outright by _login_via_form before it even
+    tried to submit, because it required a username field to exist."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _PasswordOnlyGateHandler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        async with session_scope(db_adapter) as session:
+            client = ScopedHttpClient(
+                version_id=uuid.uuid4(),
+                scope_entries=[ScopeEntry(host=host, port=port, in_scope=True)],
+                db_session=session,
+            )
+            credential = _credential_set(username="unused", secret="shaung")
+            form = FormInfo(
+                action_url=f"http://{host}:{port}/password",
+                method="POST",
+                fields=[
+                    FormField(name="authenticity_token", type="hidden"),
+                    FormField(name="password", type="password"),
+                ],
+            )
+
+            manager = SessionManager(client)
+            auth_session = await manager.login(credential, forms=[form])
+
+            assert auth_session is not None
+            assert auth_session.cookies.get("storefront_digest") is not None
+
+            await client.aclose()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)

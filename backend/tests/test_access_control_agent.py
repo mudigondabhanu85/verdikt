@@ -1,5 +1,5 @@
 import uuid
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from sqlalchemy import select
@@ -65,6 +65,20 @@ def _handler(request: httpx.Request) -> httpx.Response:
         if who == "standarduser":
             return httpx.Response(403, text="forbidden")
         return httpx.Response(401, text="unauthorized")
+
+    if path == "/loyalty/points":
+        # Real, live-found gap: a lookup endpoint keyed by a query-string
+        # identifier ("?email=") rather than a numeric path segment,
+        # with no ownership check at all — vulnerable regardless of who
+        # (or whether anyone) is asking.
+        email = parse_qs(urlsplit(str(request.url)).query).get("email", [""])[0]
+        return httpx.Response(200, text=f"<html>Points for {email}: 1250 pts, Orders: #1001</html>")
+
+    if path == "/safe-loyalty/points":
+        email = parse_qs(urlsplit(str(request.url)).query).get("email", [""])[0]
+        if email == "known@example.com":
+            return httpx.Response(200, text="<html>Points for known@example.com: 1250 pts</html>")
+        return httpx.Response(403, text="forbidden")
 
     return httpx.Response(404)
 
@@ -238,6 +252,45 @@ async def test_safe_horizontal_endpoint_is_not_flagged(db_adapter):
         sessions, labels = _sessions_and_labels()
 
         findings = await agent.run(["http://site.test/safe-orders/100"], sessions, labels)
+
+        assert findings == []
+
+        await client.aclose()
+
+
+async def test_detects_horizontal_idor_via_query_param_unauthenticated(db_adapter):
+    """Regression test for a real gap found live: find_numeric_id_segment
+    returns None for a query-string identifier (no numeric path segment
+    at all), so the old code returned None immediately — never testing
+    the endpoint. Passing {} for both sessions and labels (matching the
+    real bug: a version with zero credentials configured at all) proves
+    this is caught for a fully anonymous caller too — the identities
+    list always includes the unauthenticated baseline, but the old code
+    explicitly filtered it out."""
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "any email works with no auth"}'
+        )
+        agent, client = await _make_agent(session, provider)
+
+        findings = await agent.run(["http://site.test/loyalty/points?email=known@example.com"], {}, {})
+
+        check_ids = {f.check_id for f in findings}
+        assert "access-control-horizontal" in check_ids
+        horizontal = next(f for f in findings if f.check_id == "access-control-horizontal")
+        assert "unauthenticated" in horizontal.technical_description.lower()
+
+        await client.aclose()
+
+
+async def test_safe_horizontal_query_param_endpoint_is_not_flagged(db_adapter):
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "would confirm if asked"}'
+        )
+        agent, client = await _make_agent(session, provider)
+
+        findings = await agent.run(["http://site.test/safe-loyalty/points?email=known@example.com"], {}, {})
 
         assert findings == []
 

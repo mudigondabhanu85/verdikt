@@ -244,9 +244,15 @@ class SessionManager:
     async def _login_via_form(
         self, credential_set: CredentialSet, form: FormInfo, username: str, secret: str
     ) -> AuthenticatedSession | None:
+        # username_field is allowed to be absent — a real, common gate
+        # shape (e.g. Shopify's storefront password-protection page) is a
+        # single shared secret with no per-user identity at all: just a
+        # password field plus a CSRF token. password_field is still
+        # mandatory, since that's what makes this a login form in the
+        # first place (see _find_login_form).
         username_field = _guess_username_field(form)
         password_field = _guess_password_field(form)
-        if not username_field or not password_field:
+        if not password_field:
             return None
 
         # ScopedHttpClient never relies on an implicit cookie jar for
@@ -273,7 +279,9 @@ class SessionManager:
         pre_login = await self._client.get(form.action_url)
         pre_login_cookies = _cookies_from_response(pre_login)
 
-        payload = {username_field: username, password_field: secret}
+        payload = {password_field: secret}
+        if username_field:
+            payload[username_field] = username
         # Every other field on the form — hidden CSRF tokens and the
         # submit button alike — gets its real, current value from the
         # fresh pre_login fetch rather than a blank placeholder (see

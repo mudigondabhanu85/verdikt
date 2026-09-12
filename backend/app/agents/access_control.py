@@ -6,7 +6,14 @@ import httpx
 from app.agents.evidence import format_request_raw, format_response_raw
 from app.agents.evidence_screenshot import capture_and_store_evidence_screenshot
 from app.agents.http_client import ScopedHttpClient, ScopeViolationError
-from app.agents.idor import find_numeric_id_segment, nearby_ids, substitute_path_segment
+from app.agents.idor import (
+    find_numeric_id_segment,
+    find_query_identifier,
+    nearby_ids,
+    sibling_values,
+    substitute_path_segment,
+    substitute_query_param,
+)
 from app.agents.matrix import Identity, build_identities
 from app.ai.budget import BudgetExceededError, BudgetGuard, ProviderUnavailableError
 from app.ai.prompt_truncation import truncate_pair_for_prompt
@@ -185,25 +192,72 @@ async def _detect_horizontal(
     client: ScopedHttpClient, endpoint: str, identities: list[Identity]
 ) -> AccessControlCandidate | None:
     id_info = find_numeric_id_segment(endpoint)
-    if id_info is None:
-        return None
-    index, value = id_info
-    authed = [i for i in identities if i.session is not None]
+    if id_info is not None:
+        index, value = id_info
+        authed = [i for i in identities if i.session is not None]
 
-    for identity in authed:
+        for identity in authed:
+            try:
+                original_resp = await client.get(endpoint, session=identity.session)
+            except (ScopeViolationError, httpx.HTTPError):
+                continue
+            if original_resp.status_code >= 300:
+                continue
+            for candidate_id in nearby_ids(value):
+                alt_url = substitute_path_segment(endpoint, index, candidate_id)
+                try:
+                    alt_resp = await client.get(alt_url, session=identity.session)
+                except (ScopeViolationError, httpx.HTTPError):
+                    continue
+                if alt_resp.status_code < 300 and len(alt_resp.text) > 20:
+                    return AccessControlCandidate(
+                        comparison_type="horizontal",
+                        endpoint=alt_url,
+                        original_endpoint=endpoint,
+                        identity_a=identity,
+                        identity_b=identity,
+                        response_a=original_resp,
+                        response_b=alt_resp,
+                        deterministic_signal=(
+                            f"{identity.label} was able to fetch {alt_url} — an adjacent "
+                            f"resource ID to {endpoint}, which the same identity legitimately "
+                            f"owns — and received a successful, substantive response "
+                            f"({len(alt_resp.text)} bytes, status {alt_resp.status_code})."
+                        ),
+                    )
+        return None
+
+    # No numeric path segment — real gap found live: a lookup endpoint
+    # keyed by a query-string identifier (e.g. "?email=") rather than a
+    # REST-style numeric path segment fell straight through the check
+    # above with nothing ever tested. Tried across EVERY identity,
+    # including the unauthenticated baseline (identities[0], session=
+    # None — filtered OUT of `authed` above): a query-parameter-keyed
+    # endpoint that returns substantive per-identifier data to a fully
+    # anonymous caller is the more severe, at-least-as-common real-world
+    # shape (found live: a "/loyalty/points?email=" endpoint returning
+    # any customer's balance with zero authentication) that the
+    # authenticated-only, path-segment-only check above structurally
+    # cannot reach.
+    query_id = find_query_identifier(endpoint)
+    if query_id is None:
+        return None
+    name, value = query_id
+    for identity in identities:
         try:
             original_resp = await client.get(endpoint, session=identity.session)
         except (ScopeViolationError, httpx.HTTPError):
             continue
         if original_resp.status_code >= 300:
             continue
-        for candidate_id in nearby_ids(value):
-            alt_url = substitute_path_segment(endpoint, index, candidate_id)
+        for candidate_value in sibling_values(value):
+            alt_url = substitute_query_param(endpoint, name, candidate_value)
             try:
                 alt_resp = await client.get(alt_url, session=identity.session)
             except (ScopeViolationError, httpx.HTTPError):
                 continue
             if alt_resp.status_code < 300 and len(alt_resp.text) > 20:
+                who = "An unauthenticated request" if identity.session is None else identity.label
                 return AccessControlCandidate(
                     comparison_type="horizontal",
                     endpoint=alt_url,
@@ -213,10 +267,11 @@ async def _detect_horizontal(
                     response_a=original_resp,
                     response_b=alt_resp,
                     deterministic_signal=(
-                        f"{identity.label} was able to fetch {alt_url} — an adjacent "
-                        f"resource ID to {endpoint}, which the same identity legitimately "
-                        f"owns — and received a successful, substantive response "
-                        f"({len(alt_resp.text)} bytes, status {alt_resp.status_code})."
+                        f'{who} was able to fetch {alt_url} — the same lookup endpoint as '
+                        f'{endpoint}, with only its "{name}" query parameter changed to a '
+                        f"value never associated with this request — and received a "
+                        f"successful, substantive response ({len(alt_resp.text)} bytes, "
+                        f"status {alt_resp.status_code})."
                     ),
                 )
     return None

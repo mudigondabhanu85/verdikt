@@ -1,4 +1,11 @@
-from app.agents.idor import find_numeric_id_segment, nearby_ids, substitute_path_segment
+from app.agents.idor import (
+    find_numeric_id_segment,
+    find_query_identifier,
+    nearby_ids,
+    sibling_values,
+    substitute_path_segment,
+    substitute_query_param,
+)
 
 
 def test_find_numeric_id_segment_finds_trailing_id():
@@ -26,3 +33,42 @@ def test_substitute_path_segment_preserves_query_string():
 def test_nearby_ids_excludes_original_and_negative():
     assert nearby_ids("6") == ["5", "7"]
     assert nearby_ids("0") == ["1"]
+
+
+def test_find_query_identifier_returns_first_non_empty_param():
+    assert find_query_identifier("http://x/loyalty/points?email=jamie@example.com") == (
+        "email",
+        "jamie@example.com",
+    )
+
+
+def test_find_query_identifier_returns_none_without_a_query_string():
+    assert find_query_identifier("http://x/loyalty/points") is None
+
+
+def test_find_query_identifier_skips_blank_values():
+    assert find_query_identifier("http://x/search?empty=&q=snowboard") == ("q", "snowboard")
+
+
+def test_substitute_query_param_replaces_only_named_param():
+    url = substitute_query_param("http://x/loyalty/points?email=a@x.com&lang=en", "email", "b@x.com")
+    assert url == "http://x/loyalty/points?email=b%40x.com&lang=en"
+
+
+def test_sibling_values_uses_nearby_ids_for_numeric_values():
+    assert sibling_values("6") == ["5", "7"]
+
+
+def test_sibling_values_preserves_domain_for_email_shaped_values():
+    values = sibling_values("jamie.r@example.com")
+    assert len(values) == 1
+    assert values[0].endswith("@example.com")
+    assert values[0] != "jamie.r@example.com"
+    assert values[0].startswith("verdikt-idor-probe-")
+
+
+def test_sibling_values_generates_a_fresh_token_for_generic_strings():
+    values = sibling_values("standarduser")
+    assert len(values) == 1
+    assert values[0] != "standarduser"
+    assert values[0].startswith("verdikt-idor-probe-")
