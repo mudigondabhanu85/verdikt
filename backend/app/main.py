@@ -12,6 +12,7 @@ from app.api.routes import (
     api_keys,
     attack_chains,
     auth,
+    browser_extension,
     burp,
     business_rules,
     cmdb_configs,
@@ -117,6 +118,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     return response
 
 app.include_router(auth.router)
+app.include_router(browser_extension.router)
 app.include_router(organizations.router)
 app.include_router(ai_provider_configs.router)
 app.include_router(oidc.router)

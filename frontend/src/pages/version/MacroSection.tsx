@@ -1,13 +1,24 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, ApiError, VNC_BASE_URL } from '../../api/client'
+import { api, ApiError, downloadBrowserExtension, VNC_BASE_URL } from '../../api/client'
+
+// "choose": which recording path (shown right after clicking Record
+// macro). "record": the existing in-app VNC flow. "extension": the
+// download-and-instructions panel for the standalone browser
+// extension — a real Chrome/Edge extension can't be silently
+// auto-installed from a web page (browsers only allow installation
+// from the Web Store, and this one isn't published there — see
+// browser-extension/README.md), so "download + walk the user through
+// Load unpacked" is the closest equivalent to one-click install.
+type Panel = 'choose' | 'record' | 'extension' | null
 
 export function MacroSection({ versionId, credentialId }: { versionId: string; credentialId: string }) {
   const queryClient = useQueryClient()
-  const [open, setOpen] = useState(false)
+  const [panel, setPanel] = useState<Panel>(null)
   const [startUrl, setStartUrl] = useState('')
   const [recordingId, setRecordingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [downloading, setDownloading] = useState(false)
 
   const invalidateMacros = () =>
     queryClient.invalidateQueries({ queryKey: ['versions', versionId, 'credentials', credentialId, 'macros'] })
@@ -38,7 +49,7 @@ export function MacroSection({ versionId, credentialId }: { versionId: string; c
     mutationFn: (id: string) => api.credentials.finishRecordingMacro(versionId, credentialId, id),
     onSuccess: () => {
       invalidateMacros()
-      setOpen(false)
+      setPanel(null)
       setStartUrl('')
       setRecordingId(null)
       setError(null)
@@ -49,7 +60,7 @@ export function MacroSection({ versionId, credentialId }: { versionId: string; c
   const cancelMutation = useMutation({
     mutationFn: (id: string) => api.credentials.cancelRecordingMacro(versionId, credentialId, id),
     onSuccess: () => {
-      setOpen(false)
+      setPanel(null)
       setStartUrl('')
       setRecordingId(null)
       setError(null)
@@ -85,6 +96,18 @@ export function MacroSection({ versionId, credentialId }: { versionId: string; c
     startMutation.mutate()
   }
 
+  async function handleDownloadExtension() {
+    setError(null)
+    setDownloading(true)
+    try {
+      await downloadBrowserExtension()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not download the extension')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   async function handleFileSelected(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     e.target.value = '' // allow re-selecting the same file next time
@@ -110,8 +133,8 @@ export function MacroSection({ versionId, credentialId }: { versionId: string; c
       ) : (
         <span className="text-gray-400">No login macro recorded</span>
       )}
-      {!open && (
-        <button onClick={() => setOpen(true)} className="ml-2 text-purple-700 hover:underline">
+      {panel === null && (
+        <button onClick={() => setPanel('choose')} className="ml-2 text-purple-700 hover:underline">
           {macros && macros.length > 0 ? 'Re-record' : 'Record'} macro
         </button>
       )}
@@ -144,7 +167,65 @@ export function MacroSection({ versionId, credentialId }: { versionId: string; c
         </ul>
       )}
 
-      {open && !recordingId && (
+      {panel === 'choose' && (
+        <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2">
+          <p className="mb-2 text-gray-500">How do you want to record this login?</p>
+          <div className="flex flex-col items-start gap-1">
+            <button
+              onClick={() => setPanel('record')}
+              className="rounded bg-purple-700 px-2 py-1 font-medium text-white hover:bg-purple-800"
+            >
+              Record in-browser (recommended)
+            </button>
+            <span className="text-gray-400">Streams a real browser here over VNC — nothing to install.</span>
+            <button onClick={() => setPanel('extension')} className="mt-1 text-purple-700 hover:underline">
+              Use the browser extension instead
+            </button>
+            <span className="text-gray-400">
+              For recording on a machine/network segment without direct access to this Verdikt instance.
+            </span>
+          </div>
+          <button onClick={() => setPanel(null)} className="mt-2 text-gray-400 hover:underline">
+            cancel
+          </button>
+        </div>
+      )}
+
+      {panel === 'extension' && (
+        <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2">
+          <button
+            onClick={handleDownloadExtension}
+            disabled={downloading}
+            className="rounded bg-purple-700 px-2 py-1 font-medium text-white hover:bg-purple-800 disabled:opacity-50"
+          >
+            {downloading ? 'Downloading…' : 'Download extension (.zip)'}
+          </button>
+          <p className="mt-1 text-gray-500">
+            Chrome/Edge won't let a web page install an extension directly — this one isn't published to the Web
+            Store, so "Load unpacked" is the real install step. After downloading:
+          </p>
+          <ol className="ml-4 mt-1 list-decimal text-gray-500">
+            <li>Unzip it.</li>
+            <li>
+              Open <code className="rounded bg-gray-200 px-1">chrome://extensions</code> (or{' '}
+              <code className="rounded bg-gray-200 px-1">edge://extensions</code>), enable "Developer mode".
+            </li>
+            <li>Click "Load unpacked" and select the unzipped folder.</li>
+            <li>
+              On the login page, click the extension icon → "Start Recording", log in, "Stop Recording", then
+              "Export macro (.json)".
+            </li>
+          </ol>
+          <p className="mt-1 text-gray-500">
+            Come back here and use <strong>"Upload macro"</strong> above to attach the exported file.
+          </p>
+          <button onClick={() => setPanel(null)} className="mt-2 text-gray-400 hover:underline">
+            close
+          </button>
+        </div>
+      )}
+
+      {panel === 'record' && !recordingId && (
         <form onSubmit={handleSubmit} className="mt-2 flex items-center gap-2 rounded border border-gray-200 bg-gray-50 p-2">
           <input
             value={startUrl}
@@ -159,7 +240,7 @@ export function MacroSection({ versionId, credentialId }: { versionId: string; c
           >
             {startMutation.isPending ? 'Starting…' : 'Start recording'}
           </button>
-          <button type="button" onClick={() => setOpen(false)} className="text-gray-400 hover:underline">
+          <button type="button" onClick={() => setPanel(null)} className="text-gray-400 hover:underline">
             cancel
           </button>
         </form>

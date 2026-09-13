@@ -36,6 +36,11 @@ services:
       # (CORS checks the Origin header the browser actually sends, not
       # any container-internal address) — see app/config.py.
       FRONTEND_ORIGIN: http://localhost:5173
+      # Matches the read-only bind mount below — app/config.py's default
+      # ("../browser-extension") only resolves correctly when uvicorn
+      # runs with backend/ as its cwd (true for local dev, not true
+      # inside this container, which only ever bind-mounts ./backend).
+      BROWSER_EXTENSION_SOURCE_DIR: /browser-extension
     ports:
       # Host-side port only — container still listens on 8000 internally
       # (see the healthcheck/command below and frontend's
@@ -61,6 +66,11 @@ services:
       # Playwright's browser binaries) the moment the container starts.
       # Same pattern as the frontend service's node_modules mask below.
       - backend_venv:/app/.venv
+      # Source for the "Download extension" button next to Record macro
+      # (app/api/routes/browser_extension.py zips this on demand) —
+      # browser-extension/ is a sibling of backend/, not inside it, so
+      # it needs its own mount; ./backend:/app above doesn't reach it.
+      - ./browser-extension:/browser-extension:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 5s

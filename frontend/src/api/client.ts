@@ -190,6 +190,30 @@ export async function downloadSamlMetadata(configId: string): Promise<void> {
   URL.revokeObjectURL(url)
 }
 
+// Same reasoning as downloadReport/downloadSamlMetadata above — this
+// endpoint requires the bearer token too, so a plain <a href> can't be
+// used for it either.
+export async function downloadBrowserExtension(): Promise<void> {
+  const token = getToken()
+  const response = await fetch(`${BASE_URL}/browser-extension/download`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (response.status === 401) {
+    handleUnauthorized()
+    return
+  }
+  if (!response.ok) throw new ApiError(response.status, response.statusText)
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'verdikt-login-macro-recorder.zip'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export const api = {
   auth: {
     register: (body: { org_name: string; email: string; password: string }) =>

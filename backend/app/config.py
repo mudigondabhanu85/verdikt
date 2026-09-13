@@ -87,6 +87,20 @@ class Settings(BaseSettings):
     crawl_max_pages: int = 300
     crawl_max_depth: int = 6
 
+    # Filesystem path to the standalone login-macro-recorder browser
+    # extension's source (browser-extension/ at the repo root — a
+    # sibling of backend/, not a package inside it), zipped on demand by
+    # app.api.routes.browser_extension for the "Download extension"
+    # button next to Record macro (§ MacroSection.tsx). Relative paths
+    # resolve against the backend process's own working directory: "cd
+    # backend && uv run uvicorn ..." (the documented local-dev command)
+    # makes "../browser-extension" correct without any override: In
+    # Docker the backend container only bind-mounts ./backend (see
+    # docker-compose.yml), so browser-extension/ needs its own mount —
+    # done there at /browser-extension, with this setting overridden to
+    # match via BROWSER_EXTENSION_SOURCE_DIR.
+    browser_extension_source_dir: str = "../browser-extension"
+
 
 @lru_cache
 def get_settings() -> Settings:
