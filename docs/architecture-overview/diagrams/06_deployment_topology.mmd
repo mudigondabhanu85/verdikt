@@ -1,12 +1,13 @@
 flowchart TB
     subgraph Host["Host Machine (macOS / Linux / Windows)"]
         subgraph Compose["docker compose up --build"]
-            DB[("db<br/>postgres:16-alpine<br/>named volume: verdikt_pgdata")]
-            BE["backend<br/>FastAPI + Playwright/Chromium<br/>runs `alembic upgrade head`<br/>automatically on start"]
-            FEC["frontend<br/>Vite dev server"]
+            DB[("db<br/>postgres:16-alpine<br/>named volume: verdikt_pgdata<br/>host port 5433 (avoids native-Postgres collision)")]
+            BE["backend<br/>python:3.12-slim + Playwright/Chromium<br/>+ Xvfb/x11vnc/fluxbox/novnc<br/>(installed at BUILD time)<br/>runs `alembic upgrade head`<br/>then uvicorn --loop asyncio"]
+            FEC["frontend<br/>node:22-slim, real Vite dev server<br/>npm run dev -- --host 0.0.0.0"]
         end
         Browser["Browser<br/>localhost:5173"]
     end
     BE -->|"db:5432"| DB
     Browser -->|"HTTP"| FEC
-    Browser -->|"HTTP :8000"| BE
+    Browser -->|"HTTP :8095"| BE
+    Browser -->|"VNC-in-iframe<br/>127.0.0.1:6080"| BE

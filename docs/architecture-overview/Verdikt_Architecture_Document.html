@@ -5,188 +5,70 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Verdikt — Architecture &amp; Product Overview</title>
 <style>
-  :root {
-    --bg: #ffffff;
-    --fg: #1c1e21;
-    --muted: #5b6270;
-    --accent: #6d28d9;
-    --accent-soft: #f3eefb;
-    --border: #e3e5e9;
-    --code-bg: #f5f5f7;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--fg);
-    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
-    line-height: 1.6;
-  }
-  .layout {
-    display: flex;
-    max-width: 1200px;
-    margin: 0 auto;
-  }
-  nav.toc {
-    position: sticky;
-    top: 0;
-    align-self: flex-start;
-    width: 260px;
-    flex-shrink: 0;
-    padding: 32px 16px 32px 24px;
-    height: 100vh;
-    overflow-y: auto;
-    border-right: 1px solid var(--border);
-    font-size: 13px;
-  }
-  nav.toc a {
-    color: var(--muted);
-    text-decoration: none;
-    display: block;
-    padding: 3px 0;
-  }
-  nav.toc a:hover { color: var(--accent); }
-  nav.toc ul { list-style: none; padding-left: 14px; margin: 0; }
-  nav.toc > ul { padding-left: 0; }
-  main {
-    flex: 1;
-    min-width: 0;
-    padding: 48px 56px 96px;
-  }
-  h1, h2, h3, h4 {
-    font-weight: 700;
-    line-height: 1.25;
-    scroll-margin-top: 16px;
-  }
-  h1 { font-size: 34px; margin: 0 0 6px; }
-  h2 {
-    font-size: 24px;
-    margin: 48px 0 16px;
-    padding-bottom: 8px;
-    border-bottom: 2px solid var(--accent-soft);
-    color: var(--accent);
-  }
-  h3 { font-size: 18px; margin: 28px 0 10px; }
-  p { margin: 12px 0; }
-  blockquote {
-    margin: 16px 0;
-    padding: 10px 20px;
-    background: var(--accent-soft);
-    border-left: 4px solid var(--accent);
-    border-radius: 4px;
-  }
-  code {
-    background: var(--code-bg);
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-size: 0.9em;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  }
-  pre {
-    background: var(--code-bg);
-    padding: 16px;
-    border-radius: 8px;
-    overflow-x: auto;
-    border: 1px solid var(--border);
-  }
-  pre code { background: none; padding: 0; }
-  pre.mermaid {
-    background: #ffffff;
-    text-align: center;
-    overflow-x: auto;
-  }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 16px 0;
-    font-size: 14px;
-  }
-  th, td {
-    border: 1px solid var(--border);
-    padding: 8px 12px;
-    text-align: left;
-    vertical-align: top;
-  }
-  th { background: var(--accent-soft); }
-  hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
-  .cover {
-    padding: 64px 0 32px;
-  }
-  .cover .kicker {
-    color: var(--accent);
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    font-size: 13px;
-  }
-  .cover .sub {
-    color: var(--muted);
-    font-size: 18px;
-    margin-top: 4px;
-  }
-  @media (max-width: 900px) {
-    nav.toc { display: none; }
-    main { padding: 24px; }
-  }
+:root {
+  --purple: #6D28D9;
+  --dark: #1C1E21;
+  --gray: #5B6270;
+  --bg: #FFFFFF;
+  --panel: #F8F7FC;
+  --border: #E4E0F2;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, "Segoe UI", Calibri, Helvetica, Arial, sans-serif;
+  color: var(--dark);
+  background: var(--bg);
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 6rem;
+  line-height: 1.65;
+}
+h1 { color: var(--purple); font-size: 2.1rem; text-align: center; margin-bottom: 0.2rem; }
+h1:first-of-type + h2 { text-align: center; color: var(--gray); font-weight: 400; border: none; margin-top: 0; }
+h2 { color: var(--purple); border-bottom: 2px solid var(--border); padding-bottom: 0.3rem; margin-top: 2.6rem; }
+h3 { color: var(--dark); margin-top: 1.8rem; }
+h4 { color: var(--gray); }
+code {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
+  color: #8A2BE2;
+}
+pre {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  overflow-x: auto;
+}
+pre code { border: none; background: none; color: var(--dark); padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 1.2rem 0; font-size: 0.92rem; }
+th, td { border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+th { background: var(--purple); color: white; }
+tr:nth-child(even) td { background: var(--panel); }
+blockquote {
+  border-left: 4px solid var(--purple);
+  margin: 1rem 0;
+  padding: 0.4rem 1rem;
+  color: var(--gray);
+  font-style: italic;
+  background: var(--panel);
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 2.5rem 0; }
+.mermaid { text-align: center; margin: 1.5rem 0; }
+a { color: var(--purple); }
+ul, ol { padding-left: 1.4rem; }
+li { margin: 0.3rem 0; }
+.doc-tagline { text-align: center; color: var(--gray); margin: 0 auto 2rem; max-width: 640px; }
 </style>
 </head>
 <body>
-<div class="layout">
-  <nav class="toc">
-    <strong style="color:var(--fg);">Contents</strong>
-    <div class="toc">
-<ul>
-<li><a href="#verdikt">Verdikt</a><ul>
-<li><a href="#ai-multi-agent-web-application-api-security-testing-platform">AI Multi-Agent Web Application &amp; API Security Testing Platform</a></li>
-<li><a href="#1-executive-summary">1. Executive Summary</a></li>
-<li><a href="#2-the-problem">2. The Problem</a><ul>
-<li><a href="#21-smart-scan-whats-actually-built-vs-originally-envisioned">2.1 Smart Scan — what's actually built vs. originally envisioned</a></li>
-</ul>
-</li>
-<li><a href="#3-high-level-architecture">3. High-Level Architecture</a></li>
-<li><a href="#4-core-data-model">4. Core Data Model</a></li>
-<li><a href="#5-the-multi-agent-scanning-engine">5. The Multi-Agent Scanning Engine</a><ul>
-<li><a href="#51-scan-lifecycle-the-real-verified-24-node-dag">5.1 Scan lifecycle — the real, verified 24-node DAG</a></li>
-<li><a href="#52-whats-in-appagents-beyond-the-24-graph-nodes">5.2 What's in app/agents/ beyond the 24 graph nodes</a></li>
-<li><a href="#53-confirmed-only-findings-pipeline">5.3 Confirmed-Only Findings pipeline</a></li>
-<li><a href="#54-a-concrete-hard-won-example-reflected-xss-payload-diversity">5.4 A concrete, hard-won example: reflected XSS payload diversity</a></li>
-</ul>
-</li>
-<li><a href="#6-ai-provider-abstraction-any-llm-configured-once">6. AI Provider Abstraction — Any LLM, Configured Once</a><ul>
-<li><a href="#61-cost-governance-the-real-enforced-number">6.1 Cost governance — the real, enforced number</a></li>
-</ul>
-</li>
-<li><a href="#7-vulnerability-coverage">7. Vulnerability Coverage</a></li>
-<li><a href="#8-retest-rescan-attack-chain-analysis">8. Retest, Rescan &amp; Attack Chain Analysis</a></li>
-<li><a href="#9-reporting">9. Reporting</a></li>
-<li><a href="#10-vgs-integration-two-complementary-modes-both-built">10. VGS Integration — Two Complementary Modes, Both Built</a></li>
-<li><a href="#11-enterprise-hardening">11. Enterprise Hardening</a></li>
-<li><a href="#12-security-model">12. Security Model</a></li>
-<li><a href="#13-deployment">13. Deployment</a></li>
-<li><a href="#14-testing-quality-discipline">14. Testing &amp; Quality Discipline</a></li>
-<li><a href="#15-appendix-full-data-model-reference">15. Appendix — Full Data Model Reference</a></li>
-<li><a href="#16-appendix-full-api-route-reference-28-modules">16. Appendix — Full API Route Reference (28 modules)</a></li>
-<li><a href="#17-appendix-full-check-catalog-34-static-ids-dynamic-ids">17. Appendix — Full Check Catalog (34 static IDs + dynamic IDs)</a></li>
-<li><a href="#18-appendix-spec-vs-reality-the-complete-honest-delta">18. Appendix — Spec vs. Reality: The Complete, Honest Delta</a></li>
-<li><a href="#19-appendix-ai-provider-configuration-reference">19. Appendix — AI Provider &amp; Configuration Reference</a></li>
-<li><a href="#20-appendix-migration-history-24-files-one-linear-chain">20. Appendix — Migration History (24 files, one linear chain)</a></li>
-<li><a href="#21-appendix-rbac-matrix">21. Appendix — RBAC Matrix</a></li>
-<li><a href="#22-appendix-frontend-route-page-map">22. Appendix — Frontend Route &amp; Page Map</a></li>
-<li><a href="#23-whats-next">23. What's Next</a></li>
-</ul>
-</li>
-</ul>
-</div>
-
-  </nav>
-  <main>
-    <div class="cover">
-      <div class="kicker">Architecture &amp; Product Overview</div>
-    </div>
-    <h1 id="verdikt">Verdikt</h1>
+<h1 id="verdikt">Verdikt</h1>
 <h2 id="ai-multi-agent-web-application-api-security-testing-platform">AI Multi-Agent Web Application &amp; API Security Testing Platform</h2>
 <p><strong>Architecture &amp; Product Overview — Full Technical Reference</strong></p>
-<p><em>Every fact in this document, including the reference appendices, was verified
+<p class="doc-tagline"><em>Every fact in this document, including the reference appendices, was verified
 directly against the codebase at the time of writing (not reconstructed from
 memory or prior documentation). Section 18 documents where the current build
 diverges from the original design specification — honestly, both where the
@@ -196,35 +78,39 @@ build fell short and where it went further.</em></p>
 <p>Verdikt is an AI-assisted, multi-agent DAST (Dynamic Application Security
 Testing) platform that performs manual-assessment-quality web and API
 penetration testing at automated speed. A single scan run executes a
-<strong>24-node LangGraph DAG</strong> covering the OWASP Top 10 (2025) and the full
-PortSwigger Web Security Academy topic list, followed by a 25th
-cross-cutting attack-chain-composition step — each detection agent combining
-deterministic, re-executable HTTP-level probing with LLM-assisted triage and
-adversarial validation. The result is a report an experienced penetration
-tester would recognize as their own work: confirmed findings only, real
-evidence (request/response pairs, browser screenshots), plain-language and
-technical write-ups side by side, and a remediation path for every issue.</p>
-<p>The system is explicitly designed so <strong>no single AI vendor is load-
-bearing</strong>. Every LLM-dependent agent talks to a pluggable <code>AIProviderAdapter</code>
+<strong>27-node LangGraph DAG</strong> covering the OWASP Top 10 (2025) and the full
+PortSwigger Web Security Academy topic list, followed by a cross-cutting
+attack-chain-composition step that runs outside the graph proper — each
+detection agent combining deterministic, re-executable HTTP-level probing
+with LLM-assisted triage and adversarial validation. The result is a report
+an experienced penetration tester would recognize as their own work:
+confirmed findings only, real evidence (request/response pairs, browser
+screenshots), plain-language and technical write-ups side by side, and a
+remediation path for every issue.</p>
+<p>The system is explicitly designed so <strong>no single AI vendor is
+load-bearing</strong>. Every LLM-dependent agent talks to a pluggable <code>AIProviderAdapter</code>
 interface — Claude, OpenAI, Gemini, Grok, or any self-hosted/in-house model
 that speaks the OpenAI chat-completions protocol. Swapping providers is a
-configuration action in the UI, not a code change.</p>
-<p><strong>Current state, verified against the running codebase:</strong> 41 files under
-<code>app/agents/</code> (24 of them wired into the scan graph, the rest shared
-infrastructure and support modules), 28 API route modules, ~30 persisted
-data models, 9 external integrations, 14 YAML check catalogs (34 statically
-defined check IDs, plus a further dozen dynamically-generated ones), 24
-Alembic migrations, 19 RBAC resources, and a backend test suite of <strong>99
-files / 527 collected tests</strong> — all figures confirmed by direct inspection
-and by running the test collector, not estimated. Full reference tables for
-every one of these are in the appendices (§13–§22).</p>
+configuration action in the UI, not a code change; there is deliberately no
+concept of routing different agents to different models — every agent in a
+scan resolves and uses one model, keeping provider configuration a single
+per-org or per-scan decision rather than a per-check tuning surface.</p>
+<p><strong>Current state, verified against the running codebase:</strong> 48 files under
+<code>app/agents/</code> (27 of them graph nodes, the rest shared infrastructure and
+support modules), 30 API route modules, ~34 persisted data models, 9
+external integrations, 14 YAML check catalogs (36 statically defined check
+IDs, plus a further dozen dynamically-generated ones), 34 Alembic
+migrations, 20 RBAC resources, and a backend test suite of <strong>111 files /
+617 collected tests</strong> — all figures confirmed by direct inspection and by
+running the test collector, not estimated. Full reference tables for every
+one of these are in the appendices (§13–§24).</p>
 <hr />
 <h2 id="2-the-problem">2. The Problem</h2>
 <p>Manual web/API penetration testing is thorough but doesn't scale: a
 competent tester takes days per application, and demand for testing far
 outpaces the supply of qualified testers. Existing DAST scanners scale but
-don't produce trustworthy results — they're notorious for high false-
-positive rates, shallow coverage of business logic and access control
+don't produce trustworthy results — they're notorious for high
+false-positive rates, shallow coverage of business logic and access control
 issues, and reports nobody can act on without re-verifying every line by
 hand.</p>
 <p>Verdikt's design goal (from the original build specification) is concrete
@@ -238,7 +124,7 @@ wall-clock time</strong>, for <strong>under $20 of LLM spend</strong>.</p>
 <p>Two architectural decisions follow directly from that goal, and are fully
 built and enforced in the running system today:</p>
 <ol>
-<li><strong>Multi-agent, not one big prompt.</strong> Twenty-four narrow, purpose-built
+<li><strong>Multi-agent, not one big prompt.</strong> Twenty-seven narrow, purpose-built
    detection agents each own one vulnerability class, run as parallel nodes
    in a LangGraph DAG, and use the cheapest technique that reliably confirms
    that class (a deterministic HTTP diff for SQL injection; a real
@@ -263,7 +149,7 @@ reports and the API (<code>scan_run.tech_stack_fingerprint</code>). What the ori
 design additionally called for — using that fingerprint to skip scheduling
 entire categories of irrelevant checks, described in the spec as "likely
 the single biggest token-savings lever available" — <strong>is not built as
-general graph-level routing</strong>. The 24-node LangGraph DAG has zero
+general graph-level routing</strong>. The 27-node LangGraph DAG has zero
 conditional edges; every node always runs regardless of the detected stack.
 The one narrow exception that <em>is</em> built: SSTI probing inside <code>injection.py</code>
 skips itself when no template-rendering signal was observed during recon.
@@ -272,22 +158,21 @@ largest gap between the original cost-optimization design and the current
 implementation — see §18 for the complete list of such deltas.</p>
 <hr />
 <h2 id="3-high-level-architecture">3. High-Level Architecture</h2>
-<pre class="mermaid">
-flowchart TB
+<div class="mermaid">flowchart TB
     subgraph Client["Browser"]
         FE["React + TypeScript SPA<br/>(Vite, TanStack Query, Tailwind)"]
     end
 
     subgraph Backend["Verdikt Backend — FastAPI (Python)"]
-        API["REST API — 28 route modules<br/>JWT bearer auth, RBAC-enforced"]
-        ORCH["Multi-Agent Orchestrator<br/>(LangGraph, 24-node DAG)"]
+        API["REST API — 30 route modules<br/>JWT bearer auth, RBAC-enforced"]
+        ORCH["Multi-Agent Orchestrator<br/>(LangGraph, 27-node DAG)"]
         AIABS["AI Provider Abstraction<br/>Claude / OpenAI / Gemini / Grok / Custom"]
         RPT["Reporting Engine<br/>HTML / PDF (reportlab) / DOCX / CSV / JSON"]
         VAULT["Credential Vault<br/>(envelope encryption, pluggable KMS)"]
     end
 
     subgraph Data["Persistence"]
-        PG[("PostgreSQL<br/>~30 models")]
+        PG[("PostgreSQL<br/>~34 models")]
         OBJ[("Object Storage<br/>(screenshots, uploads, letters)")]
     end
 
@@ -323,10 +208,10 @@ flowchart TB
     API <-->|"authn"| IDP
     API -->|"asset lookup"| CMDB
     API -->|"scrape topic write-ups"| PSWIG
+</div>
 
-</pre>
 <p><strong>Backend:</strong> Python, FastAPI, SQLAlchemy 2.0 (async), Alembic migrations
-(24 files, one linear chain), PostgreSQL. Dialect-agnostic ORM layer, so
+(34 files, one linear chain), PostgreSQL. Dialect-agnostic ORM layer, so
 the test suite runs against ephemeral SQLite with zero external services
 (with one deliberately-accepted limitation: SQLite doesn't enforce
 <code>ON DELETE CASCADE</code>, so cascade behavior is verified live against the real
@@ -335,7 +220,7 @@ Postgres, not by the unit suite).</p>
 React Router, Tailwind CSS. A hand-written typed fetch client
 (<code>src/api/client.ts</code>, 23 namespaced sub-objects, 62 exported types in
 <code>src/api/types.ts</code>) mirrors the backend's Pydantic schemas.</p>
-<p><strong>Agent orchestration:</strong> LangGraph builds a 24-node directed graph per scan
+<p><strong>Agent orchestration:</strong> LangGraph builds a 27-node directed graph per scan
 run, with genuine parallel fan-out where checks don't depend on each other
 (12 nodes off <code>recon</code>, 10 more off <code>authenticated_recon</code>), and explicit
 sequencing where they do (every authenticated check waits on <code>login</code>
@@ -345,16 +230,15 @@ it needs the full, final set of findings from every other agent as its
 input.</p>
 <p><strong>Storage:</strong> PostgreSQL for all structured data; a pluggable
 <code>ObjectStorageAdapter</code> (local disk by default, S3-compatible for
-production) for screenshots, uploaded authorization letters, and uploaded
-traffic files.</p>
+production) for evidence screenshots, VGS report attachments, and
+uploaded traffic files.</p>
 <hr />
 <h2 id="4-core-data-model">4. Core Data Model</h2>
 <p>Every engagement is modeled as a hierarchy that mirrors how a real pentest
 is scoped and re-run over time. This is a simplified view for readability —
-the full field-level reference for all ~30 models is in <strong>Appendix
+the full field-level reference for all ~34 models is in <strong>Appendix
 §15</strong>.</p>
-<pre class="mermaid">
-erDiagram
+<div class="mermaid">erDiagram
     ORGANIZATION ||--o{ PROJECT : owns
     ORGANIZATION ||--o{ USER : has
     PROJECT ||--o{ VERSION : "has engagements"
@@ -373,8 +257,8 @@ erDiagram
     SCAN_RUN ||--o{ ATTACK_CHAIN : "composes into"
     ATTACK_CHAIN ||--o{ ATTACK_CHAIN_EVIDENCE : "cites"
     TARGET ||--o| SCOPE_ENTRY : "auto-derives"
+</div>
 
-</pre>
 <p>Key design points, each verified against real migration/model code:</p>
 <ul>
 <li><strong>Scope is a real technical control, not a UI reminder.</strong> <code>ScopedHttpClient</code>
@@ -410,9 +294,8 @@ erDiagram
 </ul>
 <hr />
 <h2 id="5-the-multi-agent-scanning-engine">5. The Multi-Agent Scanning Engine</h2>
-<h3 id="51-scan-lifecycle-the-real-verified-24-node-dag">5.1 Scan lifecycle — the real, verified 24-node DAG</h3>
-<pre class="mermaid">
-flowchart LR
+<h3 id="51-scan-lifecycle-the-real-verified-27-node-dag">5.1 Scan lifecycle — the real, verified 27-node DAG</h3>
+<div class="mermaid">flowchart LR
     A["POST /versions/{id}/scan-runs"] --> B["recon<br/>(unauthenticated crawl +<br/>inline tech-stack fingerprint)"]
     B --> U1["header_config"]
     B --> U2["host_header"]
@@ -428,22 +311,24 @@ flowchart LR
     B --> U12["cache_poisoning"]
     B --> L["login<br/>(per credential set)"]
     L --> E["authenticated_recon<br/>(full-depth authenticated crawl)"]
-    E --> A1["dom_xss"]
-    E --> A2["injection<br/>(SQLi / cmd-inj / SSTI /<br/>path traversal / NoSQLi)"]
-    E --> A3["xss"]
-    E --> A4["auth<br/>(JWT / session)"]
-    E --> A5["access_control"]
-    E --> A6["business_logic"]
-    E --> A7["csrf"]
-    E --> A8["stored_xss"]
-    E --> A9["file_upload"]
-    E --> A10["websocket"]
+    E --> P["recon_planner<br/>(one AI call proposes unlinked-but-<br/>plausible paths; each is verified live<br/>before counting as discovered)"]
+    P --> A1["dom_xss"]
+    P --> A2["injection<br/>(SQLi / cmd-inj / SSTI /<br/>path traversal / NoSQLi)"]
+    P --> A3["xss"]
+    P --> A4["auth<br/>(JWT / session)"]
+    P --> A5["access_control"]
+    P --> BP["ai_business_logic_plan<br/>(AI proposes hypotheses only —<br/>never a verdict, see §5.3)"]
+    BP --> A6["business_logic"]
+    P --> A7["csrf"]
+    P --> A8["stored_xss"]
+    P --> A9["file_upload"]
+    P --> A10["websocket"]
     U1 & U2 & U3 & U4 & U5 & U6 & U7 & U8 & U9 & U10 & U11 & U12 --> G
-    A1 & A2 & A3 & A4 & A5 & A6 & A7 & A8 & A9 & A10 --> G["chain_analysis<br/>(25th step, runs after the graph —<br/>composes multi-finding attack chains)"]
-    G --> H["Report generation<br/>(HTML / PDF / DOCX / CSV / JSON)"]
-    H --> I["Best-effort notify:<br/>Slack / Teams / VGS webhook"]
+    A1 & A2 & A3 & A4 & A5 & A6 & A7 & A8 & A9 & A10 --> G["chain_analysis<br/>(runs after the graph completes, over that<br/>run's Confirmed findings — composes<br/>multi-finding attack chains)"]
+    G --> H["Report generation<br/>(HTML / PDF / DOCX / CSV / JSON /<br/>per-scan-run VGS-format DOCX)"]
+    H --> I["Best-effort notify:<br/>Slack / Teams / VGS webhook/push"]
+</div>
 
-</pre>
 <p>There are genuinely <strong>no conditional edges anywhere in this graph</strong> —
 <code>add_conditional_edges</code> is never called. Every node listed always runs.
 Recon deliberately runs twice: once unauthenticated (all a purely anonymous
@@ -451,12 +336,23 @@ visitor would ever see — usually just a login form), and once fully
 authenticated after <code>login</code> succeeds. This was a real, live-found gap
 during development — a pre-login-only crawl against DVWA discovered
 exactly one form (the login form itself), leaving every other agent with
-nothing to test.</p>
-<h3 id="52-whats-in-appagents-beyond-the-24-graph-nodes">5.2 What's in <code>app/agents/</code> beyond the 24 graph nodes</h3>
-<p>The <code>agents/</code> directory holds <strong>41 files total</strong>. Besides the 24 wired into
-the graph (plus <code>chain_analysis.py</code> as the 25th, post-graph step), the
-remaining ~16 files are shared infrastructure the detection agents are
-built on top of, not standalone checks:</p>
+nothing to test. <code>recon_planner</code> and <code>ai_business_logic_plan</code> are later
+additions to the original 24-node graph, both following the same
+propose-then-verify discipline as everything else in §5.3 — an AI
+suggestion is worth nothing here until something deterministic confirms it.
+<code>chain_analysis</code> runs outside the graph proper (not a <code>graph.add_node</code> call,
+called directly by <code>runner.py</code> after <code>graph.ainvoke()</code> returns), so it's not
+counted in the 27.</p>
+<h3 id="52-whats-in-appagents-beyond-the-27-graph-nodes">5.2 What's in <code>app/agents/</code> beyond the 27 graph nodes</h3>
+<p>The <code>agents/</code> directory holds <strong>48 files total</strong> (up from 41), reflecting
+both new detection surface (<code>recon_planner.py</code>, <code>business_logic_planner.py</code>
+— the two AI-hypothesis-generating nodes added since) and the standalone
+browser extension's backend counterpart. Most files map one-to-one onto a
+graph node; a few (<code>recon.py</code>, <code>login.py</code>) do double duty as both a node's
+own implementation and shared infrastructure another node reuses
+(<code>authenticated_recon</code> reuses the same <code>ReconAgent</code> as <code>recon</code>, for
+instance). The ~20 files below are the shared infrastructure worth knowing
+about beyond the checks themselves:</p>
 <table>
 <thead>
 <tr>
@@ -465,6 +361,10 @@ built on top of, not standalone checks:</p>
 </tr>
 </thead>
 <tbody>
+<tr>
+<td><code>graph.py</code></td>
+<td><code>build_graph()</code> — wires the 27-node LangGraph DAG itself; the only file that knows the full node/edge topology</td>
+</tr>
 <tr>
 <td><code>http_client.py</code></td>
 <td><code>ScopedHttpClient</code> — the scope-enforcement mechanism every other agent's requests pass through</td>
@@ -536,8 +436,7 @@ built on top of, not standalone checks:</p>
 </tbody>
 </table>
 <h3 id="53-confirmed-only-findings-pipeline">5.3 Confirmed-Only Findings pipeline</h3>
-<pre class="mermaid">
-flowchart LR
+<div class="mermaid">flowchart LR
     A["Deterministic probe<br/>(HTTP-level signal)"] -->|"no signal"| X1["discarded"]
     A -->|"signal found"| B["LLM triage<br/>(classify: vulnerable?)"]
     B -->|"not vulnerable"| X2["discarded"]
@@ -546,8 +445,8 @@ flowchart LR
     C -->|"reproduces"| D{"Can prove real-world<br/>impact automatically?<br/>(browser execution,<br/>OOB callback, etc.)"}
     D -->|"yes"| E["Finding<br/>(confirmed, with evidence)"]
     D -->|"no — needs human judgment"| F["ReviewCandidate<br/>(pending promotion)"]
+</div>
 
-</pre>
 <p>Every step is genuinely re-executable: a Finding's "steps to reproduce" are
 the exact request that was actually sent, not a templated example. Where
 automatable, the strongest possible proof is used — a real headless
@@ -582,8 +481,7 @@ levels before being considered done.</p>
 a runtime configuration choice, resolved in this <strong>exact, code-verified
 order</strong> for every scan (<code>resolve_provider_and_model()</code> in
 <code>app/ai/provider.py</code>):</p>
-<pre class="mermaid">
-flowchart TD
+<div class="mermaid">flowchart TD
     A["Scan run starts"] --> B{"scan_run.ai_provider_config_id<br/>set and not deleted?"}
     B -->|"yes"| C["Use that AIProviderConfig"]
     B -->|"no"| D{"Org has an AIProviderConfig<br/>with is_default = True?<br/>(looked up via Project.org_id,<br/>joined through Version)"}
@@ -593,8 +491,8 @@ flowchart TD
     E --> G
     F --> G
     G --> H["ClaudeAdapter / OpenAIAdapter / GeminiAdapter /<br/>GrokAdapter / GenericOpenAIAdapter<br/>(any OpenAI-chat-completions-compatible endpoint)"]
+</div>
 
-</pre>
 <p><strong>Six adapter classes exist</strong> (<code>app/ai/adapters/</code>): <code>ClaudeAdapter</code>,
 <code>OpenAIAdapter</code>, <code>GeminiAdapter</code>, <code>GrokAdapter</code> (a subclass of
 <code>GenericOpenAIAdapter</code>), <code>GenericOpenAIAdapter</code> itself (any OpenAI
@@ -710,7 +608,7 @@ directly by agent code for parameterized findings like <code>sqli-error</code> /
   standalone VGS tool's report format (pie chart, version-history table).</li>
 </ul>
 <hr />
-<h2 id="10-vgs-integration-two-complementary-modes-both-built">10. VGS Integration — Two Complementary Modes, Both Built</h2>
+<h2 id="10-vgs-integration-three-complementary-modes-all-built">10. VGS Integration — Three Complementary Modes, All Built</h2>
 <ol>
 <li><strong>Decoupled webhook push</strong> (<code>app/integrations/vgs/client.py</code>'s
    <code>VGSClient</code>, <code>VGSConfig</code> model, <code>push_findings_to_vgs</code> trigger) — on scan
@@ -722,23 +620,42 @@ directly by agent code for parameterized findings like <code>sqli-error</code> /
    (<code>/vgs</code>, <code>/vgs/:versionId</code> routes; <code>vgs_vulnerabilities.py</code>'s
    <code>library_router</code> and <code>draft_router</code>; <code>VgsReportDraft</code> /
    <code>VgsReportVulnerability</code> / <code>VgsEvidenceStep</code> / <code>VgsVulnerabilityLibraryEntry</code>
-   models):</li>
-<li>The <strong>Vulnerability Picker</strong> offers real, scan-confirmed findings
+   models):
+   - The <strong>Vulnerability Picker</strong> offers real, scan-confirmed findings
      grouped by vulnerability type (via the same <code>group_findings()</code> used by
-     standard reports), auto-seeded into a new report draft.</li>
-<li><strong>Manage Vulnerabilities</strong> includes a one-click <strong>"Load from
+     standard reports), auto-seeded into a new report draft — and re-seeded
+     on every load, not just the first. A dedicated <code>auto_seeded_finding_ids</code>
+     column (JSON list on <code>VgsReportDraft</code>) tracks every <code>Finding.id</code> ever
+     offered, kept forever even after the analyst deletes the resulting
+     vulnerability — this is what lets a later scan's newly-confirmed
+     vulnerability class appear automatically without resurrecting something
+     already deliberately removed (the two behaviors are genuinely in
+     tension; this is the fix that satisfies both).
+   - Each selected vulnerability supports <strong>delete and in-place severity
+     editing</strong> directly from the picker, not just from the curated library.
+   - <strong>Manage Vulnerabilities</strong> includes a one-click <strong>"Load from
      PortSwigger"</strong> action (<code>app/integrations/portswigger/client.py</code>'s
      <code>fetch_topics()</code>, 13 real seeded Web Security Academy URLs) — a native
      port of the original standalone VGS tool's scrape-to-Excel workflow,
-     collapsed into a single server-side action.</li>
-<li><strong>Evidence</strong> supports numbered steps, each with one or more
-     screenshots addable at any time, not just at step creation.</li>
-<li><strong>Generate Report</strong> (<code>GET /versions/{id}/vgs-report-draft/report.docx</code>)
+     collapsed into a single server-side action.
+   - <strong>Evidence</strong> supports numbered steps, each with one or more
+     screenshots addable at any time, not just at step creation.
+   - <strong>Generate Report</strong> (<code>GET /versions/{id}/vgs-report-draft/report.docx</code>)
      produces the same DOCX shape as the original VGS tool.</li>
+<li><strong>Per-scan-run VGS-format export, with no curation step at all</strong>
+   (<code>GET /scan-runs/{id}/report.vgs.docx</code>) — the newest of the three modes.
+   Every finding from one specific scan run, grouped the same way the
+   curated workspace groups them, rendered straight into the VGS DOCX shape
+   (pie chart, summary table, per-vulnerability detail sections) as one
+   transient, unpersisted document — nothing is written to
+   <code>VgsReportDraft</code>/<code>VgsReportVulnerability</code> for this path. This is the
+   "I just want the VGS format for this one scan, right now" case; the
+   curated workspace above remains the tool for building a report that
+   blends multiple scans, ad-hoc entries, and manual curation.</li>
 </ol>
 <p>This is notably <strong>more</strong> than the original design called for — the spec
-recommended starting with the webhook path alone; the native report-builder
-port was built in addition, as its own complete workspace.</p>
+recommended starting with the webhook path alone; both the native
+report-builder port and the per-scan-run export were built in addition.</p>
 <hr />
 <h2 id="11-enterprise-hardening">11. Enterprise Hardening</h2>
 <ul>
@@ -791,46 +708,93 @@ port was built in addition, as its own complete workspace.</p>
 </ul>
 <hr />
 <h2 id="13-deployment">13. Deployment</h2>
-<p><strong>Docker Compose</strong> brings up the full stack — PostgreSQL, backend, and
-frontend — from a single command, verified end-to-end against a completely
-fresh environment:</p>
-<pre class="mermaid">
-flowchart TB
+<p>Two supported paths — both fully built, neither a stub. <strong>Docker Compose</strong>
+brings up the full stack from a single command; a <strong>manual (native)</strong> setup
+runs Python/Node directly on the host against any reachable Postgres. See
+the top-level <code>README.md</code> for the exact commands for each; this section
+covers what's architecturally true of each path.</p>
+<h3 id="131-docker-compose">13.1 Docker Compose</h3>
+<p>Verified end-to-end against a completely fresh environment (empty Postgres
+volume, no host <code>.venv</code>/<code>node_modules</code>):</p>
+<div class="mermaid">flowchart TB
     subgraph Host["Host Machine (macOS / Linux / Windows)"]
         subgraph Compose["docker compose up --build"]
             DB[("db<br/>postgres:16-alpine<br/>named volume: verdikt_pgdata<br/>host port 5433 (avoids native-Postgres collision)")]
-            BE["backend<br/>python:3.12-slim + Playwright/Chromium<br/>(installed at BUILD time)<br/>runs `alembic upgrade head`<br/>then uvicorn --loop asyncio"]
+            BE["backend<br/>python:3.12-slim + Playwright/Chromium<br/>+ Xvfb/x11vnc/fluxbox/novnc<br/>(installed at BUILD time)<br/>runs `alembic upgrade head`<br/>then uvicorn --loop asyncio"]
             FEC["frontend<br/>node:22-slim, real Vite dev server<br/>npm run dev -- --host 0.0.0.0"]
         end
         Browser["Browser<br/>localhost:5173"]
     end
     BE -->|"db:5432"| DB
     Browser -->|"HTTP"| FEC
-    Browser -->|"HTTP :8000"| BE
+    Browser -->|"HTTP :8095"| BE
+    Browser -->|"VNC-in-iframe<br/>127.0.0.1:6080"| BE
+</div>
 
-</pre>
 <ul>
 <li><strong><code>--loop asyncio</code> is not a stylistic choice</strong> — uvicorn's default
   <code>--loop auto</code> silently selects <code>uvloop</code>, which is incompatible with
   Playwright's async browser launch and hangs forever with no error
   message. This was found by actually running the container against a
   live Juice Shop target, not by reading documentation.</li>
+<li><strong><code>--build</code> is not optional either.</strong> Plain <code>docker compose up</code> / <code>up -d</code>
+  reuses whatever image was built last, even after <code>Dockerfile</code> itself has
+  changed — a real, live-found incident: the backend image was rebuilt once
+  with <code>xvfb</code>/<code>x11vnc</code>/<code>fluxbox</code>/<code>novnc</code> newly added to <code>Dockerfile</code>, but a
+  later <code>docker compose up -d</code> reused the <em>previous</em> cached image, so the
+  login-macro recorder's VNC stack silently never started while <code>/health</code>
+  reported the container fine throughout. Fixed at the source, not just in
+  the docs: <code>start-display.sh</code> now pre-flight-checks each binary exists and
+  confirms (via <code>pgrep</code>, needing the added <code>procps</code> package) that each
+  process actually stayed running after launch — either one unmistakable
+  success line, or a banner naming exactly what's missing and that a
+  <code>--build</code> is needed. It never fails the container outright over this —
+  scanning, the API, and the standalone browser-extension recorder (below)
+  don't depend on VNC at all.</li>
 <li>Migrations run automatically on container start (a no-op once already
   current) — a fresh database gets its schema with zero manual steps.</li>
 <li>The backend's build-time virtualenv is protected from the dev bind-mount
   via a masking Docker volume (<code>backend_venv:/app/.venv</code>), so the container
   never silently inherits a host's binary-incompatible Python environment;
-  the frontend uses the equivalent <code>node_modules</code> mask.</li>
+  the frontend uses the equivalent <code>node_modules</code> mask. A third mount
+  (<code>./browser-extension:/browser-extension:ro</code>) exposes the standalone
+  extension's source (§13.3) to the "Download extension" button, since it
+  lives as a sibling of <code>backend/</code>, not inside it.</li>
 <li>The frontend Dockerfile runs the real Vite dev server (with HMR), not a
   production build — its own comment notes a production multi-stage/nginx
   build is a reasonable follow-up once there's an actual deployment target.</li>
 <li><code>.gitattributes</code> (<code>* text=auto eol=lf</code>) normalizes line endings across
   macOS/Linux/Windows checkouts.</li>
+<li>A machine already running its own native Postgres can point the backend
+  container at it instead of the bundled <code>db</code> service via a git-ignored
+  <code>docker-compose.override.yml</code> (<code>DATABASE_URL</code> → <code>host.docker.internal</code>)
+  — machine-local by design, never committed.</li>
 </ul>
+<h3 id="132-manual-native-setup">13.2 Manual (native) setup</h3>
+<p>No Docker at all: <code>uv sync</code> + <code>alembic upgrade head</code> + <code>uvicorn</code> for the
+backend, <code>npm install</code> + <code>npm run dev</code> for the frontend, against any
+Postgres the operator points <code>DATABASE_URL</code> at. Functionally equivalent to
+the Docker path with one real exception: the in-app "Record in-browser"
+login-macro recorder needs the Xvfb/x11vnc/noVNC display stack above, which
+only exists inside the Docker image — there is no native macOS/Windows
+equivalent shipped. §13.3 is the answer for this path.</p>
+<h3 id="133-standalone-browser-extension-login-macro-recording-without-docker">13.3 Standalone browser extension (login-macro recording without Docker)</h3>
+<p><code>browser-extension/</code> — a real, separate Chrome/Edge Manifest V3 extension
+producing the exact same <code>LoginMacro.steps</code> JSON shape as the in-app
+Playwright recorder (<code>POST /versions/{id}/credentials/{id}/macros/upload</code>
+accepts either interchangeably; both are replayed by the identical
+<code>MacroPlayer</code>). Since neither Chrome nor Edge allows a web page to install
+an unpublished extension directly — inline installation was removed
+platform-wide years ago, and this one isn't on the Web Store — "Download
+extension (.zip)" (next to <strong>Record macro</strong> in the Credentials tab,
+backed by <code>GET /browser-extension/download</code>, which zips the source on
+demand so the download is always in sync with the checked-in extension) is
+the practical equivalent: download, <code>chrome://extensions</code> → Developer
+mode → Load unpacked, record, export, upload.</p>
 <hr />
 <h2 id="14-testing-quality-discipline">14. Testing &amp; Quality Discipline</h2>
 <ul>
-<li><strong>99 test files, 527 collected tests</strong> — confirmed by running
+<li><strong>111 test files, 617 collected tests</strong> — confirmed by running
   <code>pytest --collect-only</code>, not estimated.</li>
 <li>Real fixtures over mocks wherever practically possible: real local HTTP
   servers standing in for a target application, a real headless browser
@@ -1029,7 +993,7 @@ flowchart TB
 <p><strong><code>AuthorizationRecord</code>, referenced in the original design's guardrail #1,
 does not exist in the current model set</strong> — confirmed removed (§18).</p>
 <hr />
-<h2 id="16-appendix-full-api-route-reference-28-modules">16. Appendix — Full API Route Reference (28 modules)</h2>
+<h2 id="16-appendix-full-api-route-reference-30-modules">16. Appendix — Full API Route Reference (30 modules)</h2>
 <table>
 <thead>
 <tr>
@@ -1055,6 +1019,10 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 <td><code>POST /auth/register</code>, <code>POST /auth/login</code>, <code>GET /auth/me</code></td>
 </tr>
 <tr>
+<td><code>browser_extension.py</code></td>
+<td><code>GET /browser-extension/download</code> (zips <code>browser-extension/</code> on demand — see §13.3)</td>
+</tr>
+<tr>
 <td><code>burp.py</code></td>
 <td><code>POST /burp/scans</code>, <code>POST /burp/scans/{task_id}/import</code></td>
 </tr>
@@ -1068,7 +1036,7 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 </tr>
 <tr>
 <td><code>credentials.py</code></td>
-<td><code>POST /credentials</code>, <code>GET /credentials</code>, <code>PATCH /credentials/{id}</code>, <code>DELETE /credentials/{id}</code>, <code>POST /credentials/{id}/record-macro</code>, <code>GET /credentials/{id}/macros</code></td>
+<td><code>POST /credentials</code>, <code>GET /credentials</code>, <code>PATCH /credentials/{id}</code>, <code>DELETE /credentials/{id}</code>, <code>POST /credentials/{id}/test-login</code>, <code>POST /credentials/{id}/record-macro/start</code>, <code>POST /credentials/{id}/record-macro/{recording_id}/finish</code>, <code>POST /credentials/{id}/record-macro/{recording_id}/cancel</code>, <code>GET /credentials/{id}/macros</code>, <code>DELETE /credentials/{id}/macros/{macro_id}</code></td>
 </tr>
 <tr>
 <td><code>dashboard.py</code></td>
@@ -1077,6 +1045,10 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 <tr>
 <td><code>finding_tickets.py</code></td>
 <td><code>POST /findings/{id}/tickets</code>, <code>GET /findings/{id}/tickets</code></td>
+</tr>
+<tr>
+<td><code>findings.py</code></td>
+<td><code>PATCH /findings/{id}</code>, <code>DELETE /findings/{id}</code></td>
 </tr>
 <tr>
 <td><code>macro_upload.py</code></td>
@@ -1120,7 +1092,7 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 </tr>
 <tr>
 <td><code>scans.py</code></td>
-<td><code>POST /versions/{id}/scan-runs</code>, <code>POST /versions/{v}/scan-runs/{prior}/retest</code>, <code>GET /versions/{id}/scan-runs</code>, <code>GET /scan-runs/{id}</code>, <code>POST /scan-runs/{id}/cancel</code>, <code>DELETE /scan-runs/{id}</code>, <code>GET /scan-runs/{id}/findings</code>, <code>GET /scan-runs/{id}/report.{json,html,pdf,docx,csv}</code>, <code>GET /scan-runs/{later}/diff/{earlier}</code></td>
+<td><code>POST /versions/{id}/scan-runs</code>, <code>POST /versions/{v}/scan-runs/{prior}/retest</code>, <code>GET /versions/{id}/scan-runs</code>, <code>GET /scan-runs/{id}</code>, <code>POST /scan-runs/{id}/cancel</code>, <code>DELETE /scan-runs/{id}</code>, <code>GET /scan-runs/{id}/findings</code>, <code>GET /scan-runs/{id}/report.{json,html,pdf,docx,csv,vgs.docx}</code>, <code>GET /scan-runs/{later}/diff/{earlier}</code></td>
 </tr>
 <tr>
 <td><code>targets.py</code></td>
@@ -1153,7 +1125,7 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 </tbody>
 </table>
 <hr />
-<h2 id="17-appendix-full-check-catalog-34-static-ids-dynamic-ids">17. Appendix — Full Check Catalog (34 static IDs + dynamic IDs)</h2>
+<h2 id="17-appendix-full-check-catalog-36-static-ids-dynamic-ids">17. Appendix — Full Check Catalog (36 static IDs + dynamic IDs)</h2>
 <table>
 <thead>
 <tr>
@@ -1247,10 +1219,15 @@ decisions diverged from the original design, in both directions.</p>
 <li><strong>Smart Scan cost-optimization routing — only one narrow case built.</strong>
    See §2.1: the fingerprint is computed and shown, but doesn't gate
    scheduling anywhere except one SSTI check.</li>
-<li><strong>Per-task-type model routing — not built.</strong> The spec called for cheap
-   models on recon/header checks and frontier models reserved for
-   business-logic reasoning. Every agent in a scan run uses the single
-   model resolved once via <code>resolve_provider_and_model()</code>.</li>
+<li><strong>Per-task-type model routing — not built (twice).</strong> The spec called for
+   cheap models on recon/header checks and frontier models reserved for
+   business-logic reasoning. This was actually built once — a <code>ModelRouter</code>
+   with per-agent-role tiers and a UI to configure them (migration
+   <code>0029_ai_provider_config_model_tiers</code>) — and then deliberately removed
+   again (migration <code>0032_drop_ai_provider_model_tiers</code>) once it added real
+   configuration-surface complexity without a correspondingly clear
+   benefit. Every agent in a scan run uses the single model resolved once
+   via <code>resolve_provider_and_model()</code>, same as before that experiment.</li>
 <li><strong>Depth slider (Quick/Standard/Deep/Deep-Paranoid) — not built.</strong> No
    such setting, enum, or UI control exists anywhere in the codebase.</li>
 <li><strong>Cross-credential-set result caching — not built.</strong> The spec called for
@@ -1264,11 +1241,12 @@ decisions diverged from the original design, in both directions.</p>
    exist anywhere in the codebase.</li>
 </ol>
 <p><strong>Built beyond what was originally specified:</strong></p>
-<ol>
+<ol start="8">
 <li><strong>VGS integration — both spec-recommended paths, plus a full native
-   workspace.</strong> The spec recommended starting with webhook push alone; the
-   native report-builder port (its own top-level frontend workspace) was
-   built in addition.</li>
+   workspace, plus a third export mode.</strong> The spec recommended starting
+   with webhook push alone; the native report-builder port (its own
+   top-level frontend workspace) and a no-curation-needed per-scan-run
+   VGS-format export were both built in addition (§10).</li>
 <li><strong>The image-polyglot file-upload bypass technique</strong> — not mentioned in
    the spec at all.</li>
 <li><strong>The PortSwigger Web Security Academy scraper</strong> ("Load from
@@ -1280,9 +1258,18 @@ decisions diverged from the original design, in both directions.</p>
 <li><strong>A genuine conversational Microsoft Teams bot</strong> — the spec's
     integration section called for a generic notification adapter only,
     not an interactive bot with real command parsing.</li>
+<li><strong>Two independent ways to record a login macro, not just one.</strong> The
+    spec called for "a Playwright-backed in-browser recorder" without
+    specifying delivery. What's built: a real headed Chromium, streamed
+    live into the Verdikt UI itself over VNC (Xvfb/x11vnc/noVNC) so no
+    local display or browser extension is needed when running via Docker
+    — plus, since neither outcome is available in a manual/native (no
+    Docker) setup, a genuinely separate standalone browser extension
+    (<code>browser-extension/</code>) producing the identical macro JSON shape,
+    downloadable in one click from the same UI.</li>
 </ol>
 <p><strong>Matches the spec closely:</strong></p>
-<ol>
+<ol start="14">
 <li>The AI Provider Abstraction itself, including the exact
     <code>CustomEndpointAdapter</code> concept the spec named by placeholder
     (implemented as <code>GenericOpenAIAdapter</code>).</li>
@@ -1370,7 +1357,7 @@ decisions diverged from the original design, in both directions.</p>
 <p>Note: Gemini and Grok have <strong>no</strong> <code>.env</code> settings — reachable only via a
 per-org <code>AIProviderConfig</code> in the UI.</p>
 <hr />
-<h2 id="20-appendix-migration-history-24-files-one-linear-chain">20. Appendix — Migration History (24 files, one linear chain)</h2>
+<h2 id="20-appendix-migration-history-34-files-one-linear-chain">20. Appendix — Migration History (34 files, one linear chain)</h2>
 <p><code>0001_initial_schema</code> → <code>0001b_widen_alembic_version_column</code> (widens
 <code>alembic_version.version_num</code> for this project's long revision slugs) →
 <code>0002_scan_findings_and_permissions</code> → <code>0003_phase2_review_candidates_and_login_config</code>
@@ -1384,11 +1371,30 @@ per-org <code>AIProviderConfig</code> in the UI.</p>
 <code>0018_scan_delete_cascade_and_vgs_finding_link</code> →
 <code>0019_vgs_evidence_cascade_and_auto_seed</code> → <code>0020_scan_run_warning</code> →
 <code>0021_credential_set_delete_cascade</code> → <code>0022_drop_authorization_records</code>
-(drops the table entirely) → <code>0023_ai_provider_config_default</code>.</p>
+(drops the table entirely) → <code>0023_ai_provider_config_default</code> →
+<code>0024_spark_app_id_and_secondary_key</code> → <code>0025_scan_run_token_usage</code> →
+<code>0026_finding_resource_permissions</code> → <code>0027_business_rule_source</code> →
+<code>0028_credential_privilege_rank</code> → <code>0029_ai_provider_config_model_tiers</code> →
+<code>0030_ai_provider_config_secret_rotated_at</code> →
+<code>0031_drop_spark_specific_columns</code> → <code>0032_drop_ai_provider_model_tiers</code> →
+<code>0033_vgs_auto_seed_finding_memory</code>.</p>
+<p>Two of these pairs are worth reading together, not in isolation: <code>0024</code>
+added columns for a since-removed, org-specific internal LLM gateway
+integration (never a general-purpose feature, and out of scope once that
+org's need went away); <code>0031</code> drops them. <code>0029</code> added per-agent-role model
+tiering (<code>model_reasoning</code>/<code>model_classification</code> columns, letting an org
+route different agents to different models); <code>0032</code> drops it, in favor of
+the single-model-per-scan design described in §1/§6 — real functionality
+that shipped, was used, and was deliberately simplified back out once it
+proved to be complexity without enough benefit, not a mistake papered over.
+<code>0033</code> is the newest: a persistent <code>auto_seeded_finding_ids</code> column on
+<code>VgsReportDraft</code> (§10) that tracks every <code>Finding.id</code> an auto-seed pass has
+ever offered a report draft, independent of whether the resulting
+vulnerability still exists in the draft.</p>
 <hr />
 <h2 id="21-appendix-rbac-matrix">21. Appendix — RBAC Matrix</h2>
-<p><strong>19 resources</strong>: <code>organization</code>, <code>project</code>, <code>version</code>, <code>target</code>,
-<code>credential</code>, <code>traffic</code>, <code>scan</code>, <code>review_candidate</code>, <code>business_rule</code>,
+<p><strong>20 resources</strong>: <code>organization</code>, <code>project</code>, <code>version</code>, <code>target</code>,
+<code>credential</code>, <code>traffic</code>, <code>scan</code>, <code>finding</code>, <code>review_candidate</code>, <code>business_rule</code>,
 <code>ai_provider_config</code>, <code>oidc_provider_config</code>, <code>notification_config</code>,
 <code>ticketing_config</code>, <code>cmdb_config</code>, <code>vgs_config</code>, <code>user</code>, <code>org_branding</code>,
 <code>saml_config</code>, <code>vgs_vulnerability</code> — each with <code>create</code>/<code>read</code>/<code>update</code>/<code>delete</code>.</p>
@@ -1402,7 +1408,7 @@ per-org <code>AIProviderConfig</code> in the UI.</p>
 <tbody>
 <tr>
 <td><code>org_admin</code></td>
-<td>Full CRUD on all 19 resources</td>
+<td>Full CRUD on all 20 resources</td>
 </tr>
 <tr>
 <td><code>project_lead</code></td>
@@ -1420,17 +1426,18 @@ per-org <code>AIProviderConfig</code> in the UI.</p>
 </table>
 <hr />
 <h2 id="22-appendix-frontend-route-page-map">22. Appendix — Frontend Route &amp; Page Map</h2>
-<pre><code>/login, /register, /accept-invite, /oidc-callback   (public)
-Protected (behind Layout):
-  /                          → ProjectsPage
-  /dashboard                 → DashboardPage
-  /projects/:projectId       → ProjectDetailPage
-  /versions/:versionId       → VersionDetailPage
-  /scan-runs/:scanRunId      → ScanRunDetailPage
-  /vgs                       → VgsLandingPage
-  /vgs/:versionId            → VgsWorkspacePage
-  /account                   → AccountPage
-</code></pre>
+<div class="codehilite"><pre><span></span><code><span class="o">/</span><span class="n">login</span><span class="p">,</span><span class="w"> </span><span class="o">/</span><span class="n">register</span><span class="p">,</span><span class="w"> </span><span class="o">/</span><span class="n">accept</span><span class="o">-</span><span class="n">invite</span><span class="p">,</span><span class="w"> </span><span class="o">/</span><span class="n">oidc</span><span class="o">-</span><span class="n">callback</span><span class="w">   </span><span class="p">(</span><span class="n">public</span><span class="p">)</span>
+<span class="n">Protected</span><span class="w"> </span><span class="p">(</span><span class="n">behind</span><span class="w"> </span><span class="n">Layout</span><span class="p">)</span><span class="o">:</span>
+<span class="w">  </span><span class="o">/</span><span class="w">                          </span><span class="err">→</span><span class="w"> </span><span class="n">ProjectsPage</span>
+<span class="w">  </span><span class="o">/</span><span class="n">dashboard</span><span class="w">                 </span><span class="err">→</span><span class="w"> </span><span class="n">DashboardPage</span>
+<span class="w">  </span><span class="o">/</span><span class="n">projects</span><span class="o">/:</span><span class="n">projectId</span><span class="w">       </span><span class="err">→</span><span class="w"> </span><span class="n">ProjectDetailPage</span>
+<span class="w">  </span><span class="o">/</span><span class="n">versions</span><span class="o">/:</span><span class="n">versionId</span><span class="w">       </span><span class="err">→</span><span class="w"> </span><span class="n">VersionDetailPage</span>
+<span class="w">  </span><span class="o">/</span><span class="n">scan</span><span class="o">-</span><span class="n">runs</span><span class="o">/:</span><span class="n">scanRunId</span><span class="w">      </span><span class="err">→</span><span class="w"> </span><span class="n">ScanRunDetailPage</span>
+<span class="w">  </span><span class="o">/</span><span class="n">vgs</span><span class="w">                       </span><span class="err">→</span><span class="w"> </span><span class="n">VgsLandingPage</span>
+<span class="w">  </span><span class="o">/</span><span class="n">vgs</span><span class="o">/:</span><span class="n">versionId</span><span class="w">            </span><span class="err">→</span><span class="w"> </span><span class="n">VgsWorkspacePage</span>
+<span class="w">  </span><span class="o">/</span><span class="n">account</span><span class="w">                   </span><span class="err">→</span><span class="w"> </span><span class="n">AccountPage</span>
+</code></pre></div>
+
 <ul>
 <li><strong>Account page sections</strong> (own file each): Branding, CMDB Configs,
   Notification Configs, SAML Configs, Ticketing Configs, Users, VGS
@@ -1459,8 +1466,10 @@ Protected (behind Layout):
   called for — using the tech-stack fingerprint to actually skip
   irrelevant node scheduling, not just display it.</li>
 <li>A depth/intensity profile (Quick/Standard/Deep) as a scan-trigger option.</li>
-<li>Per-task-type model routing, now that the AI provider layer already
-  supports arbitrary per-scan provider selection.</li>
+<li>Per-task-type model routing was actually tried once (§18, item 4) and
+  deliberately reverted — a future attempt should have a clearer answer
+  for what specific cost/quality win justifies the added configuration
+  surface before rebuilding it a second time.</li>
 <li>A more sophisticated file-upload bypass technique (JPEG polyglot, or
   chaining an accepted upload with a discovered local-file-inclusion
   vector for standalone RCE proof).</li>
@@ -1468,15 +1477,74 @@ Protected (behind Layout):
   invasive check categories, as originally specified.</li>
 </ul>
 <hr />
+<h2 id="24-frequently-asked-questions">24. Frequently Asked Questions</h2>
+<p>Real, recurring questions from people using or evaluating Verdikt. The
+full version, kept up to date independently of this document's release
+cadence, lives at <a href="../FAQ.md"><code>docs/FAQ.md</code></a> — if the two ever disagree,
+that file is the source of truth.</p>
+<p><strong>How does the crawl/spider work?</strong> <code>ReconAgent</code> (§5, <code>app/agents/recon.py</code>)
+runs a bounded, same-origin, breadth-first crawl (300 pages / depth 6 by
+default, both configurable), and runs it <strong>twice</strong> — once unauthenticated,
+once fully authenticated once <code>login</code> succeeds — because a pre-login-only
+crawl was found live to discover exactly one form, the login page's own.
+Every request is scope-checked by <code>ScopedHttpClient</code>; redirects are queued
+as their own frontier entries rather than auto-followed; a Logout link is
+deliberately never clicked (it would kill the one shared session every
+other concurrent agent depends on). <code>recon_planner</code> (§5.1) then makes one
+AI pass over the resulting site map to suggest additional
+plausible-but-unlinked paths — each one verified with a real request before it counts
+for anything.</p>
+<p><strong>How is a vulnerability actually identified, and what does AI do?</strong> Every
+check runs the same four-stage pipeline in §5.3: a deterministic probe
+(judged by a fixed, non-AI signal) → LLM triage → deterministic
+re-execution → adversarial LLM validation. AI never originates a finding
+from nothing — every model call takes an already-gathered deterministic
+artifact as its input, and a "vulnerable" verdict still has to survive a
+fresh, real re-execution before anything else happens to it. Beyond
+judgment calls on ambiguous evidence, AI's two other roles are generating
+extra, tech-stack-aware payloads once per scan (never trusted more than a
+fixed payload — a bad suggestion just never trips the shared deterministic
+signal) and proposing business-logic/IDOR test hypotheses no fixed pattern
+could cover (<code>business_logic_planner.py</code>'s own docstring: <em>"proposes what
+to test and how, never whether something IS vulnerable"</em>).</p>
+<p><strong>How is this different from WebInspect, Checkmarx, etc.?</strong> Checkmarx is
+SAST (static source analysis, no running application) — a different
+category entirely. WebInspect is the fair DAST-to-DAST comparison: the
+real differences are Confirmed-Only output instead of a flat
+potential-findings dump requiring full manual triage, first-class
+business-logic/IDOR coverage via AI hypothesis generation plus a full
+identity/privilege matrix, automatic attack-chain synthesis (§8) instead of leaving
+that connective work to the reader, a recorded-and-replayed login macro
+instead of silently going unauthenticated on session expiry, and native
+downstream-workflow integrations (§9–§11) rather than just a report file.
+The honest tradeoff: every AI-triaged check costs real, capped time and
+money a purely deterministic scanner wouldn't spend.</p>
+<p><strong>If I upload a traffic file, does it only audit that, or crawl the live
+site too?</strong> Both, combined into one crawl, never either/or. Imported
+traffic (HAR/Burp/Postman/Zest/OpenAPI, or one pasted request) is read
+before the crawl starts and fed in as extra frontier seeds — exactly like
+the target's own homepage already is (<code>app/agents/traffic_seed.py</code>,
+wired into <code>recon_node</code>). The crawler then also follows links reachable
+<em>from</em> those imported URLs, and the live crawl always runs regardless of
+what — or whether — anything was imported. This is what makes a
+client-rendered SPA's real API surface testable at all.</p>
+<p><strong>What's the architecture, and what's AI's role given deterministic
+scanning is already in place?</strong> One scan compiles and executes the
+27-node DAG in §5.1 — real parallel fan-out, not a sequential loop — with
+<code>chain_analysis</code> reviewing the complete set of that run's Confirmed
+findings once everything else is done. The division of labor: a
+deterministic signal is evidence, not a verdict — it establishes <em>that</em>
+something is worth asking about, but not <em>whether</em> it means anything in
+context. AI's output is never trusted outright; it's gated by more
+determinism at every step (re-execution, adversarial validation, the same
+detection pipeline an analyst's own hand-typed business rule goes through).
+A finding only exists where both layers agree, twice.</p>
+<hr />
 <p><em>This document reflects the system exactly as implemented, verified
 directly against the codebase. Architecture diagrams are provided
 separately as Mermaid (<code>.mmd</code>) source files, directly importable into
 Miro's Mermaid-import feature.</em></p>
-  </main>
-</div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
-<script>
-  mermaid.initialize({ startOnLoad: true, theme: "default", securityLevel: "loose" });
-</script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: "neutral" });</script>
 </body>
 </html>

@@ -16,30 +16,34 @@ build fell short and where it went further.*
 Verdikt is an AI-assisted, multi-agent DAST (Dynamic Application Security
 Testing) platform that performs manual-assessment-quality web and API
 penetration testing at automated speed. A single scan run executes a
-**24-node LangGraph DAG** covering the OWASP Top 10 (2025) and the full
-PortSwigger Web Security Academy topic list, followed by a 25th
-cross-cutting attack-chain-composition step — each detection agent combining
-deterministic, re-executable HTTP-level probing with LLM-assisted triage and
-adversarial validation. The result is a report an experienced penetration
-tester would recognize as their own work: confirmed findings only, real
-evidence (request/response pairs, browser screenshots), plain-language and
-technical write-ups side by side, and a remediation path for every issue.
+**27-node LangGraph DAG** covering the OWASP Top 10 (2025) and the full
+PortSwigger Web Security Academy topic list, followed by a cross-cutting
+attack-chain-composition step that runs outside the graph proper — each
+detection agent combining deterministic, re-executable HTTP-level probing
+with LLM-assisted triage and adversarial validation. The result is a report
+an experienced penetration tester would recognize as their own work:
+confirmed findings only, real evidence (request/response pairs, browser
+screenshots), plain-language and technical write-ups side by side, and a
+remediation path for every issue.
 
-The system is explicitly designed so **no single AI vendor is load-
-bearing**. Every LLM-dependent agent talks to a pluggable `AIProviderAdapter`
+The system is explicitly designed so **no single AI vendor is
+load-bearing**. Every LLM-dependent agent talks to a pluggable `AIProviderAdapter`
 interface — Claude, OpenAI, Gemini, Grok, or any self-hosted/in-house model
 that speaks the OpenAI chat-completions protocol. Swapping providers is a
-configuration action in the UI, not a code change.
+configuration action in the UI, not a code change; there is deliberately no
+concept of routing different agents to different models — every agent in a
+scan resolves and uses one model, keeping provider configuration a single
+per-org or per-scan decision rather than a per-check tuning surface.
 
-**Current state, verified against the running codebase:** 41 files under
-`app/agents/` (24 of them wired into the scan graph, the rest shared
-infrastructure and support modules), 28 API route modules, ~30 persisted
-data models, 9 external integrations, 14 YAML check catalogs (34 statically
-defined check IDs, plus a further dozen dynamically-generated ones), 24
-Alembic migrations, 19 RBAC resources, and a backend test suite of **99
-files / 527 collected tests** — all figures confirmed by direct inspection
-and by running the test collector, not estimated. Full reference tables for
-every one of these are in the appendices (§13–§22).
+**Current state, verified against the running codebase:** 48 files under
+`app/agents/` (27 of them graph nodes, the rest shared infrastructure and
+support modules), 30 API route modules, ~34 persisted data models, 9
+external integrations, 14 YAML check catalogs (36 statically defined check
+IDs, plus a further dozen dynamically-generated ones), 34 Alembic
+migrations, 20 RBAC resources, and a backend test suite of **111 files /
+617 collected tests** — all figures confirmed by direct inspection and by
+running the test collector, not estimated. Full reference tables for every
+one of these are in the appendices (§13–§24).
 
 ---
 
@@ -48,8 +52,8 @@ every one of these are in the appendices (§13–§22).
 Manual web/API penetration testing is thorough but doesn't scale: a
 competent tester takes days per application, and demand for testing far
 outpaces the supply of qualified testers. Existing DAST scanners scale but
-don't produce trustworthy results — they're notorious for high false-
-positive rates, shallow coverage of business logic and access control
+don't produce trustworthy results — they're notorious for high
+false-positive rates, shallow coverage of business logic and access control
 issues, and reports nobody can act on without re-verifying every line by
 hand.
 
@@ -64,7 +68,7 @@ and measurable:
 Two architectural decisions follow directly from that goal, and are fully
 built and enforced in the running system today:
 
-1. **Multi-agent, not one big prompt.** Twenty-four narrow, purpose-built
+1. **Multi-agent, not one big prompt.** Twenty-seven narrow, purpose-built
    detection agents each own one vulnerability class, run as parallel nodes
    in a LangGraph DAG, and use the cheapest technique that reliably confirms
    that class (a deterministic HTTP diff for SQL injection; a real
@@ -91,7 +95,7 @@ reports and the API (`scan_run.tech_stack_fingerprint`). What the original
 design additionally called for — using that fingerprint to skip scheduling
 entire categories of irrelevant checks, described in the spec as "likely
 the single biggest token-savings lever available" — **is not built as
-general graph-level routing**. The 24-node LangGraph DAG has zero
+general graph-level routing**. The 27-node LangGraph DAG has zero
 conditional edges; every node always runs regardless of the detected stack.
 The one narrow exception that *is* built: SSTI probing inside `injection.py`
 skips itself when no template-rendering signal was observed during recon.
@@ -110,15 +114,15 @@ flowchart TB
     end
 
     subgraph Backend["Verdikt Backend — FastAPI (Python)"]
-        API["REST API — 28 route modules<br/>JWT bearer auth, RBAC-enforced"]
-        ORCH["Multi-Agent Orchestrator<br/>(LangGraph, 24-node DAG)"]
+        API["REST API — 30 route modules<br/>JWT bearer auth, RBAC-enforced"]
+        ORCH["Multi-Agent Orchestrator<br/>(LangGraph, 27-node DAG)"]
         AIABS["AI Provider Abstraction<br/>Claude / OpenAI / Gemini / Grok / Custom"]
         RPT["Reporting Engine<br/>HTML / PDF (reportlab) / DOCX / CSV / JSON"]
         VAULT["Credential Vault<br/>(envelope encryption, pluggable KMS)"]
     end
 
     subgraph Data["Persistence"]
-        PG[("PostgreSQL<br/>~30 models")]
+        PG[("PostgreSQL<br/>~34 models")]
         OBJ[("Object Storage<br/>(screenshots, uploads, letters)")]
     end
 
@@ -157,7 +161,7 @@ flowchart TB
 ```
 
 **Backend:** Python, FastAPI, SQLAlchemy 2.0 (async), Alembic migrations
-(24 files, one linear chain), PostgreSQL. Dialect-agnostic ORM layer, so
+(34 files, one linear chain), PostgreSQL. Dialect-agnostic ORM layer, so
 the test suite runs against ephemeral SQLite with zero external services
 (with one deliberately-accepted limitation: SQLite doesn't enforce
 `ON DELETE CASCADE`, so cascade behavior is verified live against the real
@@ -168,7 +172,7 @@ React Router, Tailwind CSS. A hand-written typed fetch client
 (`src/api/client.ts`, 23 namespaced sub-objects, 62 exported types in
 `src/api/types.ts`) mirrors the backend's Pydantic schemas.
 
-**Agent orchestration:** LangGraph builds a 24-node directed graph per scan
+**Agent orchestration:** LangGraph builds a 27-node directed graph per scan
 run, with genuine parallel fan-out where checks don't depend on each other
 (12 nodes off `recon`, 10 more off `authenticated_recon`), and explicit
 sequencing where they do (every authenticated check waits on `login`
@@ -188,7 +192,7 @@ uploaded traffic files.
 
 Every engagement is modeled as a hierarchy that mirrors how a real pentest
 is scoped and re-run over time. This is a simplified view for readability —
-the full field-level reference for all ~30 models is in **Appendix
+the full field-level reference for all ~34 models is in **Appendix
 §15**.
 
 ```mermaid
@@ -250,7 +254,7 @@ Key design points, each verified against real migration/model code:
 
 ## 5. The Multi-Agent Scanning Engine
 
-### 5.1 Scan lifecycle — the real, verified 24-node DAG
+### 5.1 Scan lifecycle — the real, verified 27-node DAG
 
 ```mermaid
 flowchart LR
@@ -269,20 +273,22 @@ flowchart LR
     B --> U12["cache_poisoning"]
     B --> L["login<br/>(per credential set)"]
     L --> E["authenticated_recon<br/>(full-depth authenticated crawl)"]
-    E --> A1["dom_xss"]
-    E --> A2["injection<br/>(SQLi / cmd-inj / SSTI /<br/>path traversal / NoSQLi)"]
-    E --> A3["xss"]
-    E --> A4["auth<br/>(JWT / session)"]
-    E --> A5["access_control"]
-    E --> A6["business_logic"]
-    E --> A7["csrf"]
-    E --> A8["stored_xss"]
-    E --> A9["file_upload"]
-    E --> A10["websocket"]
+    E --> P["recon_planner<br/>(one AI call proposes unlinked-but-<br/>plausible paths; each is verified live<br/>before counting as discovered)"]
+    P --> A1["dom_xss"]
+    P --> A2["injection<br/>(SQLi / cmd-inj / SSTI /<br/>path traversal / NoSQLi)"]
+    P --> A3["xss"]
+    P --> A4["auth<br/>(JWT / session)"]
+    P --> A5["access_control"]
+    P --> BP["ai_business_logic_plan<br/>(AI proposes hypotheses only —<br/>never a verdict, see §5.3)"]
+    BP --> A6["business_logic"]
+    P --> A7["csrf"]
+    P --> A8["stored_xss"]
+    P --> A9["file_upload"]
+    P --> A10["websocket"]
     U1 & U2 & U3 & U4 & U5 & U6 & U7 & U8 & U9 & U10 & U11 & U12 --> G
-    A1 & A2 & A3 & A4 & A5 & A6 & A7 & A8 & A9 & A10 --> G["chain_analysis<br/>(25th step, runs after the graph —<br/>composes multi-finding attack chains)"]
-    G --> H["Report generation<br/>(HTML / PDF / DOCX / CSV / JSON)"]
-    H --> I["Best-effort notify:<br/>Slack / Teams / VGS webhook"]
+    A1 & A2 & A3 & A4 & A5 & A6 & A7 & A8 & A9 & A10 --> G["chain_analysis<br/>(runs after the graph completes, over that<br/>run's Confirmed findings — composes<br/>multi-finding attack chains)"]
+    G --> H["Report generation<br/>(HTML / PDF / DOCX / CSV / JSON /<br/>per-scan-run VGS-format DOCX)"]
+    H --> I["Best-effort notify:<br/>Slack / Teams / VGS webhook/push"]
 ```
 
 There are genuinely **no conditional edges anywhere in this graph** —
@@ -292,17 +298,29 @@ visitor would ever see — usually just a login form), and once fully
 authenticated after `login` succeeds. This was a real, live-found gap
 during development — a pre-login-only crawl against DVWA discovered
 exactly one form (the login form itself), leaving every other agent with
-nothing to test.
+nothing to test. `recon_planner` and `ai_business_logic_plan` are later
+additions to the original 24-node graph, both following the same
+propose-then-verify discipline as everything else in §5.3 — an AI
+suggestion is worth nothing here until something deterministic confirms it.
+`chain_analysis` runs outside the graph proper (not a `graph.add_node` call,
+called directly by `runner.py` after `graph.ainvoke()` returns), so it's not
+counted in the 27.
 
-### 5.2 What's in `app/agents/` beyond the 24 graph nodes
+### 5.2 What's in `app/agents/` beyond the 27 graph nodes
 
-The `agents/` directory holds **41 files total**. Besides the 24 wired into
-the graph (plus `chain_analysis.py` as the 25th, post-graph step), the
-remaining ~16 files are shared infrastructure the detection agents are
-built on top of, not standalone checks:
+The `agents/` directory holds **48 files total** (up from 41), reflecting
+both new detection surface (`recon_planner.py`, `business_logic_planner.py`
+— the two AI-hypothesis-generating nodes added since) and the standalone
+browser extension's backend counterpart. Most files map one-to-one onto a
+graph node; a few (`recon.py`, `login.py`) do double duty as both a node's
+own implementation and shared infrastructure another node reuses
+(`authenticated_recon` reuses the same `ReconAgent` as `recon`, for
+instance). The ~20 files below are the shared infrastructure worth knowing
+about beyond the checks themselves:
 
 | File | Role |
 |---|---|
+| `graph.py` | `build_graph()` — wires the 27-node LangGraph DAG itself; the only file that knows the full node/edge topology |
 | `http_client.py` | `ScopedHttpClient` — the scope-enforcement mechanism every other agent's requests pass through |
 | `scope.py` | `is_in_scope()` allow-list matcher |
 | `matrix.py` | Credential/privilege matrix engine (`Identity`, `MatrixEntry`) used by access-control and business-logic |
@@ -512,7 +530,7 @@ One dataset, multiple audiences, generated by 8 modules under
 
 ---
 
-## 10. VGS Integration — Two Complementary Modes, Both Built
+## 10. VGS Integration — Three Complementary Modes, All Built
 
 1. **Decoupled webhook push** (`app/integrations/vgs/client.py`'s
    `VGSClient`, `VGSConfig` model, `push_findings_to_vgs` trigger) — on scan
@@ -527,7 +545,16 @@ One dataset, multiple audiences, generated by 8 modules under
    models):
    - The **Vulnerability Picker** offers real, scan-confirmed findings
      grouped by vulnerability type (via the same `group_findings()` used by
-     standard reports), auto-seeded into a new report draft.
+     standard reports), auto-seeded into a new report draft — and re-seeded
+     on every load, not just the first. A dedicated `auto_seeded_finding_ids`
+     column (JSON list on `VgsReportDraft`) tracks every `Finding.id` ever
+     offered, kept forever even after the analyst deletes the resulting
+     vulnerability — this is what lets a later scan's newly-confirmed
+     vulnerability class appear automatically without resurrecting something
+     already deliberately removed (the two behaviors are genuinely in
+     tension; this is the fix that satisfies both).
+   - Each selected vulnerability supports **delete and in-place severity
+     editing** directly from the picker, not just from the curated library.
    - **Manage Vulnerabilities** includes a one-click **"Load from
      PortSwigger"** action (`app/integrations/portswigger/client.py`'s
      `fetch_topics()`, 13 real seeded Web Security Academy URLs) — a native
@@ -537,10 +564,20 @@ One dataset, multiple audiences, generated by 8 modules under
      screenshots addable at any time, not just at step creation.
    - **Generate Report** (`GET /versions/{id}/vgs-report-draft/report.docx`)
      produces the same DOCX shape as the original VGS tool.
+3. **Per-scan-run VGS-format export, with no curation step at all**
+   (`GET /scan-runs/{id}/report.vgs.docx`) — the newest of the three modes.
+   Every finding from one specific scan run, grouped the same way the
+   curated workspace groups them, rendered straight into the VGS DOCX shape
+   (pie chart, summary table, per-vulnerability detail sections) as one
+   transient, unpersisted document — nothing is written to
+   `VgsReportDraft`/`VgsReportVulnerability` for this path. This is the
+   "I just want the VGS format for this one scan, right now" case; the
+   curated workspace above remains the tool for building a report that
+   blends multiple scans, ad-hoc entries, and manual curation.
 
 This is notably **more** than the original design called for — the spec
-recommended starting with the webhook path alone; the native report-builder
-port was built in addition, as its own complete workspace.
+recommended starting with the webhook path alone; both the native
+report-builder port and the per-scan-run export were built in addition.
 
 ---
 
@@ -598,23 +635,31 @@ port was built in addition, as its own complete workspace.
 
 ## 13. Deployment
 
-**Docker Compose** brings up the full stack — PostgreSQL, backend, and
-frontend — from a single command, verified end-to-end against a completely
-fresh environment:
+Two supported paths — both fully built, neither a stub. **Docker Compose**
+brings up the full stack from a single command; a **manual (native)** setup
+runs Python/Node directly on the host against any reachable Postgres. See
+the top-level `README.md` for the exact commands for each; this section
+covers what's architecturally true of each path.
+
+### 13.1 Docker Compose
+
+Verified end-to-end against a completely fresh environment (empty Postgres
+volume, no host `.venv`/`node_modules`):
 
 ```mermaid
 flowchart TB
     subgraph Host["Host Machine (macOS / Linux / Windows)"]
         subgraph Compose["docker compose up --build"]
             DB[("db<br/>postgres:16-alpine<br/>named volume: verdikt_pgdata<br/>host port 5433 (avoids native-Postgres collision)")]
-            BE["backend<br/>python:3.12-slim + Playwright/Chromium<br/>(installed at BUILD time)<br/>runs `alembic upgrade head`<br/>then uvicorn --loop asyncio"]
+            BE["backend<br/>python:3.12-slim + Playwright/Chromium<br/>+ Xvfb/x11vnc/fluxbox/novnc<br/>(installed at BUILD time)<br/>runs `alembic upgrade head`<br/>then uvicorn --loop asyncio"]
             FEC["frontend<br/>node:22-slim, real Vite dev server<br/>npm run dev -- --host 0.0.0.0"]
         end
         Browser["Browser<br/>localhost:5173"]
     end
     BE -->|"db:5432"| DB
     Browser -->|"HTTP"| FEC
-    Browser -->|"HTTP :8000"| BE
+    Browser -->|"HTTP :8095"| BE
+    Browser -->|"VNC-in-iframe<br/>127.0.0.1:6080"| BE
 ```
 
 - **`--loop asyncio` is not a stylistic choice** — uvicorn's default
@@ -622,23 +667,69 @@ flowchart TB
   Playwright's async browser launch and hangs forever with no error
   message. This was found by actually running the container against a
   live Juice Shop target, not by reading documentation.
+- **`--build` is not optional either.** Plain `docker compose up` / `up -d`
+  reuses whatever image was built last, even after `Dockerfile` itself has
+  changed — a real, live-found incident: the backend image was rebuilt once
+  with `xvfb`/`x11vnc`/`fluxbox`/`novnc` newly added to `Dockerfile`, but a
+  later `docker compose up -d` reused the *previous* cached image, so the
+  login-macro recorder's VNC stack silently never started while `/health`
+  reported the container fine throughout. Fixed at the source, not just in
+  the docs: `start-display.sh` now pre-flight-checks each binary exists and
+  confirms (via `pgrep`, needing the added `procps` package) that each
+  process actually stayed running after launch — either one unmistakable
+  success line, or a banner naming exactly what's missing and that a
+  `--build` is needed. It never fails the container outright over this —
+  scanning, the API, and the standalone browser-extension recorder (below)
+  don't depend on VNC at all.
 - Migrations run automatically on container start (a no-op once already
   current) — a fresh database gets its schema with zero manual steps.
 - The backend's build-time virtualenv is protected from the dev bind-mount
   via a masking Docker volume (`backend_venv:/app/.venv`), so the container
   never silently inherits a host's binary-incompatible Python environment;
-  the frontend uses the equivalent `node_modules` mask.
+  the frontend uses the equivalent `node_modules` mask. A third mount
+  (`./browser-extension:/browser-extension:ro`) exposes the standalone
+  extension's source (§13.3) to the "Download extension" button, since it
+  lives as a sibling of `backend/`, not inside it.
 - The frontend Dockerfile runs the real Vite dev server (with HMR), not a
   production build — its own comment notes a production multi-stage/nginx
   build is a reasonable follow-up once there's an actual deployment target.
 - `.gitattributes` (`* text=auto eol=lf`) normalizes line endings across
   macOS/Linux/Windows checkouts.
+- A machine already running its own native Postgres can point the backend
+  container at it instead of the bundled `db` service via a git-ignored
+  `docker-compose.override.yml` (`DATABASE_URL` → `host.docker.internal`)
+  — machine-local by design, never committed.
+
+### 13.2 Manual (native) setup
+
+No Docker at all: `uv sync` + `alembic upgrade head` + `uvicorn` for the
+backend, `npm install` + `npm run dev` for the frontend, against any
+Postgres the operator points `DATABASE_URL` at. Functionally equivalent to
+the Docker path with one real exception: the in-app "Record in-browser"
+login-macro recorder needs the Xvfb/x11vnc/noVNC display stack above, which
+only exists inside the Docker image — there is no native macOS/Windows
+equivalent shipped. §13.3 is the answer for this path.
+
+### 13.3 Standalone browser extension (login-macro recording without Docker)
+
+`browser-extension/` — a real, separate Chrome/Edge Manifest V3 extension
+producing the exact same `LoginMacro.steps` JSON shape as the in-app
+Playwright recorder (`POST /versions/{id}/credentials/{id}/macros/upload`
+accepts either interchangeably; both are replayed by the identical
+`MacroPlayer`). Since neither Chrome nor Edge allows a web page to install
+an unpublished extension directly — inline installation was removed
+platform-wide years ago, and this one isn't on the Web Store — "Download
+extension (.zip)" (next to **Record macro** in the Credentials tab,
+backed by `GET /browser-extension/download`, which zips the source on
+demand so the download is always in sync with the checked-in extension) is
+the practical equivalent: download, `chrome://extensions` → Developer
+mode → Load unpacked, record, export, upload.
 
 ---
 
 ## 14. Testing & Quality Discipline
 
-- **99 test files, 527 collected tests** — confirmed by running
+- **111 test files, 617 collected tests** — confirmed by running
   `pytest --collect-only`, not estimated.
 - Real fixtures over mocks wherever practically possible: real local HTTP
   servers standing in for a target application, a real headless browser
@@ -697,7 +788,7 @@ does not exist in the current model set** — confirmed removed (§18).
 
 ---
 
-## 16. Appendix — Full API Route Reference (28 modules)
+## 16. Appendix — Full API Route Reference (30 modules)
 
 | Module | Endpoints |
 |---|---|
@@ -705,12 +796,14 @@ does not exist in the current model set** — confirmed removed (§18).
 | `api_keys.py` | `POST /api-keys`, `GET /api-keys`, `POST /api-keys/{id}/revoke` |
 | `attack_chains.py` | `GET /scan-runs/{scan_run_id}/attack-chains` |
 | `auth.py` | `POST /auth/register`, `POST /auth/login`, `GET /auth/me` |
+| `browser_extension.py` | `GET /browser-extension/download` (zips `browser-extension/` on demand — see §13.3) |
 | `burp.py` | `POST /burp/scans`, `POST /burp/scans/{task_id}/import` |
 | `business_rules.py` | `POST /business-rules`, `GET /business-rules`, `DELETE /business-rules/{id}` |
 | `cmdb_configs.py` | `POST /cmdb-configs`, `GET /cmdb-configs`, `DELETE /cmdb-configs/{id}`, `POST /cmdb-configs/{id}/lookup` |
-| `credentials.py` | `POST /credentials`, `GET /credentials`, `PATCH /credentials/{id}`, `DELETE /credentials/{id}`, `POST /credentials/{id}/record-macro`, `GET /credentials/{id}/macros` |
+| `credentials.py` | `POST /credentials`, `GET /credentials`, `PATCH /credentials/{id}`, `DELETE /credentials/{id}`, `POST /credentials/{id}/test-login`, `POST /credentials/{id}/record-macro/start`, `POST /credentials/{id}/record-macro/{recording_id}/finish`, `POST /credentials/{id}/record-macro/{recording_id}/cancel`, `GET /credentials/{id}/macros`, `DELETE /credentials/{id}/macros/{macro_id}` |
 | `dashboard.py` | `GET /organizations/me/dashboard` |
 | `finding_tickets.py` | `POST /findings/{id}/tickets`, `GET /findings/{id}/tickets` |
+| `findings.py` | `PATCH /findings/{id}`, `DELETE /findings/{id}` |
 | `macro_upload.py` | `POST /credentials/{credential_id}/macros/upload` |
 | `notification_configs.py` | `POST /notification-configs`, `GET /notification-configs`, `DELETE /notification-configs/{id}`, `POST /notification-configs/{id}/test` |
 | `objects.py` | `GET /objects/{key:path}` |
@@ -721,7 +814,7 @@ does not exist in the current model set** — confirmed removed (§18).
 | `retest_jobs.py` | `POST /findings/{id}/retest`, `GET /findings/{id}/retest-jobs` |
 | `review_candidates.py` | `GET /scan-runs/{id}/review-candidates`, `POST /review-candidates/{id}/promote`, `POST /review-candidates/{id}/dismiss` |
 | `saml.py` | `POST /saml-configs`, `GET /saml-configs`, `DELETE /saml-configs/{id}`, `GET /saml-configs/{id}/metadata.xml`, `POST /saml-configs/{id}/idp-metadata` |
-| `scans.py` | `POST /versions/{id}/scan-runs`, `POST /versions/{v}/scan-runs/{prior}/retest`, `GET /versions/{id}/scan-runs`, `GET /scan-runs/{id}`, `POST /scan-runs/{id}/cancel`, `DELETE /scan-runs/{id}`, `GET /scan-runs/{id}/findings`, `GET /scan-runs/{id}/report.{json,html,pdf,docx,csv}`, `GET /scan-runs/{later}/diff/{earlier}` |
+| `scans.py` | `POST /versions/{id}/scan-runs`, `POST /versions/{v}/scan-runs/{prior}/retest`, `GET /versions/{id}/scan-runs`, `GET /scan-runs/{id}`, `POST /scan-runs/{id}/cancel`, `DELETE /scan-runs/{id}`, `GET /scan-runs/{id}/findings`, `GET /scan-runs/{id}/report.{json,html,pdf,docx,csv,vgs.docx}`, `GET /scan-runs/{later}/diff/{earlier}` |
 | `targets.py` | `POST /targets`, `GET /targets`, `DELETE /targets/{id}` |
 | `ticketing_configs.py` | `POST /ticketing-configs`, `GET /ticketing-configs`, `DELETE /ticketing-configs/{id}` |
 | `traffic_import.py` | `POST /traffic/import`, `POST /traffic/manual`, `GET /traffic` |
@@ -732,7 +825,7 @@ does not exist in the current model set** — confirmed removed (§18).
 
 ---
 
-## 17. Appendix — Full Check Catalog (34 static IDs + dynamic IDs)
+## 17. Appendix — Full Check Catalog (36 static IDs + dynamic IDs)
 
 | Catalog file | Check IDs (severity / CWE) |
 |---|---|
@@ -782,10 +875,15 @@ decisions diverged from the original design, in both directions.
 3. **Smart Scan cost-optimization routing — only one narrow case built.**
    See §2.1: the fingerprint is computed and shown, but doesn't gate
    scheduling anywhere except one SSTI check.
-4. **Per-task-type model routing — not built.** The spec called for cheap
-   models on recon/header checks and frontier models reserved for
-   business-logic reasoning. Every agent in a scan run uses the single
-   model resolved once via `resolve_provider_and_model()`.
+4. **Per-task-type model routing — not built (twice).** The spec called for
+   cheap models on recon/header checks and frontier models reserved for
+   business-logic reasoning. This was actually built once — a `ModelRouter`
+   with per-agent-role tiers and a UI to configure them (migration
+   `0029_ai_provider_config_model_tiers`) — and then deliberately removed
+   again (migration `0032_drop_ai_provider_model_tiers`) once it added real
+   configuration-surface complexity without a correspondingly clear
+   benefit. Every agent in a scan run uses the single model resolved once
+   via `resolve_provider_and_model()`, same as before that experiment.
 5. **Depth slider (Quick/Standard/Deep/Deep-Paranoid) — not built.** No
    such setting, enum, or UI control exists anywhere in the codebase.
 6. **Cross-credential-set result caching — not built.** The spec called for
@@ -801,9 +899,10 @@ decisions diverged from the original design, in both directions.
 **Built beyond what was originally specified:**
 
 8. **VGS integration — both spec-recommended paths, plus a full native
-   workspace.** The spec recommended starting with webhook push alone; the
-   native report-builder port (its own top-level frontend workspace) was
-   built in addition.
+   workspace, plus a third export mode.** The spec recommended starting
+   with webhook push alone; the native report-builder port (its own
+   top-level frontend workspace) and a no-curation-needed per-scan-run
+   VGS-format export were both built in addition (§10).
 9. **The image-polyglot file-upload bypass technique** — not mentioned in
    the spec at all.
 10. **The PortSwigger Web Security Academy scraper** ("Load from
@@ -815,16 +914,25 @@ decisions diverged from the original design, in both directions.
 12. **A genuine conversational Microsoft Teams bot** — the spec's
     integration section called for a generic notification adapter only,
     not an interactive bot with real command parsing.
+13. **Two independent ways to record a login macro, not just one.** The
+    spec called for "a Playwright-backed in-browser recorder" without
+    specifying delivery. What's built: a real headed Chromium, streamed
+    live into the Verdikt UI itself over VNC (Xvfb/x11vnc/noVNC) so no
+    local display or browser extension is needed when running via Docker
+    — plus, since neither outcome is available in a manual/native (no
+    Docker) setup, a genuinely separate standalone browser extension
+    (`browser-extension/`) producing the identical macro JSON shape,
+    downloadable in one click from the same UI.
 
 **Matches the spec closely:**
 
-13. The AI Provider Abstraction itself, including the exact
+14. The AI Provider Abstraction itself, including the exact
     `CustomEndpointAdapter` concept the spec named by placeholder
     (implemented as `GenericOpenAIAdapter`).
-14. RBAC roles (Org Admin / Project Lead / Analyst / Client-Viewer) match
+15. RBAC roles (Org Admin / Project Lead / Analyst / Client-Viewer) match
     the spec exactly, modeled as a real permission-matrix table as the
     spec explicitly instructed, not hardcoded checks.
-15. CMDB integration exists, implemented as a single concrete,
+16. CMDB integration exists, implemented as a single concrete,
     vendor-agnostic REST client rather than the spec's sketched abstract
     per-vendor interface — a deliberate substitution, since there's no one
     real CMDB API to build and test against honestly.
@@ -853,7 +961,7 @@ per-org `AIProviderConfig` in the UI.
 
 ---
 
-## 20. Appendix — Migration History (24 files, one linear chain)
+## 20. Appendix — Migration History (34 files, one linear chain)
 
 `0001_initial_schema` → `0001b_widen_alembic_version_column` (widens
 `alembic_version.version_num` for this project's long revision slugs) →
@@ -868,21 +976,41 @@ per-org `AIProviderConfig` in the UI.
 `0018_scan_delete_cascade_and_vgs_finding_link` →
 `0019_vgs_evidence_cascade_and_auto_seed` → `0020_scan_run_warning` →
 `0021_credential_set_delete_cascade` → `0022_drop_authorization_records`
-(drops the table entirely) → `0023_ai_provider_config_default`.
+(drops the table entirely) → `0023_ai_provider_config_default` →
+`0024_spark_app_id_and_secondary_key` → `0025_scan_run_token_usage` →
+`0026_finding_resource_permissions` → `0027_business_rule_source` →
+`0028_credential_privilege_rank` → `0029_ai_provider_config_model_tiers` →
+`0030_ai_provider_config_secret_rotated_at` →
+`0031_drop_spark_specific_columns` → `0032_drop_ai_provider_model_tiers` →
+`0033_vgs_auto_seed_finding_memory`.
+
+Two of these pairs are worth reading together, not in isolation: `0024`
+added columns for a since-removed, org-specific internal LLM gateway
+integration (never a general-purpose feature, and out of scope once that
+org's need went away); `0031` drops them. `0029` added per-agent-role model
+tiering (`model_reasoning`/`model_classification` columns, letting an org
+route different agents to different models); `0032` drops it, in favor of
+the single-model-per-scan design described in §1/§6 — real functionality
+that shipped, was used, and was deliberately simplified back out once it
+proved to be complexity without enough benefit, not a mistake papered over.
+`0033` is the newest: a persistent `auto_seeded_finding_ids` column on
+`VgsReportDraft` (§10) that tracks every `Finding.id` an auto-seed pass has
+ever offered a report draft, independent of whether the resulting
+vulnerability still exists in the draft.
 
 ---
 
 ## 21. Appendix — RBAC Matrix
 
-**19 resources**: `organization`, `project`, `version`, `target`,
-`credential`, `traffic`, `scan`, `review_candidate`, `business_rule`,
+**20 resources**: `organization`, `project`, `version`, `target`,
+`credential`, `traffic`, `scan`, `finding`, `review_candidate`, `business_rule`,
 `ai_provider_config`, `oidc_provider_config`, `notification_config`,
 `ticketing_config`, `cmdb_config`, `vgs_config`, `user`, `org_branding`,
 `saml_config`, `vgs_vulnerability` — each with `create`/`read`/`update`/`delete`.
 
 | Role | Access pattern |
 |---|---|
-| `org_admin` | Full CRUD on all 19 resources |
+| `org_admin` | Full CRUD on all 20 resources |
 | `project_lead` | Full CRUD on engagement resources; read-only on `organization`; no access to `user` management |
 | `analyst` | Read on everything, plus `create` on `traffic`/`scan`/`business_rule`, `update` on `review_candidate` |
 | `viewer` | Read-only on everything |
@@ -933,13 +1061,86 @@ Natural next steps, informed directly by the delta in §18:
   called for — using the tech-stack fingerprint to actually skip
   irrelevant node scheduling, not just display it.
 - A depth/intensity profile (Quick/Standard/Deep) as a scan-trigger option.
-- Per-task-type model routing, now that the AI provider layer already
-  supports arbitrary per-scan provider selection.
+- Per-task-type model routing was actually tried once (§18, item 4) and
+  deliberately reverted — a future attempt should have a clearer answer
+  for what specific cost/quality win justifies the added configuration
+  surface before rebuilding it a second time.
 - A more sophisticated file-upload bypass technique (JPEG polyglot, or
   chaining an accepted upload with a discovered local-file-inclusion
   vector for standalone RCE proof).
 - Configurable human-in-the-loop approval checkpoints for the more
   invasive check categories, as originally specified.
+
+---
+
+## 24. Frequently Asked Questions
+
+Real, recurring questions from people using or evaluating Verdikt. The
+full version, kept up to date independently of this document's release
+cadence, lives at [`docs/FAQ.md`](../FAQ.md) — if the two ever disagree,
+that file is the source of truth.
+
+**How does the crawl/spider work?** `ReconAgent` (§5, `app/agents/recon.py`)
+runs a bounded, same-origin, breadth-first crawl (300 pages / depth 6 by
+default, both configurable), and runs it **twice** — once unauthenticated,
+once fully authenticated once `login` succeeds — because a pre-login-only
+crawl was found live to discover exactly one form, the login page's own.
+Every request is scope-checked by `ScopedHttpClient`; redirects are queued
+as their own frontier entries rather than auto-followed; a Logout link is
+deliberately never clicked (it would kill the one shared session every
+other concurrent agent depends on). `recon_planner` (§5.1) then makes one
+AI pass over the resulting site map to suggest additional
+plausible-but-unlinked paths — each one verified with a real request before it counts
+for anything.
+
+**How is a vulnerability actually identified, and what does AI do?** Every
+check runs the same four-stage pipeline in §5.3: a deterministic probe
+(judged by a fixed, non-AI signal) → LLM triage → deterministic
+re-execution → adversarial LLM validation. AI never originates a finding
+from nothing — every model call takes an already-gathered deterministic
+artifact as its input, and a "vulnerable" verdict still has to survive a
+fresh, real re-execution before anything else happens to it. Beyond
+judgment calls on ambiguous evidence, AI's two other roles are generating
+extra, tech-stack-aware payloads once per scan (never trusted more than a
+fixed payload — a bad suggestion just never trips the shared deterministic
+signal) and proposing business-logic/IDOR test hypotheses no fixed pattern
+could cover (`business_logic_planner.py`'s own docstring: *"proposes what
+to test and how, never whether something IS vulnerable"*).
+
+**How is this different from WebInspect, Checkmarx, etc.?** Checkmarx is
+SAST (static source analysis, no running application) — a different
+category entirely. WebInspect is the fair DAST-to-DAST comparison: the
+real differences are Confirmed-Only output instead of a flat
+potential-findings dump requiring full manual triage, first-class
+business-logic/IDOR coverage via AI hypothesis generation plus a full
+identity/privilege matrix, automatic attack-chain synthesis (§8) instead of leaving
+that connective work to the reader, a recorded-and-replayed login macro
+instead of silently going unauthenticated on session expiry, and native
+downstream-workflow integrations (§9–§11) rather than just a report file.
+The honest tradeoff: every AI-triaged check costs real, capped time and
+money a purely deterministic scanner wouldn't spend.
+
+**If I upload a traffic file, does it only audit that, or crawl the live
+site too?** Both, combined into one crawl, never either/or. Imported
+traffic (HAR/Burp/Postman/Zest/OpenAPI, or one pasted request) is read
+before the crawl starts and fed in as extra frontier seeds — exactly like
+the target's own homepage already is (`app/agents/traffic_seed.py`,
+wired into `recon_node`). The crawler then also follows links reachable
+*from* those imported URLs, and the live crawl always runs regardless of
+what — or whether — anything was imported. This is what makes a
+client-rendered SPA's real API surface testable at all.
+
+**What's the architecture, and what's AI's role given deterministic
+scanning is already in place?** One scan compiles and executes the
+27-node DAG in §5.1 — real parallel fan-out, not a sequential loop — with
+`chain_analysis` reviewing the complete set of that run's Confirmed
+findings once everything else is done. The division of labor: a
+deterministic signal is evidence, not a verdict — it establishes *that*
+something is worth asking about, but not *whether* it means anything in
+context. AI's output is never trusted outright; it's gated by more
+determinism at every step (re-execution, adversarial validation, the same
+detection pipeline an analyst's own hand-typed business rule goes through).
+A finding only exists where both layers agree, twice.
 
 ---
 

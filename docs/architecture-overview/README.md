@@ -8,19 +8,22 @@ at the time of writing.
 ## Contents
 
 - **`Verdikt_Architecture_Document.md` / `.html` / `.docx`** — the same
-  document in three formats. Covers the system architecture, the 24-node
+  document in three formats. Covers the system architecture, the 27-node
   multi-agent scanning engine, the Confirmed-Only Findings pipeline, the
-  pluggable AI provider layer, vulnerability coverage, VGS integration,
-  enterprise hardening, deployment, and testing discipline — plus full
+  pluggable AI provider layer, vulnerability coverage, VGS integration
+  (three modes), enterprise hardening, deployment (Docker + manual +
+  standalone browser extension), and testing discipline — plus full
   reference appendices (every data model, API route, check ID, config
-  setting, migration, and RBAC resource) and an honest "spec vs. reality"
-  delta against `docs/BUILD_SPEC.md`. The `.html` version renders its
-  diagrams live via Mermaid; the `.docx` version embeds them as images.
-- **`Verdikt_Presentation.pptx`** — a 20-slide deck covering the same
-  material at presentation depth, including a "by the numbers" slide and
-  an honest spec-vs-reality slide.
+  setting, migration, and RBAC resource), a Frequently Asked Questions
+  section, and an honest "spec vs. reality" delta against
+  `docs/BUILD_SPEC.md`. The `.html` version renders its diagrams live via
+  Mermaid; the `.docx` version embeds them as images.
+- **`Verdikt_Presentation.pptx`** — a 22-slide deck covering the same
+  material at presentation depth, including a tech-stack ("app info")
+  slide, a "by the numbers" slide, an honest spec-vs-reality slide, and a
+  closing FAQ slide.
 - **`diagrams/*.mmd`** — the 6 architecture diagrams as Mermaid source:
-  system architecture, data model (ER diagram), the verified 24-node scan
+  system architecture, data model (ER diagram), the verified 27-node scan
   DAG, the Confirmed-Only Findings pipeline, AI provider resolution order,
   and deployment topology. Miro has a native Mermaid-import feature, so
   these can be dropped directly into a board and remain editable — there's
