@@ -39,12 +39,16 @@ ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 # both websockify (bridges a browser WebSocket to x11vnc's raw VNC
 # socket — browsers can't speak raw VNC/RFB directly) and noVNC's own
 # static HTML/JS client, so nothing needs fetching from a CDN at
-# runtime. See start-display.sh and docker-compose.yml's backend.ports.
+# runtime. procps provides pgrep, which start-display.sh uses to
+# confirm each of the above actually stayed running after launch (not
+# in this base image by default — python:3.12-slim). See
+# start-display.sh and docker-compose.yml's backend.ports.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     x11vnc \
     fluxbox \
     novnc \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 ENV DISPLAY=:99
 
