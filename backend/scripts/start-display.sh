@@ -57,7 +57,24 @@ if [ -n "$_missing" ]; then
     exit 0
 fi
 
-Xvfb :99 -screen 0 1280x800x24 &
+# Real, live-found failure mode: this container was previously stopped
+# uncleanly (e.g. `docker compose down`/a host reboot/an OOM kill —
+# exit 137, not a graceful SIGTERM Xvfb gets to handle), so Xvfb never
+# got the chance to remove its own /tmp/.X99-lock on the way out. On
+# the next `docker compose up` (which reuses this same container and
+# its filesystem rather than a fresh one), Xvfb sees that stale lock,
+# assumes a live X server already owns :99, and refuses to start —
+# "Server is already active for display 99" — which then cascades into
+# x11vnc failing to connect to a display that was never actually
+# brought up, and the banner below blaming three processes for what is
+# really one stale file. -nolock tells Xvfb to skip that check
+# entirely: safe here since exactly one Xvfb ever runs in this
+# container (never a real second X server to collide with), and
+# clearing the lock/socket files first means a *second* concurrent
+# container wouldn't be silently let through either — it'd still hit a
+# real "address already in use" from the socket bind itself.
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+Xvfb :99 -screen 0 1280x800x24 -nolock &
 sleep 1
 
 DISPLAY=:99 fluxbox &
