@@ -772,6 +772,25 @@ volume, no host <code>.venv</code>/<code>node_modules</code>):</p>
   <code>--build</code> is needed. It never fails the container outright over this —
   scanning, the API, and the standalone browser-extension recorder (below)
   don't depend on VNC at all.</li>
+<li><strong>A second, distinct live-found VNC failure mode</strong>: an uncleanly stopped
+  container (an OOM kill, <code>exit 137</code> — anything short of a graceful
+  <code>SIGTERM</code> <code>Xvfb</code> gets to handle) leaves <code>/tmp/.X99-lock</code> behind. On the
+  next <code>docker compose up</code>/<code>restart</code> (same container, same filesystem),
+  <code>Xvfb</code> sees that stale lock, assumes display <code>:99</code> is already owned by a
+  live server, and refuses to start — cascading into <code>x11vnc</code> failing to
+  connect and the whole stack reporting dead, which is what silently broke
+  the in-app "Record macro" button. <code>start-display.sh</code> now clears the
+  stale lock/socket before launching <code>Xvfb</code> and passes <code>-nolock</code> as
+  defense in depth.</li>
+<li><strong><code>localhost</code>/<code>127.0.0.1</code> targets are not reachable from inside this
+  container</strong> on Docker Desktop (macOS/Windows) — it's isolated from the
+  host's own loopback. A target/credential/traffic-import URL pointing at
+  a host-run service (a local DVWA or Juice Shop container, say) needs
+  <code>host.docker.internal</code> instead, exactly like the native-Postgres
+  override below — a real, live-found incident: every such target across
+  an existing engagement was silently unreachable, so every scan against
+  them ran to completion and reported zero findings with no visible
+  error, not a connection failure.</li>
 <li>Migrations run automatically on container start (a no-op once already
   current) — a fresh database gets its schema with zero manual steps.</li>
 <li>The backend's build-time virtualenv is protected from the dev bind-mount
