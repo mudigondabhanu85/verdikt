@@ -14,7 +14,7 @@ flowchart LR
     B --> U12["cache_poisoning"]
     B --> L["login<br/>(per credential set)"]
     L --> E["authenticated_recon<br/>(full-depth authenticated crawl)"]
-    E --> P["recon_planner<br/>(one AI call proposes unlinked-but-<br/>plausible paths; each is verified live<br/>before counting as discovered)"]
+    E --> P["recon_planner<br/>(up to 2 propose-then-crawl rounds:<br/>AI suggests unlinked-but-<br/>plausible paths, each verified live,<br/>then crawled from)"]
     P --> A1["dom_xss"]
     P --> A2["injection<br/>(SQLi / cmd-inj / SSTI /<br/>path traversal / NoSQLi)"]
     P --> A3["xss"]

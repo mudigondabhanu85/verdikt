@@ -87,6 +87,20 @@ class Settings(BaseSettings):
     crawl_max_pages: int = 300
     crawl_max_depth: int = 6
 
+    # How many propose-then-crawl rounds app.agents.recon_planner gets
+    # (app.agents.graph's recon_planner_node) — each round is one LLM call
+    # suggesting unlinked-but-plausible paths, followed by a real
+    # ReconAgent crawl pass seeded from whichever suggestions actually
+    # resolved, so anything reachable *from* a confirmed AI-suggested page
+    # (e.g. an admin panel's own nav) gets discovered too, not just the
+    # single suggested URL. Bounded rather than looping until nothing new
+    # turns up, since each round is a real LLM call against the scan's
+    # budget (app.ai.budget.BudgetGuard) — 2 rounds already gets most of
+    # the value (a second pass reasoning over round 1's newly-crawled
+    # pages) without letting a chatty model turn one scan into an
+    # unbounded chain of LLM calls.
+    recon_planner_max_rounds: int = 2
+
     # Filesystem path to the standalone login-macro-recorder browser
     # extension's source (browser-extension/ at the repo root — a
     # sibling of backend/, not a package inside it), zipped on demand by

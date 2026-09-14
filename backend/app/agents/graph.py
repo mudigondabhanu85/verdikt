@@ -28,7 +28,7 @@ from app.agents.login import SessionManager
 from app.agents.oauth import OAuthAgent
 from app.agents.prototype_pollution import PrototypePollutionAgent
 from app.agents.recon import DiscoveredParameter, FormInfo, ReconAgent
-from app.agents.recon_planner import ReconPlannerAgent
+from app.agents.recon_planner import run_planner_rounds
 from app.agents.request_smuggling import RequestSmugglingAgent
 from app.agents.ssrf import SsrfAgent
 from app.agents.stored_xss import StoredXssAgent
@@ -37,6 +37,7 @@ from app.agents.websocket_security import WebSocketAgent
 from app.agents.xss import XSSAgent
 from app.agents.xxe import XxeAgent
 from app.ai.budget import BudgetGuard, budget_stop_error
+from app.config import get_settings
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
 from app.models.finding import Finding
@@ -550,46 +551,68 @@ def build_graph(
         }
 
     async def recon_planner_node(state: ScanState) -> dict:
-        """One LLM call reviewing the crawl's own site map to suggest
-        additional, unlinked-but-plausible paths (app.agents.recon_planner)
-        — every suggestion still has to actually resolve against the
-        real target before it's added anywhere, so a wrong guess just
-        404s and gets silently dropped, never fabricated into the site
-        map. Sits between authenticated_recon and every consumer of
-        discovered_endpoints/parameters, so anything confirmed here
-        becomes real testing surface for injection/xss/access_control/etc.,
-        not just a UI-only suggestion list.
+        """AI-driven crawl-coverage loop
+        (app.agents.recon_planner.run_planner_rounds): up to
+        settings.recon_planner_max_rounds propose-then-crawl rounds,
+        instead of a single one-shot suggestion pass. Each round's LLM
+        call proposes unlinked-but-plausible paths against the
+        *current* site map; every suggestion still has to actually
+        resolve against the real target before it's added anywhere, so
+        a wrong guess just 404s and is silently dropped, never
+        fabricated into the site map. The part that's new: whatever
+        does resolve is then handed to a fresh ReconAgent as a crawl
+        seed (the same extra_seed_urls mechanism recon_node/
+        authenticated_recon_node already use for traffic-imported
+        URLs), so anything reachable *from* a confirmed AI-suggested
+        page — an admin panel's own nav linking to /admin/users,
+        /admin/settings, etc. — gets discovered too, not just the one
+        suggested URL sitting alone as a leaf. Each round then feeds
+        the next round's LLM call a bigger site map to reason over.
+        Sits between authenticated_recon and every consumer of
+        discovered_endpoints/parameters/forms, so anything confirmed
+        here becomes real testing surface for injection/xss/
+        access_control/etc., not just a UI-only suggestion list.
         """
         job = await _start_job("recon_planner")
         sessions = state.get("sessions", {})
         auth_session = next(iter(sessions.values()), None)
-        agent = ReconPlannerAgent(
-            client,
-            targets,
-            budget_guard=budget_guard,
-            ai_model=ai_model,
-            session=auth_session,
-        )
+
         try:
-            confirmed = await agent.run(
+            result = await run_planner_rounds(
+                client,
+                targets,
+                budget_guard=budget_guard,
+                ai_model=ai_model,
+                session=auth_session,
+                max_rounds=get_settings().recon_planner_max_rounds,
                 discovered_endpoints=state.get("discovered_endpoints", []),
                 discovered_forms=state.get("discovered_forms", []),
+                discovered_parameters=state.get("discovered_parameters", []),
+                discovered_responses=state.get("discovered_responses", {}),
+                discovered_websocket_endpoints=state.get("discovered_websocket_endpoints", []),
                 tech_stack_fingerprint=state.get("tech_stack_fingerprint"),
             )
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
-        status = "skipped" if agent.budget_exceeded else "completed"
+
+        status = "skipped" if result.budget_exceeded and result.endpoints_suggested_and_confirmed == 0 else "completed"
         await _finish_job(
             job,
             status=status,
-            stats={"endpoints_suggested_and_confirmed": len(confirmed)},
-            error=budget_stop_error(agent),
+            stats={
+                "rounds_run": result.rounds_run,
+                "endpoints_suggested_and_confirmed": result.endpoints_suggested_and_confirmed,
+                "endpoints_discovered_from_suggestions": result.endpoints_discovered_from_suggestions,
+            },
+            error=result.error,
         )
-        merged_endpoints = list(dict.fromkeys(state.get("discovered_endpoints", []) + confirmed))
         return {
-            "discovered_endpoints": merged_endpoints,
-            "discovered_parameters": state.get("discovered_parameters", []) + agent.discovered_parameters,
+            "discovered_endpoints": result.discovered_endpoints,
+            "discovered_parameters": result.discovered_parameters,
+            "discovered_forms": result.discovered_forms,
+            "discovered_responses": result.discovered_responses,
+            "discovered_websocket_endpoints": result.discovered_websocket_endpoints,
         }
 
     async def injection_node(state: ScanState) -> dict:

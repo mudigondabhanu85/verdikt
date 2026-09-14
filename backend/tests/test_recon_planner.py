@@ -3,7 +3,7 @@ import uuid
 import httpx
 
 from app.agents.http_client import ScopedHttpClient
-from app.agents.recon_planner import ReconPlannerAgent
+from app.agents.recon_planner import ReconPlannerAgent, run_planner_rounds
 from app.ai.budget import BudgetGuard
 from app.models.project import ScopeEntry
 from app.models.scan import ScanRun
@@ -94,3 +94,121 @@ async def test_malformed_response_yields_no_suggestions(db_adapter):
 
         assert confirmed == []
         await client.aclose()
+
+
+async def test_planner_rounds_crawl_from_a_confirmed_suggestion(db_adapter):
+    """The actual coverage claim: a confirmed AI-suggested page isn't
+    just added as a lone leaf — anything reachable *from* it (here,
+    /admin/users, linked only from /admin's own page body) gets
+    discovered too, because run_planner_rounds hands confirmed
+    suggestions to a fresh ReconAgent as crawl seeds instead of only
+    resolving them with a bare GET.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == "http://site.test/":
+            return httpx.Response(200, headers={"content-type": "text/html"}, text="<html><body>Home</body></html>", request=request)
+        if url == "http://site.test/admin":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                text='<html><body><a href="/admin/users">Users</a></body></html>',
+                request=request,
+            )
+        if url == "http://site.test/admin/users":
+            return httpx.Response(200, headers={"content-type": "text/html"}, text="<html><body>Users</body></html>", request=request)
+        return httpx.Response(404, text="not found", request=request)
+
+    def respond_fn(messages) -> str:
+        prompt_text = " ".join(m.content for m in messages)
+        if "/admin/users" in prompt_text:
+            # Round 2: the site map already includes everything reachable
+            # from round 1's suggestion — nothing further to propose.
+            return '{"suggested_paths": []}'
+        return '{"suggested_paths": ["/admin"]}'
+
+    async with session_scope(db_adapter) as session:
+        scan_run = ScanRun(version_id=uuid.uuid4(), status="running", requested_by=uuid.uuid4())
+        session.add(scan_run)
+        await session.commit()
+        await session.refresh(scan_run)
+
+        client = ScopedHttpClient(
+            version_id=scan_run.version_id,
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(handler),
+        )
+        provider = ScriptedAIProviderAdapter(respond_fn=respond_fn)
+        guard = BudgetGuard(scan_run, session, provider, lock=client.session_lock)
+        targets = [Target(host="site.test", port=80, base_url="http://site.test/")]
+
+        result = await run_planner_rounds(
+            client,
+            targets,
+            budget_guard=guard,
+            ai_model="fake-model",
+            session=None,
+            max_rounds=2,
+            discovered_endpoints=["http://site.test/"],
+            discovered_forms=[],
+            discovered_parameters=[],
+            discovered_responses={},
+            discovered_websocket_endpoints=[],
+            tech_stack_fingerprint=None,
+        )
+        await client.aclose()
+
+        assert "http://site.test/admin" in result.discovered_endpoints
+        # The real assertion: a page only linked *from* the AI-suggested
+        # page, never suggested by the LLM itself and never linked from
+        # anywhere the original crawl saw, still made it onto the map.
+        assert "http://site.test/admin/users" in result.discovered_endpoints
+        assert result.rounds_run == 2
+        assert result.endpoints_suggested_and_confirmed == 1
+        assert not result.budget_exceeded
+
+
+async def test_planner_rounds_stop_early_when_nothing_confirmed(db_adapter):
+    async with session_scope(db_adapter) as session:
+        scan_run = ScanRun(version_id=uuid.uuid4(), status="running", requested_by=uuid.uuid4())
+        session.add(scan_run)
+        await session.commit()
+        await session.refresh(scan_run)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, text="not found", request=request)
+
+        client = ScopedHttpClient(
+            version_id=scan_run.version_id,
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(handler),
+        )
+        provider = ScriptedAIProviderAdapter.from_responses('{"suggested_paths": ["/nope"]}')
+        guard = BudgetGuard(scan_run, session, provider, lock=client.session_lock)
+        targets = [Target(host="site.test", port=80, base_url="http://site.test/")]
+
+        result = await run_planner_rounds(
+            client,
+            targets,
+            budget_guard=guard,
+            ai_model="fake-model",
+            session=None,
+            max_rounds=5,
+            discovered_endpoints=["http://site.test/"],
+            discovered_forms=[],
+            discovered_parameters=[],
+            discovered_responses={},
+            discovered_websocket_endpoints=[],
+            tech_stack_fingerprint=None,
+        )
+        await client.aclose()
+
+        # A round that confirms nothing stops the loop immediately rather
+        # than burning all 5 rounds' worth of LLM calls on a target with
+        # nothing left to propose.
+        assert result.rounds_run == 1
+        assert result.endpoints_suggested_and_confirmed == 0
+        assert result.discovered_endpoints == ["http://site.test/"]

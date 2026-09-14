@@ -273,7 +273,7 @@ flowchart LR
     B --> U12["cache_poisoning"]
     B --> L["login<br/>(per credential set)"]
     L --> E["authenticated_recon<br/>(full-depth authenticated crawl)"]
-    E --> P["recon_planner<br/>(one AI call proposes unlinked-but-<br/>plausible paths; each is verified live<br/>before counting as discovered)"]
+    E --> P["recon_planner<br/>(up to 2 propose-then-crawl rounds:<br/>AI suggests unlinked-but-plausible paths,<br/>each verified live, then crawled from —<br/>see §5.1a)"]
     P --> A1["dom_xss"]
     P --> A2["injection<br/>(SQLi / cmd-inj / SSTI /<br/>path traversal / NoSQLi)"]
     P --> A3["xss"]
@@ -305,6 +305,30 @@ suggestion is worth nothing here until something deterministic confirms it.
 `chain_analysis` runs outside the graph proper (not a `graph.add_node` call,
 called directly by `runner.py` after `graph.ainvoke()` returns), so it's not
 counted in the 27.
+
+### 5.1a AI-driven crawl coverage — `recon_planner`'s propose-then-crawl loop
+
+`recon_planner` (`app.agents.recon_planner.run_planner_rounds`) used to be
+a single LLM call: propose unlinked-but-plausible paths against the site
+map, verify each one for real, add whatever resolved to
+`discovered_endpoints` as a standalone URL. That left a real coverage gap
+— a confirmed suggestion like `/admin` was added as a leaf, but nothing
+`/admin` itself linked to (`/admin/users`, `/admin/settings`, an audit
+log, ...) ever got discovered, even though `ReconAgent` (§5) was already
+built to crawl from a seed list, not just resolve it.
+
+`run_planner_rounds` closes that gap: whatever a round confirms is handed
+to a fresh `ReconAgent` as a crawl seed via the same `extra_seed_urls`
+mechanism `recon`/`authenticated_recon` already use for traffic-imported
+URLs, so the crawler actually explores from a confirmed AI suggestion the
+same way it explores from anything it found itself. Each round then hands
+the next round's LLM call a bigger site map — a suggestion that only makes
+sense once `/admin/users` is already on the map (`/admin/users/export`,
+say) gets a real shot in round 2. Bounded by
+`Settings.recon_planner_max_rounds` (default **2**) rather than looping
+until nothing new turns up, since each round is a real LLM call against
+the scan's budget (`BudgetGuard`); a round that confirms nothing stops the
+loop immediately rather than spending the remaining rounds for free.
 
 ### 5.2 What's in `app/agents/` beyond the 27 graph nodes
 
@@ -1088,10 +1112,13 @@ crawl was found live to discover exactly one form, the login page's own.
 Every request is scope-checked by `ScopedHttpClient`; redirects are queued
 as their own frontier entries rather than auto-followed; a Logout link is
 deliberately never clicked (it would kill the one shared session every
-other concurrent agent depends on). `recon_planner` (§5.1) then makes one
-AI pass over the resulting site map to suggest additional
-plausible-but-unlinked paths — each one verified with a real request before it counts
-for anything.
+other concurrent agent depends on). `recon_planner` (§5.1a) then runs up
+to two propose-then-crawl rounds over the resulting site map: each round's
+AI pass suggests additional plausible-but-unlinked paths, every suggestion
+is verified with a real request before it counts for anything, and
+whatever resolves is crawled from — not just added as a single URL — so
+anything reachable from a confirmed suggestion (an admin panel's own nav,
+say) gets discovered too.
 
 **How is a vulnerability actually identified, and what does AI do?** Every
 check runs the same four-stage pipeline in §5.3: a deterministic probe
