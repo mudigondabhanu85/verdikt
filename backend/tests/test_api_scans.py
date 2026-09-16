@@ -489,6 +489,10 @@ async def test_full_scan_flow_completes_and_produces_report(client, fixture_site
         "stored_xss",
         "file_upload",
         "websocket",
+        "weak_password_policy",
+        "csv_injection",
+        "session_invalidation",
+        "vulnerable_components",
         "chain_analysis",
     }
     assert all(job["status"] == "completed" for job in body["agent_jobs"]), body["agent_jobs"]

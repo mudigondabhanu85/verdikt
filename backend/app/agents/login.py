@@ -1,4 +1,5 @@
 import json
+import uuid
 from urllib.parse import urlencode
 
 import httpx
@@ -14,6 +15,41 @@ from app.models.login_macro import LoginMacro
 from app.vault.credential_vault import decrypt_credential
 
 _DEFAULT_JSON_BODY_TEMPLATE = '{"username": "{username}", "password": "{password}"}'
+
+
+def pick_best_session(
+    sessions: dict[uuid.UUID, AuthenticatedSession] | None,
+) -> AuthenticatedSession | None:
+    """Every call site that only needs "one representative identity" (a
+    site-shape-discovery crawl, a browser-proof check, anything that
+    isn't Access Control's genuine per-credential juggling) used to just
+    grab `next(iter(sessions.values()))` — whichever credential happened
+    to be inserted into the dict first, with no regard for whether that
+    session actually works. That's a real, live-found flakiness source:
+    MacroPlayer.replay() (app.agents.macro) returns whatever cookies
+    happen to exist in the browser context at the end of a recording
+    replay, even when the recording didn't actually reach an
+    authenticated state — a stray CSRF/analytics cookie set on the login
+    page itself is enough to make `if not cookies: return None` pass
+    without the session being real. If even one credential in a
+    multi-credential Version hits that path, picking "whichever's first"
+    means a scan can silently run its single-representative-identity
+    checks against a broken session instead of a working one, depending
+    entirely on dict insertion order — a login.py-internal implementation
+    detail no caller should have to know or care about.
+
+    Prefers a bearer token (the least ambiguous auth signal — either
+    it's set to something or it isn't) over cookies, and among
+    cookie-based sessions, the one with the most cookies — a real login
+    routinely sets several (session id, CSRF token, remember-me, ...),
+    while a flaky macro replay's leftover is typically just one. Ties
+    (including "every session looks equally good") resolve to whichever
+    came first, same as today — this changes nothing for the common
+    single-credential case.
+    """
+    if not sessions:
+        return None
+    return max(sessions.values(), key=lambda s: (1 if s.bearer_token else 0, len(s.cookies)))
 
 # Recognizable third-party IdP signatures (§5) — deliberately narrow:
 # a false positive here means skipping a legitimate simple form-login
@@ -162,7 +198,22 @@ class SessionManager:
         self, credential_set: CredentialSet, forms: list[FormInfo]
     ) -> AuthenticatedSession | None:
         username, secret = decrypt_credential(credential_set.encrypted_secret)
+        return await self.login_with_credentials(credential_set, forms, username=username, secret=secret)
 
+    async def login_with_credentials(
+        self, credential_set: CredentialSet, forms: list[FormInfo], *, username: str, secret: str
+    ) -> AuthenticatedSession | None:
+        """Same three-strategy dispatch as login(), but against an
+        explicit (username, secret) pair instead of the CredentialSet's
+        own stored/encrypted one. Exists for app.agents.weak_password_policy,
+        which needs to attempt a real login with a password that is *not*
+        what's on file (a throwaway one-character password while probing,
+        then the original again while reverting) — reusing this instead of
+        hand-rolling a second copy of the form/explicit-login branching
+        below is the same "don't reimplement, consolidate" call this
+        codebase makes wherever request-building logic would otherwise
+        need to stay in sync across two independent copies.
+        """
         if credential_set.credential_type == "api_token":
             # A pre-issued bearer token/API key (e.g. for an imported
             # OpenAPI/Postman collection with no login flow at all) —

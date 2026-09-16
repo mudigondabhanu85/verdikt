@@ -158,6 +158,7 @@ class CsrfAgent:
                     request_raw=request_raw,
                     response_raw=response_raw,
                     screenshot_refs=screenshot_refs,
+                    payload=_FORGED_ORIGIN,
                 )
             )
             await self._session.commit()

@@ -49,8 +49,16 @@ _h1 = _styles["Heading1"]
 _h2 = _styles["Heading2"]
 _h3 = _styles["Heading3"]
 _mono = ParagraphStyle("Mono", parent=_body, fontName="Courier", fontSize=8, leading=10)
+_no_visual_poc = ParagraphStyle(
+    "NoVisualPoc", parent=_body, fontName="Helvetica-Oblique", fontSize=9, textColor=colors.HexColor("#555555")
+)
 
 _MAX_EVIDENCE_CHARS = 3000
+_NO_VISUAL_POC_NOTE = (
+    "No visual proof-of-concept for this finding — it's based on HTTP headers/protocol "
+    "behavior with nothing meaningful to render as a screenshot; see the request/response "
+    "evidence above instead."
+)
 
 
 def _escape(text: str | None) -> str:
@@ -60,6 +68,26 @@ def _escape(text: str | None) -> str:
 def _escape_pre(text: str | None) -> str:
     truncated = (text or "")[:_MAX_EVIDENCE_CHARS]
     return _escape(truncated).replace("\n", "<br/>")
+
+
+def _escape_pre_highlighted(text: str | None, payload: str | None) -> str:
+    """Same as _escape_pre, but wraps every occurrence of `payload` (the
+    exact substring that proves the finding — see Evidence.payload) in
+    a `<span backColor="...">`, ReportLab's Paragraph markup for an
+    inline background-color run — the PDF-native equivalent of the HTML
+    report's <mark> tag and the DOCX report's highlighted run. Both
+    `text` and `payload` are escaped with the same rules before the
+    substring search, so this can never match across an HTML-escaped
+    boundary (e.g. a payload containing a literal "<" would otherwise
+    never line up against the already-escaped "&lt;" in `text`).
+    """
+    escaped = _escape_pre(text)
+    if not payload:
+        return escaped
+    escaped_payload = _escape(payload)
+    if not escaped_payload or escaped_payload not in escaped:
+        return escaped
+    return escaped.replace(escaped_payload, f'<span backColor="#fde047">{escaped_payload}</span>')
 
 
 def _image_flowable(png_bytes: bytes) -> Image | None:
@@ -249,16 +277,22 @@ def render_pdf_report(
                 )
 
             if instance.evidence:
+                payload = instance.evidence.payload
                 story.append(Paragraph("Evidence — request", _mono))
-                story.append(Paragraph(_escape_pre(instance.evidence.request_raw), _mono))
+                story.append(Paragraph(_escape_pre_highlighted(instance.evidence.request_raw, payload), _mono))
                 story.append(Paragraph("Evidence — response", _mono))
-                story.append(Paragraph(_escape_pre(instance.evidence.response_raw), _mono))
+                story.append(Paragraph(_escape_pre_highlighted(instance.evidence.response_raw, payload), _mono))
 
+            any_screenshot_embedded = False
             for image_bytes in screenshots_by_finding_id.get(instance.id, []):
                 flowable = _image_flowable(image_bytes)
                 if flowable is not None:
                     story.append(Paragraph("Evidence — screenshot", _mono))
                     story.append(flowable)
+                    any_screenshot_embedded = True
+
+            if not any_screenshot_embedded:
+                story.append(Paragraph(_NO_VISUAL_POC_NOTE, _no_visual_poc))
 
             story.append(Spacer(1, 10))
 

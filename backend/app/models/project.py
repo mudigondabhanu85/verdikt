@@ -48,5 +48,15 @@ class ScopeEntry(Base):
     port: Mapped[int | None] = mapped_column(Integer)
     path_pattern: Mapped[str | None] = mapped_column(String(500))
     in_scope: Mapped[bool] = mapped_column(Boolean, default=True)
+    # "target" (the default — a real, analyst-authorized scan target) or
+    # "login_only" (auto-added purely so a login POST can reach a
+    # third-party IdP host — see
+    # app.api.routes.credentials._ensure_login_endpoint_in_scope). Still
+    # in_scope=True either way (login must still be able to reach it) —
+    # this only feeds app.agents.scope's fuzzing filter, so an IdP host
+    # added this way never becomes a target for injection/XSS/SSTI
+    # payloads just because the crawl happened to discover something on
+    # it during the login flow.
+    purpose: Mapped[str] = mapped_column(String(20), default="target")
 
     version: Mapped[Version] = relationship(back_populates="scope_entries")

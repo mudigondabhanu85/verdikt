@@ -9,6 +9,7 @@ import httpx
 from app.agents.evidence import format_request_raw, format_response_raw
 from app.agents.evidence_screenshot import capture_and_store_evidence_screenshot
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient, ScopeViolationError
+from app.agents.login import pick_best_session
 from app.agents.probing import (
     BASELINE_VALUE,
     ProbeTarget,
@@ -527,7 +528,7 @@ class InjectionAgent:
         # multiply probe volume, and AI triage cost, by the number of
         # credential sets for no real gain here) is enough for probes
         # to actually reach authenticated surface at all.
-        self._auth_session = next(iter((sessions or {}).values()), None)
+        self._auth_session = pick_best_session(sessions)
         targets = query_probe_targets(parameters) + form_probe_targets(forms)
         findings: list[Finding] = []
 

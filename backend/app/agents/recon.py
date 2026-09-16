@@ -60,16 +60,29 @@ def _looks_html(response: httpx.Response) -> bool:
     return "html" in response.headers.get("content-type", "").lower()
 
 
-def _extract_links(base_url: str, soup: BeautifulSoup) -> list[str]:
+def _extract_links(base_url: str, soup: BeautifulSoup) -> tuple[list[str], list[str]]:
+    """Returns (links_to_follow, logout_links). A logout link is never
+    added to links_to_follow (see the module-level comment on
+    _LOGOUT_LINK_RE for why — following it would kill the one shared
+    session every other concurrent agent depends on), but it must not
+    just vanish either: app.agents.session_invalidation needs a real
+    logout URL to test, and until this returned it separately, nothing
+    anywhere ever captured one — the check would have been silently dead
+    code, unable to find a logout link no matter how obviously one
+    existed on the page, precisely because this function's whole job is
+    to hide logout links from everything that follows links.
+    """
     links = []
+    logout_links = []
     for tag in soup.find_all("a", href=True):
         href = tag["href"].strip()
         if href.startswith(("javascript:", "mailto:", "tel:", "#")):
             continue
         if _LOGOUT_LINK_RE.search(href) or _LOGOUT_LINK_RE.search(tag.get_text()):
+            logout_links.append(urljoin(base_url, href))
             continue
         links.append(urljoin(base_url, href))
-    return links
+    return links, logout_links
 
 
 def extract_forms(base_url: str, soup: BeautifulSoup) -> list[FormInfo]:
@@ -181,6 +194,10 @@ class ReconAgent:
         # detection costs zero extra requests instead of re-fetching.
         self.discovered_responses: dict[str, httpx.Response] = {}
         self.discovered_websocket_endpoints: list[str] = []
+        # See _extract_links's docstring — captured separately from
+        # discovered_endpoints precisely because a logout link is never
+        # allowed into that list at all.
+        self.discovered_logout_urls: list[str] = []
 
     async def _fetch(self, url: str) -> httpx.Response | None:
         async with self._semaphore:
@@ -248,5 +265,9 @@ class ReconAgent:
         if _looks_html(response):
             soup = BeautifulSoup(response.text, "html.parser")
             self.discovered_forms.extend(extract_forms(url, soup))
-            return _extract_links(url, soup)
+            links, logout_links = _extract_links(url, soup)
+            for logout_url in logout_links:
+                if logout_url not in self.discovered_logout_urls:
+                    self.discovered_logout_urls.append(logout_url)
+            return links
         return []

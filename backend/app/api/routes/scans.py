@@ -13,6 +13,7 @@ from app.agents import task_registry
 from app.agents.retest import _match_key, execute_retest
 from app.agents.runner import execute_scan_run
 from app.ai.budget import BudgetGuard
+from app.ai.model_tiers import resolve_tiered_model
 from app.ai.provider import resolve_provider_and_model
 from app.api.deps import get_scan_run_or_404, get_version_or_404, write_audit_log
 from app.auth.rbac import require_permission
@@ -336,7 +337,12 @@ async def _get_or_generate_executive_summary(
         scan_run=detail,
         findings=findings,
         budget_guard=guard,
-        ai_model=ai_model,
+        # A customer-facing document read by non-technical stakeholders
+        # — writing quality matters here in a way it doesn't for an
+        # internal triage classification, and this runs exactly once
+        # per scan run (cached afterward), so the cost of the
+        # "reasoning" tier (app.ai.model_tiers) is negligible.
+        ai_model=resolve_tiered_model(ai_model, "reasoning"),
     )
     scan_run.executive_summary = summary
     await session.commit()

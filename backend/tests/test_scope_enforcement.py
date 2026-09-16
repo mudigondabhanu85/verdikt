@@ -3,12 +3,18 @@ import uuid
 import pytest
 
 from app.agents.http_client import ScopedHttpClient, ScopeViolationError
-from app.agents.scope import is_in_scope
+from app.agents.recon import DiscoveredParameter, FormInfo
+from app.agents.scope import (
+    filter_forms_out_login_only,
+    filter_out_login_only,
+    filter_parameters_out_login_only,
+    is_in_scope,
+)
 from app.models.project import ScopeEntry
 
 
-def entry(host: str, port: int | None = None, in_scope: bool = True) -> ScopeEntry:
-    return ScopeEntry(host=host, port=port, in_scope=in_scope)
+def entry(host: str, port: int | None = None, in_scope: bool = True, purpose: str = "target") -> ScopeEntry:
+    return ScopeEntry(host=host, port=port, in_scope=in_scope, purpose=purpose)
 
 
 def test_matching_host_and_port_is_in_scope():
@@ -54,3 +60,35 @@ async def test_scoped_client_raises_before_any_request_for_out_of_scope_url():
     with pytest.raises(ScopeViolationError):
         await client.get("https://not-allowed.test/")
     await client.aclose()
+
+
+def test_login_only_host_is_excluded_from_fuzzable_endpoints():
+    entries = [entry("app.example.test"), entry("idp.okta.com", purpose="login_only")]
+    urls = ["https://app.example.test/dashboard", "https://idp.okta.com/account-settings"]
+
+    assert filter_out_login_only(urls, entries) == ["https://app.example.test/dashboard"]
+
+
+def test_login_only_host_is_excluded_from_fuzzable_forms():
+    entries = [entry("app.example.test"), entry("idp.okta.com", purpose="login_only")]
+    real_form = FormInfo(action_url="https://app.example.test/comments", method="POST", fields=[])
+    idp_form = FormInfo(action_url="https://idp.okta.com/mfa-settings", method="POST", fields=[])
+
+    assert filter_forms_out_login_only([real_form, idp_form], entries) == [real_form]
+
+
+def test_login_only_host_is_excluded_from_fuzzable_parameters():
+    entries = [entry("app.example.test"), entry("idp.okta.com", purpose="login_only")]
+    real_param = DiscoveredParameter(url="https://app.example.test/search?q=1", method="GET", name="q")
+    idp_param = DiscoveredParameter(url="https://idp.okta.com/authorize?state=1", method="GET", name="state")
+
+    assert filter_parameters_out_login_only([real_param, idp_param], entries) == [real_param]
+
+
+def test_target_derived_entry_is_never_filtered():
+    # purpose defaults to "target" for a real, analyst-added Target —
+    # only an explicit login_only tag ever excludes a host.
+    entries = [entry("app.example.test")]
+    urls = ["https://app.example.test/dashboard"]
+
+    assert filter_out_login_only(urls, entries) == urls

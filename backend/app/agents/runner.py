@@ -9,6 +9,7 @@ from app.agents.graph import build_graph
 from app.agents.http_client import ScopedHttpClient, install_commit_backstop
 from app.ai import provider as ai_provider
 from app.ai.budget import BudgetGuard, budget_stop_error
+from app.ai.model_tiers import resolve_tiered_model
 from app.db import session as db_session
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
@@ -167,8 +168,16 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
                 scope_entries=scope_entries,
             )
             await graph.ainvoke({})
+            # chain_analysis composes multiple findings into a single
+            # attack-chain narrative — the most complex, lowest-volume
+            # (one call per scan) reasoning task in the whole pipeline,
+            # so it gets the "reasoning" tier (app.ai.model_tiers)
+            # rather than the scan's default model.
             await _run_chain_analysis(
-                session, scan_run=scan_run, budget_guard=budget_guard, ai_model=ai_model
+                session,
+                scan_run=scan_run,
+                budget_guard=budget_guard,
+                ai_model=resolve_tiered_model(ai_model, "reasoning"),
             )
 
             scan_run.status = "completed"

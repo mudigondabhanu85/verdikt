@@ -60,6 +60,84 @@ def _finding_with_evidence() -> Finding:
     return finding
 
 
+_NO_VISUAL_POC_TEXT = "No visual proof-of-concept for this finding"
+
+
+def _blind_finding() -> Finding:
+    finding = _finding_with_evidence()
+    finding.evidence.screenshot_refs = []
+    return finding
+
+
+def test_html_report_notes_missing_screenshot_for_a_blind_check():
+    finding = _blind_finding()
+    html = render_html_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
+
+    assert _NO_VISUAL_POC_TEXT in html
+    assert "Evidence — screenshot" not in html
+
+
+def test_html_report_omits_the_note_when_a_screenshot_is_present():
+    finding = _finding_with_evidence()
+    png_bytes = _sample_png()
+    html = render_html_report(
+        scan_run=_detail(),
+        findings=[finding],
+        executive_summary="summary",
+        screenshots_by_finding_id={finding.id: [png_bytes]},
+    )
+
+    assert _NO_VISUAL_POC_TEXT not in html
+
+
+def test_pdf_report_notes_missing_screenshot_for_a_blind_check():
+    finding = _blind_finding()
+    pdf_bytes = render_pdf_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = "\n".join(page.extract_text() for page in reader.pages)
+    assert _NO_VISUAL_POC_TEXT in text
+
+
+def test_pdf_report_omits_the_note_when_a_screenshot_is_present():
+    finding = _finding_with_evidence()
+    png_bytes = _sample_png()
+    pdf_bytes = render_pdf_report(
+        scan_run=_detail(),
+        findings=[finding],
+        executive_summary="summary",
+        screenshots_by_finding_id={finding.id: [png_bytes]},
+    )
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = "\n".join(page.extract_text() for page in reader.pages)
+    assert _NO_VISUAL_POC_TEXT not in text
+
+
+def test_docx_report_notes_missing_screenshot_for_a_blind_check():
+    finding = _blind_finding()
+    docx_bytes = render_docx_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
+
+    document = Document(io.BytesIO(docx_bytes))
+    all_text = "\n".join(p.text for p in document.paragraphs)
+    assert _NO_VISUAL_POC_TEXT in all_text
+
+
+def test_docx_report_omits_the_note_when_a_screenshot_is_present():
+    finding = _finding_with_evidence()
+    png_bytes = _sample_png()
+    docx_bytes = render_docx_report(
+        scan_run=_detail(),
+        findings=[finding],
+        executive_summary="summary",
+        screenshots_by_finding_id={finding.id: [png_bytes]},
+    )
+
+    document = Document(io.BytesIO(docx_bytes))
+    all_text = "\n".join(p.text for p in document.paragraphs)
+    assert _NO_VISUAL_POC_TEXT not in all_text
+
+
 def test_pdf_report_contains_expected_content():
     finding = _finding_with_evidence()
     pdf_bytes = render_pdf_report(
@@ -205,6 +283,28 @@ def test_html_report_embeds_screenshot_as_base64_img():
     assert f'src="data:image/png;base64,{expected_b64}"' in html
 
 
+def test_html_report_highlights_the_evidence_payload():
+    finding = _finding_with_evidence()
+    finding.evidence.payload = "<script>"
+    html = render_html_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
+
+    assert "<mark>&lt;script&gt;</mark>" in html
+    # The payload text itself must never appear unescaped anywhere in
+    # the document — it's attacker-controlled content (a real XSS
+    # payload here) being rendered into a report someone opens in a
+    # browser.
+    assert "<script>" not in html
+
+
+def test_html_report_with_no_payload_renders_raw_evidence_unhighlighted():
+    finding = _finding_with_evidence()
+    assert finding.evidence.payload is None
+    html = render_html_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
+
+    assert "<mark>" not in html
+    assert "&lt;script&gt;" in html  # still escaped, just not wrapped
+
+
 def test_html_report_without_screenshots_omits_screenshot_section():
     finding = _finding_with_evidence()
     html = render_html_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
@@ -231,6 +331,38 @@ def test_html_report_embeds_branding_logo_and_company_name():
     assert "Acme Corp — Verdikt Security Assessment Report" in html
     expected_b64 = base64.b64encode(png_bytes).decode("ascii")
     assert f'src="data:image/png;base64,{expected_b64}"' in html
+
+
+def test_docx_report_highlights_the_evidence_payload():
+    finding = _finding_with_evidence()
+    finding.evidence.payload = "<script>"
+    docx_bytes = render_docx_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
+
+    document = Document(io.BytesIO(docx_bytes))
+    from docx.enum.text import WD_COLOR_INDEX
+
+    highlighted_runs = [
+        run
+        for paragraph in document.paragraphs
+        for run in paragraph.runs
+        if run.font.highlight_color == WD_COLOR_INDEX.YELLOW
+    ]
+    assert any(run.text == "<script>" for run in highlighted_runs), [r.text for r in highlighted_runs]
+
+
+def test_pdf_report_highlights_the_evidence_payload():
+    finding = _finding_with_evidence()
+    finding.evidence.payload = "<script>"
+    pdf_bytes = render_pdf_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = "\n".join(page.extract_text() for page in reader.pages)
+    # The payload text still needs to actually render (ReportLab's
+    # <span backColor> markup is stripped from extracted text, so this
+    # confirms the escaped payload survived being wrapped, not that the
+    # highlight color itself made it into the extracted text — pypdf
+    # doesn't expose per-run background color).
+    assert "<script>" in text
 
 
 def test_docx_report_with_no_branding_has_no_extra_images():

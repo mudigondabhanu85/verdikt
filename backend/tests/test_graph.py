@@ -130,6 +130,10 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             "stored_xss",
             "file_upload",
             "websocket",
+            "weak_password_policy",
+            "csv_injection",
+            "session_invalidation",
+            "vulnerable_components",
         }
         assert all(j.status == "completed" for j in jobs), jobs
 
@@ -153,3 +157,87 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
         # signal, not a fluke of scheduling.
         assert len(_REQUEST_INTERVALS) >= 2
         assert _overlapping_pairs_exist(_REQUEST_INTERVALS)
+
+
+class _RecordingAgent:
+    """Stands in for a real agent class — records exactly the kwargs
+    graph.py constructed it with (in particular ai_model=) and returns
+    an empty result immediately, with no real HTTP/LLM activity. Lets
+    the wiring test below prove *which model string graph.py actually
+    passed* to each node's agent constructor without needing to
+    manufacture real deserialization/business-logic signals for those
+    agents' own trigger conditions to fire.
+    """
+
+    instances: list["_RecordingAgent"] = []
+
+    def __init__(self, *args, **kwargs):
+        self.kwargs = kwargs
+        self.budget_exceeded = False
+        type(self).instances.append(self)
+
+    async def run(self, *args, **kwargs):
+        return []
+
+
+async def test_graph_wires_the_right_model_tier_to_the_right_node(db_adapter, monkeypatch):
+    """app.ai.model_tiers wiring: deserialization/request_smuggling
+    (high-volume, simple triage) get the "fast" tier; the two
+    business-logic nodes (low-volume, complex reasoning) get
+    "reasoning"; everything else (injection, as a control) keeps the
+    scan's plain configured model. Verified by substituting a recording
+    fake for each real agent class rather than needing those agents'
+    own real trigger conditions to fire against a fixture site.
+    """
+    import app.agents.graph as graph_module
+
+    _RecordingAgent.instances = []
+    for name in (
+        "DeserializationAgent",
+        "RequestSmugglingAgent",
+        "BusinessLogicPlannerAgent",
+        "BusinessLogicAgent",
+        "InjectionAgent",
+    ):
+        monkeypatch.setattr(graph_module, name, _RecordingAgent)
+
+    async with session_scope(db_adapter) as session:
+        scan_run = ScanRun(version_id=uuid.uuid4(), status="running", requested_by=uuid.uuid4())
+        session.add(scan_run)
+        await session.commit()
+        await session.refresh(scan_run)
+
+        client = ScopedHttpClient(
+            version_id=scan_run.version_id,
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": false, "confidence": "low", "reasoning": "n/a"}'
+        )
+        guard = BudgetGuard(scan_run, session, provider, lock=client.session_lock)
+
+        graph = build_graph(
+            client=client,
+            session=session,
+            scan_run_id=scan_run.id,
+            version_id=scan_run.version_id,
+            targets=[Target(host="site.test", port=80, base_url="http://site.test/")],
+            credential_sets=[],
+            business_rules=[],
+            budget_guard=guard,
+            ai_model="claude-sonnet-5",
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+        )
+        await graph.ainvoke({})
+        await client.aclose()
+
+    # All five substituted nodes together must exercise exactly the
+    # three tiered model strings for ai_model="claude-sonnet-5" — proof
+    # that graph.py is actually threading the fast/default/reasoning
+    # substitutions to real node constructors, not just that
+    # resolve_tiered_model works in isolation (already covered by
+    # tests/test_model_tiers.py).
+    ai_models_used = {i.kwargs["ai_model"] for i in _RecordingAgent.instances}
+    assert ai_models_used == {"claude-haiku-4-5-20251001", "claude-opus-5", "claude-sonnet-5"}, ai_models_used

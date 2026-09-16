@@ -24,6 +24,10 @@ class ScriptedAIProviderAdapter(AIProviderAdapter):
         self._respond_fn = respond_fn
         self._cost_per_call = cost_per_call
         self.calls: list[list[Message]] = []
+        # Which model each call in `calls` (same index) actually requested
+        # — lets a test verify per-task model tiering (app.ai.model_tiers)
+        # without needing to inspect anything beyond this fake.
+        self.models: list[str] = []
 
     @classmethod
     def from_responses(cls, *responses: str) -> "ScriptedAIProviderAdapter":
@@ -33,6 +37,7 @@ class ScriptedAIProviderAdapter(AIProviderAdapter):
         self, messages: list[Message], *, model: str, max_tokens: int = 1024
     ) -> AgentResponse:
         self.calls.append(messages)
+        self.models.append(model)
         if self._respond_fn is not None:
             content = self._respond_fn(messages)
         else:

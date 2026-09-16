@@ -70,6 +70,13 @@ function ScopeEntryRow({ entry, versionId }: { entry: ScopeEntryOut; versionId: 
           </select>
         </td>
         <td className="py-2">
+          {entry.purpose === 'login_only' ? (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">login only</span>
+          ) : (
+            <span className="text-gray-400">target</span>
+          )}
+        </td>
+        <td className="py-2">
           <span className="flex gap-2">
             <button
               onClick={() => updateMutation.mutate()}
@@ -93,6 +100,18 @@ function ScopeEntryRow({ entry, versionId }: { entry: ScopeEntryOut; versionId: 
       <td className="py-2">{entry.port ?? 'any'}</td>
       <td className="py-2">{entry.path_pattern ?? '*'}</td>
       <td className="py-2">{entry.in_scope ? 'yes' : 'no (excluded)'}</td>
+      <td className="py-2">
+        {entry.purpose === 'login_only' ? (
+          <span
+            className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700"
+            title="Added automatically so login can reach this host — never sent injection/XSS/etc. payloads"
+          >
+            login only
+          </span>
+        ) : (
+          <span className="text-gray-400">target</span>
+        )}
+      </td>
       <td className="py-2">
         <span className="flex gap-2">
           <button onClick={() => setEditing(true)} className="text-xs text-purple-700 hover:underline">
@@ -189,6 +208,7 @@ export function ScopeTab({ versionId }: { versionId: string }) {
             <th className="py-2">Port</th>
             <th className="py-2">Path pattern</th>
             <th className="py-2">In scope</th>
+            <th className="py-2">Purpose</th>
             {canWrite(user?.role) && <th className="py-2">Actions</th>}
           </tr>
         </thead>
@@ -202,6 +222,15 @@ export function ScopeTab({ versionId }: { versionId: string }) {
                 <td className="py-2">{entry.port ?? 'any'}</td>
                 <td className="py-2">{entry.path_pattern ?? '*'}</td>
                 <td className="py-2">{entry.in_scope ? 'yes' : 'no (excluded)'}</td>
+                <td className="py-2">
+                  {entry.purpose === 'login_only' ? (
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+                      login only
+                    </span>
+                  ) : (
+                    <span className="text-gray-400">target</span>
+                  )}
+                </td>
               </tr>
             ),
           )}

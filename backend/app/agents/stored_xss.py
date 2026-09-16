@@ -14,9 +14,10 @@ import httpx
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
+from app.agents.browser_session import seed_authenticated_context
 from app.agents.evidence import format_request_raw, format_response_raw
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient, ScopeViolationError
-from app.agents.login import _live_field_values
+from app.agents.login import _live_field_values, pick_best_session
 from app.agents.recon import FormInfo
 from app.agents.xss import XSS_FINDING_METADATA
 from app.models.finding import Evidence, Finding
@@ -111,7 +112,7 @@ class StoredXssAgent:
         # submission silently did nothing, and there was nothing to see on
         # revisit either. One representative identity, same reasoning as
         # app.agents.injection.InjectionAgent.run.
-        self._auth_session = next(iter((sessions or {}).values()), None)
+        self._auth_session = pick_best_session(sessions)
         findings: list[Finding] = []
         for form in forms:
             if form.method != "POST":
@@ -174,20 +175,9 @@ class StoredXssAgent:
                 # cert shouldn't fail this check when the analyst
                 # already has authorized, scoped access to it.
                 context = await browser.new_context(ignore_https_errors=True)
-                if self._auth_session is not None and self._auth_session.cookies:
-                    await context.add_cookies(
-                        [
-                            {"name": name, "value": value, "url": candidates[0]}
-                            for name, value in self._auth_session.cookies.items()
-                        ]
-                        if candidates
-                        else []
-                    )
+                if candidates:
+                    await seed_authenticated_context(context, self._auth_session, candidates[0])
                 page = await context.new_page()
-                if self._auth_session is not None and self._auth_session.bearer_token:
-                    await page.set_extra_http_headers(
-                        {"Authorization": f"Bearer {self._auth_session.bearer_token}"}
-                    )
                 found: tuple[str, bytes] | None = None
                 for url in candidates:
                     try:

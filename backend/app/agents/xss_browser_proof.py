@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
+from app.agents.browser_session import seed_authenticated_context
 from app.agents.http_client import AuthenticatedSession
 from app.agents.probing import ProbeTarget, build_request
 
@@ -166,19 +167,11 @@ async def attempt_browser_proof(
         # this check when the analyst already has authorized, scoped
         # access to it.
         context = await browser.new_context(ignore_https_errors=True)
+        await seed_authenticated_context(context, session, target.url)
         page = await context.new_page()
-        if session is not None and session.bearer_token:
-            await page.set_extra_http_headers({"Authorization": f"Bearer {session.bearer_token}"})
         try:
             for payload, display_payload in _xss_execution_payloads(marker):
                 url, _body, _content_type = build_request(target, payload)
-                if session is not None and session.cookies:
-                    await context.add_cookies(
-                        [
-                            {"name": name, "value": value, "url": url}
-                            for name, value in session.cookies.items()
-                        ]
-                    )
                 # "networkidle" (the Playwright-recommended default) never
                 # fires against a real single-page app that keeps a
                 # persistent WebSocket connection open (socket.io, live
@@ -233,13 +226,8 @@ async def attempt_dom_xss_fragment_proof(
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=headless)
             context = await browser.new_context(ignore_https_errors=True)
-            if session is not None and session.cookies:
-                await context.add_cookies(
-                    [{"name": name, "value": value, "url": url} for name, value in session.cookies.items()]
-                )
+            await seed_authenticated_context(context, session, url)
             page = await context.new_page()
-            if session is not None and session.bearer_token:
-                await page.set_extra_http_headers({"Authorization": f"Bearer {session.bearer_token}"})
             for payload, display_payload in _xss_execution_payloads(marker):
                 # A navigation that changes only the fragment is treated
                 # by the browser as same-document (fires "hashchange",

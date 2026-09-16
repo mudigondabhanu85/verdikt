@@ -106,6 +106,10 @@ async def test_recon_agent_never_follows_logout_links(db_adapter):
 
         assert "http://site.test/account" in discovered
         assert "http://site.test/logout.php" not in discovered
+        # Never followed, but not silently dropped either —
+        # app.agents.session_invalidation needs a real logout URL to
+        # test, captured separately from the crawled-endpoints list.
+        assert agent.discovered_logout_urls == ["http://site.test/logout.php"]
 
         await client.aclose()
 

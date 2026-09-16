@@ -15,6 +15,7 @@ from app.agents.cache_poisoning import CachePoisoningAgent
 from app.agents.clickjacking import ClickjackingAgent
 from app.agents.cors import CorsAgent
 from app.agents.csrf import CsrfAgent
+from app.agents.csv_injection import CsvInjectionAgent
 from app.agents.deserialization import DeserializationAgent
 from app.agents.dom_xss import DomXssAgent
 from app.agents.file_upload import FileUploadAgent
@@ -24,19 +25,24 @@ from app.agents.header_config import HeaderConfigAgent
 from app.agents.host_header import HostHeaderAgent
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
 from app.agents.injection import InjectionAgent
-from app.agents.login import SessionManager
+from app.agents.login import SessionManager, pick_best_session
 from app.agents.oauth import OAuthAgent
 from app.agents.prototype_pollution import PrototypePollutionAgent
 from app.agents.recon import DiscoveredParameter, FormInfo, ReconAgent
+from app.agents.scope import filter_forms_out_login_only, filter_out_login_only, filter_parameters_out_login_only
 from app.agents.recon_planner import run_planner_rounds
 from app.agents.request_smuggling import RequestSmugglingAgent
+from app.agents.session_invalidation import SessionInvalidationAgent
 from app.agents.ssrf import SsrfAgent
 from app.agents.stored_xss import StoredXssAgent
 from app.agents.traffic_seed import seed_from_imported_traffic
+from app.agents.vulnerable_components import VulnerableComponentsAgent
+from app.agents.weak_password_policy import WeakPasswordPolicyAgent
 from app.agents.websocket_security import WebSocketAgent
 from app.agents.xss import XSSAgent
 from app.agents.xxe import XxeAgent
 from app.ai.budget import BudgetGuard, budget_stop_error
+from app.ai.model_tiers import resolve_tiered_model
 from app.config import get_settings
 from app.models.business_rule import BusinessRule
 from app.models.credential import CredentialSet
@@ -53,6 +59,17 @@ class ScanState(TypedDict, total=False):
     discovered_forms: list[FormInfo]
     discovered_responses: dict[str, httpx.Response]
     discovered_websocket_endpoints: list[str]
+    # Logout links (see app.agents.recon._extract_links) — captured
+    # separately from discovered_endpoints because a logout link is
+    # deliberately never allowed into that list at all.
+    discovered_logout_urls: list[str]
+    # recon_node's own anonymous-crawl responses, preserved as-is and
+    # never overwritten by authenticated_recon_node's merge into
+    # discovered_responses — app.agents.session_invalidation needs a
+    # genuinely pre-login baseline to compare a post-logout response
+    # against, and discovered_responses stops being that the moment
+    # authenticated_recon re-fetches the same URL while logged in.
+    anonymous_responses: dict[str, httpx.Response]
     tech_stack_fingerprint: dict
     sessions: dict[uuid.UUID, AuthenticatedSession]
     findings: Annotated[list[Finding], operator.add]
@@ -101,6 +118,17 @@ def build_graph(
 
     credential_labels = {c.id: c.label for c in credential_sets}
     credential_ranks = {c.id: c.privilege_rank for c in credential_sets}
+
+    # Automatic per-task model tiering (app.ai.model_tiers) — `ai_model`
+    # itself stays the "default" tier, used unchanged by most nodes;
+    # these two are only substituted for the specific nodes below whose
+    # task is either much higher-volume/simpler (fast) or much more
+    # complex/lower-volume (reasoning) than the family's balanced
+    # default member. Computed once here rather than per-node: it's a
+    # pure, cheap string lookup, not something worth recomputing per
+    # call site.
+    ai_model_fast = resolve_tiered_model(ai_model, "fast")
+    ai_model_reasoning = resolve_tiered_model(ai_model, "reasoning")
 
     async def _start_job(agent_type: str) -> AgentJob:
         job = AgentJob(
@@ -217,12 +245,24 @@ def build_graph(
                 "site_map": site_map,
             },
         )
+        # §5 scope leak fix: site_map above intentionally still shows
+        # everything crawled, including a login-only IdP host, for
+        # transparency — but nothing downstream of this node (every
+        # detection agent, old and new alike) should ever receive it as
+        # testable surface. Filtered here, once, rather than trusting
+        # every current and future agent to remember to check this
+        # itself.
+        fuzzable_endpoints = filter_out_login_only(all_endpoints, scope_entries)
+        fuzzable_forms = filter_forms_out_login_only(agent.discovered_forms, scope_entries)
+        fuzzable_parameters = filter_parameters_out_login_only(all_parameters, scope_entries)
         return {
-            "discovered_endpoints": all_endpoints,
-            "discovered_parameters": all_parameters,
-            "discovered_forms": agent.discovered_forms,
+            "discovered_endpoints": fuzzable_endpoints,
+            "discovered_parameters": fuzzable_parameters,
+            "discovered_forms": fuzzable_forms,
             "discovered_responses": agent.discovered_responses,
+            "anonymous_responses": agent.discovered_responses,
             "discovered_websocket_endpoints": all_websocket_endpoints,
+            "discovered_logout_urls": agent.discovered_logout_urls,
             "tech_stack_fingerprint": fingerprint,
         }
 
@@ -275,6 +315,68 @@ def build_graph(
         agent = CsrfAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
         try:
             findings = await agent.run(state.get("discovered_forms", []), state.get("sessions", {}))
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def weak_password_policy_node(state: ScanState) -> dict:
+        job = await _start_job("weak_password_policy")
+        agent = WeakPasswordPolicyAgent(
+            client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session
+        )
+        try:
+            findings = await agent.run(
+                state.get("discovered_forms", []), state.get("sessions", {}), credential_sets
+            )
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def csv_injection_node(state: ScanState) -> dict:
+        job = await _start_job("csv_injection")
+        agent = CsvInjectionAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
+        try:
+            findings = await agent.run(
+                state.get("discovered_forms", []),
+                state.get("discovered_endpoints", []),
+                state.get("sessions", {}),
+            )
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def session_invalidation_node(state: ScanState) -> dict:
+        job = await _start_job("session_invalidation")
+        agent = SessionInvalidationAgent(
+            client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session
+        )
+        try:
+            findings = await agent.run(
+                credential_sets,
+                state.get("discovered_forms", []),
+                state.get("discovered_logout_urls", []),
+                targets,
+                state.get("anonymous_responses", {}),
+            )
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def vulnerable_components_node(state: ScanState) -> dict:
+        job = await _start_job("vulnerable_components")
+        agent = VulnerableComponentsAgent(
+            client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session
+        )
+        try:
+            findings = await agent.run(state.get("discovered_endpoints", []), state.get("sessions", {}))
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
@@ -356,7 +458,7 @@ def build_graph(
             agent_job_id=job.id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=ai_model,
+            ai_model=ai_model_fast,
         )
         try:
             candidates = await agent.run(
@@ -417,7 +519,7 @@ def build_graph(
             agent_job_id=job.id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=ai_model,
+            ai_model=ai_model_fast,
         )
         try:
             candidates = await agent.run(state.get("discovered_endpoints", []))
@@ -491,8 +593,11 @@ def build_graph(
         # One session is enough to crawl as — this is discovering the
         # app's *shape* (forms/endpoints/parameters), not testing
         # per-credential behavior differences (that's Access Control's
-        # job, which already juggles every session itself).
-        auth_session = next(iter(sessions.values()))
+        # job, which already juggles every session itself). Picked via
+        # pick_best_session, not "whichever's first" — see its docstring
+        # for the real flakiness this avoids when one credential's
+        # session came from a macro replay that didn't fully work.
+        auth_session = pick_best_session(sessions)
         # Same extra_seed_urls treatment as recon_node — continue
         # exploring from every endpoint discovered so far (pre-login
         # crawl + traffic import), now with a session, so pages only
@@ -542,12 +647,25 @@ def build_graph(
             status="completed",
             stats={"endpoints_discovered": len(endpoints), "site_map": site_map},
         )
+        merged_logout_urls = list(
+            dict.fromkeys(state.get("discovered_logout_urls", []) + agent.discovered_logout_urls)
+        )
+        # Same §5 scope-leak filter as recon_node — this crawl can
+        # discover *new* login-only-host URLs of its own (e.g. a
+        # dashboard link to "manage your Okta account"), not just
+        # re-encounter ones recon_node already filtered out of the seed
+        # list it was handed.
         return {
-            "discovered_endpoints": merged_endpoints,
-            "discovered_parameters": state.get("discovered_parameters", []) + agent.discovered_parameters,
-            "discovered_forms": state.get("discovered_forms", []) + agent.discovered_forms,
+            "discovered_endpoints": filter_out_login_only(merged_endpoints, scope_entries),
+            "discovered_parameters": filter_parameters_out_login_only(
+                state.get("discovered_parameters", []) + agent.discovered_parameters, scope_entries
+            ),
+            "discovered_forms": filter_forms_out_login_only(
+                state.get("discovered_forms", []) + agent.discovered_forms, scope_entries
+            ),
             "discovered_responses": merged_responses,
             "discovered_websocket_endpoints": merged_websocket_endpoints,
+            "discovered_logout_urls": merged_logout_urls,
         }
 
     async def recon_planner_node(state: ScanState) -> dict:
@@ -575,7 +693,7 @@ def build_graph(
         """
         job = await _start_job("recon_planner")
         sessions = state.get("sessions", {})
-        auth_session = next(iter(sessions.values()), None)
+        auth_session = pick_best_session(sessions)
 
         try:
             result = await run_planner_rounds(
@@ -607,10 +725,17 @@ def build_graph(
             },
             error=result.error,
         )
+        # Same §5 scope-leak filter as recon_node/authenticated_recon_node
+        # — an AI-suggested path can resolve on a login-only host too
+        # (or a confirmed suggestion's own crawl-from-seed can surface
+        # new links there), and this is the last point before every
+        # detection agent in the graph reads these lists.
         return {
-            "discovered_endpoints": result.discovered_endpoints,
-            "discovered_parameters": result.discovered_parameters,
-            "discovered_forms": result.discovered_forms,
+            "discovered_endpoints": filter_out_login_only(result.discovered_endpoints, scope_entries),
+            "discovered_parameters": filter_parameters_out_login_only(
+                result.discovered_parameters, scope_entries
+            ),
+            "discovered_forms": filter_forms_out_login_only(result.discovered_forms, scope_entries),
             "discovered_responses": result.discovered_responses,
             "discovered_websocket_endpoints": result.discovered_websocket_endpoints,
         }
@@ -727,7 +852,7 @@ def build_graph(
             version_id=version_id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=ai_model,
+            ai_model=ai_model_reasoning,
             session_lock=client.session_lock,
         )
         try:
@@ -757,7 +882,7 @@ def build_graph(
             agent_job_id=job.id,
             db_session=session,
             budget_guard=budget_guard,
-            ai_model=ai_model,
+            ai_model=ai_model_reasoning,
             sessions=state.get("sessions", {}),
             credential_labels=credential_labels,
         )
@@ -804,6 +929,10 @@ def build_graph(
     graph.add_node("stored_xss", stored_xss_node)
     graph.add_node("file_upload", file_upload_node)
     graph.add_node("websocket", websocket_node)
+    graph.add_node("weak_password_policy", weak_password_policy_node)
+    graph.add_node("csv_injection", csv_injection_node)
+    graph.add_node("session_invalidation", session_invalidation_node)
+    graph.add_node("vulnerable_components", vulnerable_components_node)
 
     graph.set_entry_point("recon")
     graph.add_edge("recon", "header_config")
@@ -832,6 +961,10 @@ def build_graph(
     graph.add_edge("recon_planner", "stored_xss")
     graph.add_edge("recon_planner", "file_upload")
     graph.add_edge("recon_planner", "websocket")
+    graph.add_edge("recon_planner", "weak_password_policy")
+    graph.add_edge("recon_planner", "csv_injection")
+    graph.add_edge("recon_planner", "session_invalidation")
+    graph.add_edge("recon_planner", "vulnerable_components")
     graph.add_edge("header_config", END)
     graph.add_edge("host_header", END)
     graph.add_edge("cors", END)
@@ -854,5 +987,9 @@ def build_graph(
     graph.add_edge("stored_xss", END)
     graph.add_edge("file_upload", END)
     graph.add_edge("csrf", END)
+    graph.add_edge("weak_password_policy", END)
+    graph.add_edge("csv_injection", END)
+    graph.add_edge("session_invalidation", END)
+    graph.add_edge("vulnerable_components", END)
 
     return graph.compile()

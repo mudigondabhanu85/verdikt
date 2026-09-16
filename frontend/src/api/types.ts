@@ -56,6 +56,10 @@ export interface ScopeEntryOut {
   port: number | null
   path_pattern: string | null
   in_scope: boolean
+  // "target" (a real scan target) or "login_only" (auto-added only so a
+  // login POST could reach a third-party IdP — never sent fuzzing
+  // payloads even though it's technically in scope).
+  purpose: string
 }
 
 export interface TargetOut {

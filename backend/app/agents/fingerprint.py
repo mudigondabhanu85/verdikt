@@ -24,8 +24,26 @@ _COOKIE_LANGUAGE_HINTS = {
 }
 
 # (pattern, TechStackFingerprint attribute name, value to record)
+#
+# Angular (2+) gets two patterns, not one, for a real, live-relevant
+# reason: `ng-version=` is injected onto the root component by Angular's
+# own runtime *after* client-side bootstrap — a real production Angular
+# CLI app's server-delivered index.html, fetched the same plain,
+# non-JS-executing way ReconAgent fetches every page, looks like
+# `<app-root></app-root>` with no such attribute anywhere in it yet,
+# since nothing ever runs the JS that would add it. `ng-version=` still
+# fires correctly for a server-side-rendered/prerendered Angular
+# Universal app (the attribute genuinely is in the HTML the server
+# sends), so it stays — but `<app-root` plus Angular CLI's own
+# characteristic bundle filenames (`polyfills.js`/`runtime.js`, each
+# often content-hashed, e.g. `runtime.a1b2c3d4.js`) are what's actually
+# present in the raw, unexecuted shell of the far more common
+# client-side-rendered case, and were missing entirely before.
 _HTML_MARKERS: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"ng-version="), "frontend_frameworks", "Angular"),
+    (re.compile(r"<app-root\b"), "frontend_frameworks", "Angular"),
+    (re.compile(r"\bpolyfills(?:[.-][\w.]+)?\.js\b"), "frontend_frameworks", "Angular"),
+    (re.compile(r"\bruntime(?:[.-][\w.]+)?\.js\b"), "frontend_frameworks", "Angular"),
     (re.compile(r"__NEXT_DATA__|/_next/static/"), "frontend_frameworks", "Next.js (React)"),
     (re.compile(r"data-reactroot|react-dom"), "frontend_frameworks", "React"),
     (re.compile(r"__NUXT__"), "frontend_frameworks", "Nuxt (Vue)"),

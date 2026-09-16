@@ -86,10 +86,14 @@ async def resolve_provider_and_model(
     3. The deployment-wide AI_PROVIDER .env setting — the final
        fallback for an org that hasn't configured one of its own.
 
-    Every agent in the scan uses this one model — no per-task manual
-    model routing. An org that wants heavier reasoning for harder tasks
-    picks a capable model here; there's no separate tier configuration
-    to maintain.
+    This is still the one model an org configures — no per-task manual
+    model routing to set up or maintain. app.agents.graph and
+    app.api.routes.scans automatically substitute a same-family
+    sibling of this model (app.ai.model_tiers) for a small number of
+    specific tasks that are either much higher-volume/simpler or much
+    more complex/lower-volume than everything else, but that happens
+    entirely on the backend — this function itself always returns
+    exactly the model the org configured, unchanged.
     """
     if scan_run.ai_provider_config_id is not None:
         config = await session.get(AIProviderConfig, scan_run.ai_provider_config_id)

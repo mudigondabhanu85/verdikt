@@ -50,3 +50,15 @@ class Evidence(Base):
     # empty in Phase 1 (no client-side/browser-observable check types yet).
     screenshot_refs: Mapped[list] = mapped_column(JSON, default=list)
     additional_notes: Mapped[str | None] = mapped_column(Text)
+    # The exact substring that proves this finding — a forged Origin
+    # value, an executed XSS marker, an unescaped "={marker}" string,
+    # the weak password itself, etc. — not just the full raw request/
+    # response text it appears somewhere inside. Every report surface
+    # (HTML/PDF/DOCX) highlights this specific substring wherever
+    # request_raw/response_raw is shown, since a wall of raw HTTP text
+    # with nothing visually pointing at the one line that matters isn't
+    # persuasive to a non-technical reader. Nullable — not every check
+    # was retrofitted with this in the same pass that added the column,
+    # and a missing payload degrades gracefully to unhighlighted raw
+    # text rather than an error.
+    payload: Mapped[str | None] = mapped_column(Text)

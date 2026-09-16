@@ -389,6 +389,44 @@ async def test_credential_login_endpoint_auto_derives_a_scope_entry(client):
     scope = await client.get(f"/versions/{version_id}/scope-entries", headers=admin["headers"])
     entries = scope.json()
     assert any(e["host"] == "mycompany.okta.com" and e["in_scope"] is True for e in entries), entries
+    # §5 scope-leak fix: tagged login_only, not target — every fuzzing
+    # agent excludes it (app.agents.scope.filter_out_login_only) even
+    # though it's technically in scope for the login POST itself.
+    okta_entry = next(e for e in entries if e["host"] == "mycompany.okta.com")
+    assert okta_entry["purpose"] == "login_only", okta_entry
+
+
+async def test_adding_a_target_for_a_login_only_host_upgrades_it(client):
+    """If the analyst later adds a real Target for the exact host+port a
+    login-only entry was auto-derived for, that's stronger, more
+    deliberate authorization than the login-only tag ever was — it
+    should win, not stay silently excluded from fuzzing forever."""
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+
+    await client.post(
+        f"/versions/{version_id}/credentials",
+        json={
+            "label": "SSO User",
+            "username": "user@example.test",
+            "secret": "hunter2",
+            "login_endpoint": "https://idp.example.test/login",
+        },
+        headers=admin["headers"],
+    )
+
+    added = await client.post(
+        f"/versions/{version_id}/targets",
+        json={"host": "idp.example.test", "port": None, "base_url": "https://idp.example.test/"},
+        headers=admin["headers"],
+    )
+    assert added.status_code == 201, added.text
+
+    scope = await client.get(f"/versions/{version_id}/scope-entries", headers=admin["headers"])
+    entries = scope.json()
+    idp_entries = [e for e in entries if e["host"] == "idp.example.test"]
+    assert len(idp_entries) == 1, entries  # upgraded in place, not duplicated
+    assert idp_entries[0]["purpose"] == "target", idp_entries[0]
 
 
 async def test_updating_login_endpoint_auto_derives_a_scope_entry(client):

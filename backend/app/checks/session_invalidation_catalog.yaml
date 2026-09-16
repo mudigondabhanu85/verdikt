@@ -1,0 +1,37 @@
+# Failure to Invalidate Session on Logout — deterministic differential
+# check: does a session token/cookie that worked before logout still
+# work identically after logout? No LLM judgment call involved — this is
+# resolved entirely by comparing two real HTTP responses to the same
+# request.
+
+- id: session-not-invalidated-on-logout
+  title: "Failure to Invalidate Session on Logout"
+  owasp_2025_category: "A07 Identification and Authentication Failures"
+  cwe_id: "CWE-613"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:L/A:N"
+  cvss_score: 7.1
+  portswigger_reference_url: "https://portswigger.net/web-security/authentication/other-mechanisms"
+  plain_language_summary: >
+    After logging out, the session cookie/token that was used before
+    logout still works — the server never actually destroyed the
+    session server-side. Anyone who obtains a copy of that cookie/token
+    (a stolen device, a shared/public computer, a leaked log line, an
+    XSS payload run earlier in the same session) can keep using it
+    indefinitely, even after the legitimate user believes they have
+    logged out.
+  technical_description: >
+    Logging out via {url} did not invalidate the session: a request made
+    afterward using the exact same pre-logout session cookie/token still
+    returned an authenticated-looking response, indistinguishable from
+    before logout and clearly different from what an anonymous visitor
+    sees at the same URL. Confirmed across two independent
+    login-logout-reuse cycles, not a single observation.
+  remediation: >
+    Destroy the session server-side on logout (e.g. delete the session
+    record from the session store, or add the token to a revocation
+    list if using stateless JWTs) so that reusing a pre-logout
+    cookie/token is rejected immediately afterward, not merely cleared
+    from the client's own browser.
+  references:
+    - "https://cwe.mitre.org/data/definitions/613.html"

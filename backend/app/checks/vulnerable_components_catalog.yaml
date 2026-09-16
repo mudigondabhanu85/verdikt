@@ -1,0 +1,36 @@
+# Known Vulnerable Components (client-side) agent's check catalog.
+# Deterministic: a real headless browser reads the library's own
+# self-reported version string directly off `window`, and OSV.dev's
+# response is either an empty list (nothing known) or a real, dated CVE
+# entry — no LLM judgment call anywhere in this path.
+
+- id: vulnerable-client-side-component
+  title: "Known Vulnerable Client-Side JavaScript Library"
+  owasp_2025_category: "A06 Vulnerable and Outdated Components"
+  cwe_id: "CWE-1104"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
+  cvss_score: 6.1
+  portswigger_reference_url: "https://portswigger.net/web-security/using-burp-suite-to-test-for-outdated-javascript-libraries"
+  plain_language_summary: >
+    This page loads {library} version {version}, a version with at
+    least one publicly disclosed vulnerability. Depending on the
+    specific CVE, this can range from a cross-site-scripting sink to a
+    remote code execution primitive — an attacker doesn't need to find
+    a new bug, just target a library version this application already
+    ships with a known, documented weakness.
+  technical_description: >
+    A real headless browser loading {url} exposed `window.{library}`
+    reporting version {version}. Querying OSV.dev's public vulnerability
+    database for this exact package and version returned {vuln_count}
+    known advisor{plural}: {vuln_ids}.
+  remediation: >
+    Upgrade {library} to a version past the disclosed vulnerabilities
+    (check the linked OSV.dev advisories for the specific fixed
+    version), and add a dependency-scanning step (e.g. `npm audit`,
+    Dependabot, or Renovate) to CI so a newly-disclosed vulnerability in
+    a library already in use is caught automatically, not only during a
+    manual pentest.
+  references:
+    - "https://cwe.mitre.org/data/definitions/1104.html"
+    - "https://osv.dev/"

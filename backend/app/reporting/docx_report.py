@@ -7,6 +7,7 @@ import io
 import uuid
 
 from docx import Document
+from docx.enum.text import WD_COLOR_INDEX
 from docx.shared import Inches, Pt, RGBColor
 
 from app.models.attack_chain import AttackChain
@@ -24,13 +25,42 @@ SEVERITY_RGB = {
 }
 
 _MAX_EVIDENCE_CHARS = 3000
+_NO_VISUAL_POC_NOTE = (
+    "No visual proof-of-concept for this finding — it's based on HTTP headers/protocol "
+    "behavior with nothing meaningful to render as a screenshot; see the request/response "
+    "evidence above instead."
+)
 
 
-def _mono_paragraph(document: Document, text: str) -> None:
-    paragraph = document.add_paragraph()
-    run = paragraph.add_run((text or "")[:_MAX_EVIDENCE_CHARS])
+def _mono_run(paragraph, text: str, *, highlighted: bool = False):
+    run = paragraph.add_run(text)
     run.font.name = "Courier New"
     run.font.size = Pt(8)
+    if highlighted:
+        run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+    return run
+
+
+def _mono_paragraph(document: Document, text: str, *, payload: str | None = None) -> None:
+    """Same monospace evidence paragraph as before, split into multiple
+    runs around every occurrence of `payload` (the exact substring that
+    proves the finding — see Evidence.payload) so that substring alone
+    gets a highlight run, the DOCX-native equivalent of the HTML
+    report's <mark> tag. Falls back to one plain run, unchanged from
+    before this existed, when there's no payload or it isn't present in
+    this particular text.
+    """
+    text = (text or "")[:_MAX_EVIDENCE_CHARS]
+    paragraph = document.add_paragraph()
+    if not payload or payload not in text:
+        _mono_run(paragraph, text)
+        return
+    parts = text.split(payload)
+    for i, part in enumerate(parts):
+        if part:
+            _mono_run(paragraph, part)
+        if i < len(parts) - 1:
+            _mono_run(paragraph, payload, highlighted=True)
 
 
 def render_docx_report(
@@ -156,16 +186,26 @@ def render_docx_report(
 
             if instance.evidence:
                 _mono_paragraph(document, "Request:")
-                _mono_paragraph(document, instance.evidence.request_raw)
+                _mono_paragraph(document, instance.evidence.request_raw, payload=instance.evidence.payload)
                 _mono_paragraph(document, "Response:")
-                _mono_paragraph(document, instance.evidence.response_raw)
+                _mono_paragraph(document, instance.evidence.response_raw, payload=instance.evidence.payload)
 
-            for image_bytes in screenshots_by_finding_id.get(instance.id, []):
+            screenshots = screenshots_by_finding_id.get(instance.id, [])
+            any_screenshot_embedded = False
+            for image_bytes in screenshots:
                 try:
                     document.add_heading("Evidence — screenshot", level=4)
                     document.add_picture(io.BytesIO(image_bytes), width=Inches(5))
+                    any_screenshot_embedded = True
                 except Exception:  # noqa: BLE001 — a corrupt/unreadable image must not break report generation
                     document.add_paragraph("(screenshot could not be embedded)")
+
+            if not any_screenshot_embedded:
+                note = document.add_paragraph()
+                run = note.add_run(_NO_VISUAL_POC_NOTE)
+                run.italic = True
+                run.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
+                run.font.size = Pt(9)
 
         remaining = group.summary_only_instances
         if remaining:

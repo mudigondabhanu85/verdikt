@@ -38,5 +38,11 @@ class ScopeEntryOut(BaseModel):
     port: int | None
     path_pattern: str | None
     in_scope: bool
+    # "target" (a real, analyst-authorized scan target) or "login_only"
+    # (auto-added purely so a login POST could reach a third-party IdP —
+    # see app.api.routes.credentials._ensure_login_endpoint_in_scope).
+    # Surfaced so the Scope tab can show an analyst *why* a host they
+    # didn't type themselves is in scope, not just that it is.
+    purpose: str
 
     model_config = {"from_attributes": True}

@@ -85,6 +85,15 @@ class AuthenticatedSession:
     credential_set_id: UUID
     cookies: dict[str, str] = field(default_factory=dict)
     bearer_token: str | None = None
+    # Nothing in this codebase populates this today (SessionManager only
+    # ever produces cookies/a bearer token) — kept here, always empty
+    # until something does, so app.agents.browser_session's shared
+    # context-seeding helper has one real place to seed it *from* the
+    # moment a login path that captures localStorage-held auth state
+    # (a SPA storing its token there instead of a cookie/header) gets
+    # built, rather than that being a second thing every browser-proof
+    # call site would otherwise need to remember to add for itself.
+    local_storage: dict[str, str] = field(default_factory=dict)
 
 
 def probe_tls_version(host: str, port: int, *, timeout: float = 5.0) -> str | None:

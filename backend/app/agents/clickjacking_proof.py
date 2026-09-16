@@ -18,6 +18,42 @@ _WRAPPER_HTML_TEMPLATE = """<html><body>
 <iframe id="target-frame" src="{url}" style="width:900px;height:700px;border:3px solid red;"></iframe>
 </body></html>"""
 
+# Real, live-found false positive this pair guards against: a page that
+# X-Frame-Options/CSP doesn't block can still render essentially nothing
+# inside the iframe — most commonly because it requires auth and this
+# check never carries a session, so what actually loads is a blank or
+# near-empty login-redirect page. Absent this check, that produced an
+# identical "framable, screenshot attached" result to a genuinely
+# framable page full of real content — a false positive an analyst would
+# have to notice by eye on every single screenshot. Two independent
+# signals, checked with OR rather than AND: a real page might be mostly
+# non-text UI (a form-heavy admin screen with little running text, caught
+# by the element-count side) or mostly prose with little DOM nesting
+# (caught by the text-length side) — requiring both at once would
+# reintroduce false negatives for whichever kind of page doesn't happen
+# to satisfy the other signal.
+_MIN_FRAME_TEXT_LENGTH = 10
+_MIN_FRAME_ELEMENT_COUNT = 5
+
+
+async def _frame_has_real_content(page) -> bool:
+    frame_element = await page.query_selector("#target-frame")
+    if frame_element is None:
+        return False
+    frame = await frame_element.content_frame()
+    if frame is None:
+        # A cross-origin iframe whose navigation genuinely never
+        # committed (not the same thing as "blocked by frame-ancestors",
+        # which the requestfailed listener already caught separately) —
+        # nothing rendered, so there is nothing to confirm framable.
+        return False
+    try:
+        text_length = await frame.evaluate("document.body ? document.body.innerText.length : 0")
+        element_count = await frame.evaluate("document.querySelectorAll('*').length")
+    except PlaywrightError:
+        return False
+    return text_length >= _MIN_FRAME_TEXT_LENGTH or element_count >= _MIN_FRAME_ELEMENT_COUNT
+
 
 @dataclass
 class ClickjackingProofResult:
@@ -58,7 +94,7 @@ async def attempt_clickjacking_proof(url: str, *, headless: bool = True) -> Clic
             except PlaywrightError:
                 pass  # best-effort settle — the requestfailed listener already captured what matters
 
-            framable = not blocked
+            framable = not blocked and await _frame_has_real_content(page)
             screenshot = await page.screenshot(full_page=True) if framable else None
             await browser.close()
     except PlaywrightError:

@@ -1,0 +1,40 @@
+# CSV/Formula Injection agent's check catalog. Deterministic:
+# "does the exact submitted string, minus a known neutralizing prefix,
+# still start with '=' on re-fetch" is a plain substring/character check,
+# no LLM verdict adds anything on top of that.
+
+- id: csv-formula-injection
+  title: "CSV / Formula Injection (Excel/Sheets Macro Injection)"
+  owasp_2025_category: "A03 Injection"
+  cwe_id: "CWE-1236"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
+  cvss_score: 5.4
+  portswigger_reference_url: "https://owasp.org/www-community/attacks/CSV_Injection"
+  plain_language_summary: >
+    A value starting with "=" was stored through this form and later
+    reappeared completely unescaped elsewhere in the application. If
+    that stored value is ever exported to a spreadsheet file (CSV/XLSX)
+    and opened, Excel or Google Sheets will interpret it as a formula
+    rather than plain text — a real attacker payload here (not the
+    harmless marker this scan used) can run arbitrary commands on
+    whoever opens that export, or exfiltrate other cells' data via a
+    DDE/webhook-style formula.
+  technical_description: >
+    Submitting {url} with a field value beginning with "=" resulted in
+    that exact value — still beginning with an unescaped "=" — appearing
+    in {context}. Neither a neutralizing prefix (a leading single quote,
+    tab, or carriage return — the standard mitigation for this class of
+    issue) nor any other escaping was applied before storing or
+    re-rendering the value.
+  remediation: >
+    Before storing or exporting any user-supplied value that will ever
+    be opened in a spreadsheet application, prefix values starting with
+    =, +, -, @, tab, or carriage return with a single quote (') to force
+    spreadsheet software to treat them as literal text rather than a
+    formula. Apply this at export time even if input-time validation is
+    also in place, since export is the point where the risk is actually
+    realized.
+  references:
+    - "https://cwe.mitre.org/data/definitions/1236.html"
+    - "https://owasp.org/www-community/attacks/CSV_Injection"

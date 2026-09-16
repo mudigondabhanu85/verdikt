@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 from app.agents.evidence import format_request_raw, format_response_raw
 from app.agents.evidence_screenshot import capture_and_store_evidence_screenshot
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient, ScopeViolationError
-from app.agents.login import _live_field_values
+from app.agents.login import _live_field_values, pick_best_session
 from app.agents.recon import FormInfo
 from app.checks.loader import get_check
 from app.checks.render import render_check_template
@@ -124,7 +124,7 @@ class FileUploadAgent:
         # all, so every upload attempt was fully unauthenticated —
         # structurally unable to reach a login-gated upload form
         # regardless of how permissive its validation really was.
-        self._auth_session = next(iter((sessions or {}).values()), None)
+        self._auth_session = pick_best_session(sessions)
         findings: list[Finding] = []
         for form in forms:
             if form.method != "POST":

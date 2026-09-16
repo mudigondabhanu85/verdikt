@@ -45,6 +45,30 @@ def test_detects_react_and_django_markers_in_html():
     assert "Python (Django)" in fp.backend_languages
 
 
+def test_detects_angular_from_raw_production_shell_without_ng_version():
+    # The real, live-relevant shape: a production Angular CLI app's
+    # server-delivered index.html, fetched the same plain,
+    # non-JS-executing way ReconAgent fetches every page. `ng-version`
+    # is injected by Angular's own runtime after client-side bootstrap —
+    # it is never present in this raw shell, since nothing here ever
+    # runs that JS. Detection has to work off what's actually in the
+    # markup: the <app-root> tag itself and Angular CLI's own
+    # characteristic (often content-hashed) bundle filenames.
+    html = (
+        "<html><head><base href=\"/\"></head><body>"
+        '<app-root></app-root>'
+        '<script src="runtime.a1b2c3d4.js" type="module"></script>'
+        '<script src="polyfills.e5f6g7h8.js" type="module"></script>'
+        '<script src="main.i9j0k1l2.js" type="module"></script>'
+        "</body></html>"
+    )
+    responses = {"http://site.test/": _response("http://site.test/", text=html)}
+
+    fp = FingerprintAgent().run(responses)
+
+    assert "Angular" in fp.frontend_frameworks
+
+
 def test_detects_wordpress_from_asset_paths():
     html = '<html><head><link rel="stylesheet" href="/wp-content/themes/x/style.css"></head></html>'
     responses = {"http://site.test/": _response("http://site.test/", text=html)}

@@ -11,6 +11,7 @@ confirmed Finding the same way browser-confirmed reflected XSS does.
 import uuid
 
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
+from app.agents.login import pick_best_session
 from app.agents.xss import XSS_FINDING_METADATA
 from app.agents.xss_browser_proof import attempt_dom_xss_fragment_proof
 from app.models.finding import Evidence, Finding
@@ -53,7 +54,7 @@ class DomXssAgent:
         # without a session cookie, a real headless browser navigating to
         # a login-gated page just lands on the login form, so a DOM XSS
         # sink behind auth never gets a chance to run at all.
-        self._auth_session = next(iter((sessions or {}).values()), None)
+        self._auth_session = pick_best_session(sessions)
         findings: list[Finding] = []
         for url in endpoints[: self.MAX_ENDPOINTS]:
             finding = await self._check_endpoint(url)

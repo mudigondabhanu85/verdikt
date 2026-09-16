@@ -55,6 +55,15 @@ async def _ensure_login_endpoint_in_scope(
     configured by hand. port=None matches any port for that host (see
     app.agents.scope.is_in_scope) — simpler than computing the URL's
     actual default port here.
+
+    Tagged purpose="login_only", never "target" — this host is in scope
+    only because login needs to reach it, not because it's something the
+    analyst asked to have tested. Without that distinction, a real,
+    live-relevant scope leak: a third-party IdP (Okta/Auth0/etc.) added
+    this way is otherwise indistinguishable from a real Target-derived
+    scope entry, and every detection agent that fuzzes discovered
+    endpoints/forms/parameters would happily send it injection/XSS/SSTI
+    payloads the moment the crawl discovered anything there at all.
     """
     if not login_endpoint:
         return
@@ -65,7 +74,9 @@ async def _ensure_login_endpoint_in_scope(
         select(ScopeEntry).where(ScopeEntry.version_id == version_id, ScopeEntry.host == host)
     )
     if existing.scalar_one_or_none() is None:
-        session.add(ScopeEntry(version_id=version_id, host=host, port=None, in_scope=True))
+        session.add(
+            ScopeEntry(version_id=version_id, host=host, port=None, in_scope=True, purpose="login_only")
+        )
 
 
 @router.post("", response_model=CredentialSetOut, status_code=201)

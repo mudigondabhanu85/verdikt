@@ -42,8 +42,19 @@ async def add_target(
             ScopeEntry.port == target.port,
         )
     )
-    if existing_scope.scalar_one_or_none() is None:
+    scope_entry = existing_scope.scalar_one_or_none()
+    if scope_entry is None:
         session.add(ScopeEntry(version_id=version_id, host=target.host, port=target.port, in_scope=True))
+    elif scope_entry.purpose == "login_only":
+        # Explicitly adding a Target for this exact host+port is
+        # stronger, more deliberate authorization than the earlier
+        # login-only auto-derivation (app.api.routes.credentials) ever
+        # was — the analyst is now saying this host itself is something
+        # to actually test, not just something login needs to reach.
+        # That should always win: leaving this entry tagged login_only
+        # would keep it silently excluded from every fuzzing agent even
+        # though a real Target now explicitly points at it.
+        scope_entry.purpose = "target"
 
     await write_audit_log(
         session,
