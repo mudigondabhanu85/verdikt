@@ -1,30 +1,14 @@
 # Auth agent's deterministic check catalog (§3, A07 Authentication
 # Failures). No LLM needed — these are all binary, deterministic checks,
 # same "narrative in config, logic in code" split as the Phase 1 catalog.
-
-- id: session-not-invalidated-on-logout
-  title: "Session Not Invalidated on Logout"
-  owasp_2025_category: "A07 Authentication Failures"
-  cwe_id: "CWE-613"
-  severity: "High"
-  cvss_vector: "AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
-  cvss_score: 7.1
-  portswigger_reference_url: "https://portswigger.net/web-security/authentication"
-  plain_language_summary: >
-    Logging out of this application does not actually end the session — the
-    same session token still works afterward, so a stolen or leaked token
-    remains usable even after the legitimate user has logged out.
-  technical_description: >
-    After calling the logout endpoint ({logout_url}) with an authenticated
-    session, the same session credential was still accepted by a
-    previously-protected endpoint ({url}). The server is not invalidating
-    the session server-side on logout.
-  remediation: >
-    Invalidate the session token server-side (delete the server-side
-    session record, or add the token to a revocation list) when a user
-    logs out, not just on the client.
-  references:
-    - "https://cwe.mitre.org/data/definitions/613.html"
+#
+# session-not-invalidated-on-logout moved out of here to
+# session_invalidation_catalog.yaml — app.agents.session_invalidation's
+# SessionInvalidationAgent is the sole implementation now (it uses a
+# disposable session so it can't break other agents' shared session
+# mid-scan, and confirms via two independent login/logout cycles against
+# a real anonymous-visitor baseline, both stronger than this agent's old
+# single-shared-session check).
 
 - id: jwt-alg-none
   title: "JWT Issued With \"none\" Signing Algorithm"

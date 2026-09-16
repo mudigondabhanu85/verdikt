@@ -8,7 +8,7 @@ at the time of writing.
 ## Contents
 
 - **`Verdikt_Architecture_Document.md` / `.html` / `.docx`** — the same
-  document in three formats. Covers the system architecture, the 27-node
+  document in three formats. Covers the system architecture, the 31-node
   multi-agent scanning engine, the Confirmed-Only Findings pipeline, the
   pluggable AI provider layer, vulnerability coverage, VGS integration
   (three modes), enterprise hardening, deployment (Docker + manual +
@@ -23,7 +23,7 @@ at the time of writing.
   slide, a "by the numbers" slide, an honest spec-vs-reality slide, and a
   closing FAQ slide.
 - **`diagrams/*.mmd`** — the 6 architecture diagrams as Mermaid source:
-  system architecture, data model (ER diagram), the verified 27-node scan
+  system architecture, data model (ER diagram), the verified 31-node scan
   DAG, the Confirmed-Only Findings pipeline, AI provider resolution order,
   and deployment topology. Miro has a native Mermaid-import feature, so
   these can be dropped directly into a board and remain editable — there's

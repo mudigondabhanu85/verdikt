@@ -14,11 +14,8 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
     PublicFormat,
 )
-from sqlalchemy import select
-
-from app.agents.auth_agent import AuthAgent, decode_jwt_unverified, entropy_issue, find_logout_url
+from app.agents.auth_agent import AuthAgent, decode_jwt_unverified, entropy_issue
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
-from app.models.finding import Finding
 from app.models.project import ScopeEntry
 from tests.conftest import session_scope
 
@@ -49,22 +46,6 @@ def test_entropy_issue_flags_short_and_numeric_tokens():
     assert entropy_issue("short") == "shorter than 16 characters"
     assert entropy_issue("12345678901234567890") == "purely numeric"
     assert entropy_issue("a-reasonably-long-random-looking-token-abc123") is None
-
-
-def test_find_logout_url():
-    endpoints = ["http://x/", "http://x/account", "http://x/rest/user/logout"]
-    assert find_logout_url(endpoints) == "http://x/rest/user/logout"
-    assert find_logout_url(["http://x/", "http://x/about"]) is None
-
-
-def _handler_vulnerable_logout(request: httpx.Request) -> httpx.Response:
-    url = str(request.url)
-    if url == "http://site.test/logout":
-        return httpx.Response(200, text="logged out")
-    if url == "http://site.test/account":
-        # Always succeeds regardless of logout — the vulnerability.
-        return httpx.Response(200, text="account details")
-    return httpx.Response(404)
 
 
 def _make_safe_logout_handler():
@@ -106,31 +87,6 @@ async def _run_auth_agent(db_adapter, handler, sessions):
         findings = await agent.run(sessions, ["http://site.test/logout", "http://site.test/account"])
         await client.aclose()
         return findings
-
-
-async def test_logout_does_not_invalidate_session_is_flagged(db_adapter):
-    cred_id = uuid.uuid4()
-    sessions = {cred_id: AuthenticatedSession(credential_set_id=cred_id, cookies={"sid": "valid-session-token"})}
-
-    findings = await _run_auth_agent(db_adapter, _handler_vulnerable_logout, sessions)
-
-    check_ids = {f.check_id for f in findings}
-    assert "session-not-invalidated-on-logout" in check_ids
-    assert all(f.id is not None for f in findings)  # persisted (session.flush() assigned an id)
-
-    async with session_scope(db_adapter) as session:
-        result = await session.execute(select(Finding))
-        assert len(result.scalars().all()) == len(findings)
-
-
-async def test_logout_properly_invalidates_session_is_not_flagged(db_adapter):
-    cred_id = uuid.uuid4()
-    sessions = {cred_id: AuthenticatedSession(credential_set_id=cred_id, cookies={"sid": "valid-session-token"})}
-
-    findings = await _run_auth_agent(db_adapter, _make_safe_logout_handler(), sessions)
-
-    check_ids = {f.check_id for f in findings}
-    assert "session-not-invalidated-on-logout" not in check_ids
 
 
 async def test_jwt_alg_none_is_flagged(db_adapter):

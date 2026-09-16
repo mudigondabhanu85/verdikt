@@ -78,7 +78,7 @@ build fell short and where it went further.</em></p>
 <p>Verdikt is an AI-assisted, multi-agent DAST (Dynamic Application Security
 Testing) platform that performs manual-assessment-quality web and API
 penetration testing at automated speed. A single scan run executes a
-<strong>27-node LangGraph DAG</strong> covering the OWASP Top 10 (2025) and the full
+<strong>31-node LangGraph DAG</strong> covering the OWASP Top 10 (2025) and the full
 PortSwigger Web Security Academy topic list, followed by a cross-cutting
 attack-chain-composition step that runs outside the graph proper — each
 detection agent combining deterministic, re-executable HTTP-level probing
@@ -91,17 +91,20 @@ remediation path for every issue.</p>
 load-bearing</strong>. Every LLM-dependent agent talks to a pluggable <code>AIProviderAdapter</code>
 interface — Claude, OpenAI, Gemini, Grok, or any self-hosted/in-house model
 that speaks the OpenAI chat-completions protocol. Swapping providers is a
-configuration action in the UI, not a code change; there is deliberately no
-concept of routing different agents to different models — every agent in a
-scan resolves and uses one model, keeping provider configuration a single
-per-org or per-scan decision rather than a per-check tuning surface.</p>
-<p><strong>Current state, verified against the running codebase:</strong> 48 files under
-<code>app/agents/</code> (27 of them graph nodes, the rest shared infrastructure and
-support modules), 30 API route modules, ~34 persisted data models, 9
-external integrations, 14 YAML check catalogs (36 statically defined check
-IDs, plus a further dozen dynamically-generated ones), 34 Alembic
-migrations, 20 RBAC resources, and a backend test suite of <strong>111 files /
-617 collected tests</strong> — all figures confirmed by direct inspection and by
+configuration action in the UI, not a code change; an org still configures
+exactly <strong>one</strong> model — there is no per-check model picker anywhere in the
+UI. What the backend <em>does</em> do automatically, invisibly to that
+configuration, is substitute a same-family sibling of that one configured
+model for a small number of specific tasks whose volume or complexity
+profile differs sharply from the rest of the scan (§6.2) — this is
+zero-configuration model tiering, not per-agent routing an analyst sets up.</p>
+<p><strong>Current state, verified against the running codebase:</strong> 52 files under
+<code>app/agents/</code> (31 of them graph nodes, the rest shared infrastructure and
+support modules), 30 API route modules, ~34 persisted data models, 10
+external integrations, 18 YAML check catalogs (39 statically defined check
+IDs, plus a further dozen dynamically-generated ones), 36 Alembic
+migrations, 20 RBAC resources, and a backend test suite of <strong>119 files /
+667 collected tests</strong> — all figures confirmed by direct inspection and by
 running the test collector, not estimated. Full reference tables for every
 one of these are in the appendices (§13–§24).</p>
 <hr />
@@ -124,7 +127,7 @@ wall-clock time</strong>, for <strong>under $20 of LLM spend</strong>.</p>
 <p>Two architectural decisions follow directly from that goal, and are fully
 built and enforced in the running system today:</p>
 <ol>
-<li><strong>Multi-agent, not one big prompt.</strong> Twenty-seven narrow, purpose-built
+<li><strong>Multi-agent, not one big prompt.</strong> Thirty-one narrow, purpose-built
    detection agents each own one vulnerability class, run as parallel nodes
    in a LangGraph DAG, and use the cheapest technique that reliably confirms
    that class (a deterministic HTTP diff for SQL injection; a real
@@ -149,7 +152,7 @@ reports and the API (<code>scan_run.tech_stack_fingerprint</code>). What the ori
 design additionally called for — using that fingerprint to skip scheduling
 entire categories of irrelevant checks, described in the spec as "likely
 the single biggest token-savings lever available" — <strong>is not built as
-general graph-level routing</strong>. The 27-node LangGraph DAG has zero
+general graph-level routing</strong>. The 31-node LangGraph DAG has zero
 conditional edges; every node always runs regardless of the detected stack.
 The one narrow exception that <em>is</em> built: SSTI probing inside <code>injection.py</code>
 skips itself when no template-rendering signal was observed during recon.
@@ -165,7 +168,7 @@ implementation — see §18 for the complete list of such deltas.</p>
 
     subgraph Backend["Verdikt Backend — FastAPI (Python)"]
         API["REST API — 30 route modules<br/>JWT bearer auth, RBAC-enforced"]
-        ORCH["Multi-Agent Orchestrator<br/>(LangGraph, 27-node DAG)"]
+        ORCH["Multi-Agent Orchestrator<br/>(LangGraph, 31-node DAG)"]
         AIABS["AI Provider Abstraction<br/>Claude / OpenAI / Gemini / Grok / Custom"]
         RPT["Reporting Engine<br/>HTML / PDF (reportlab) / DOCX / CSV / JSON"]
         VAULT["Credential Vault<br/>(envelope encryption, pluggable KMS)"]
@@ -188,6 +191,7 @@ implementation — see §18 for the complete list of such deltas.</p>
         IDP["SSO: SAML / OIDC"]
         CMDB["CMDB<br/>(generic REST asset lookup)"]
         PSWIG["PortSwigger Web<br/>Security Academy"]
+        OSV["OSV.dev<br/>(open vulnerability DB)"]
     end
 
     FE <-->|"HTTPS / JWT"| API
@@ -208,10 +212,11 @@ implementation — see §18 for the complete list of such deltas.</p>
     API <-->|"authn"| IDP
     API -->|"asset lookup"| CMDB
     API -->|"scrape topic write-ups"| PSWIG
+    ORCH -->|"known-vulnerable-version lookup"| OSV
 </div>
 
 <p><strong>Backend:</strong> Python, FastAPI, SQLAlchemy 2.0 (async), Alembic migrations
-(34 files, one linear chain), PostgreSQL. Dialect-agnostic ORM layer, so
+(36 files, one linear chain), PostgreSQL. Dialect-agnostic ORM layer, so
 the test suite runs against ephemeral SQLite with zero external services
 (with one deliberately-accepted limitation: SQLite doesn't enforce
 <code>ON DELETE CASCADE</code>, so cascade behavior is verified live against the real
@@ -220,9 +225,9 @@ Postgres, not by the unit suite).</p>
 React Router, Tailwind CSS. A hand-written typed fetch client
 (<code>src/api/client.ts</code>, 23 namespaced sub-objects, 62 exported types in
 <code>src/api/types.ts</code>) mirrors the backend's Pydantic schemas.</p>
-<p><strong>Agent orchestration:</strong> LangGraph builds a 27-node directed graph per scan
+<p><strong>Agent orchestration:</strong> LangGraph builds a 31-node directed graph per scan
 run, with genuine parallel fan-out where checks don't depend on each other
-(12 nodes off <code>recon</code>, 10 more off <code>authenticated_recon</code>), and explicit
+(12 nodes off <code>recon</code>, 14 more off <code>authenticated_recon</code>), and explicit
 sequencing where they do (every authenticated check waits on <code>login</code>
 succeeding). <code>chain_analysis</code> is deliberately <em>not</em> a graph node — it runs
 as a separate step in <code>runner.py</code> after <code>graph.ainvoke()</code> completes, since
@@ -294,7 +299,7 @@ the full field-level reference for all ~34 models is in <strong>Appendix
 </ul>
 <hr />
 <h2 id="5-the-multi-agent-scanning-engine">5. The Multi-Agent Scanning Engine</h2>
-<h3 id="51-scan-lifecycle-the-real-verified-27-node-dag">5.1 Scan lifecycle — the real, verified 27-node DAG</h3>
+<h3 id="51-scan-lifecycle-the-real-verified-31-node-dag">5.1 Scan lifecycle — the real, verified 31-node DAG</h3>
 <div class="mermaid">flowchart LR
     A["POST /versions/{id}/scan-runs"] --> B["recon<br/>(unauthenticated crawl +<br/>inline tech-stack fingerprint)"]
     B --> U1["header_config"]
@@ -323,8 +328,12 @@ the full field-level reference for all ~34 models is in <strong>Appendix
     P --> A8["stored_xss"]
     P --> A9["file_upload"]
     P --> A10["websocket"]
+    P --> A11["weak_password_policy"]
+    P --> A12["csv_injection"]
+    P --> A13["session_invalidation"]
+    P --> A14["vulnerable_components"]
     U1 & U2 & U3 & U4 & U5 & U6 & U7 & U8 & U9 & U10 & U11 & U12 --> G
-    A1 & A2 & A3 & A4 & A5 & A6 & A7 & A8 & A9 & A10 --> G["chain_analysis<br/>(runs after the graph completes, over that<br/>run's Confirmed findings — composes<br/>multi-finding attack chains)"]
+    A1 & A2 & A3 & A4 & A5 & A6 & A7 & A8 & A9 & A10 & A11 & A12 & A13 & A14 --> G["chain_analysis<br/>(runs after the graph completes, over that<br/>run's Confirmed findings — composes<br/>multi-finding attack chains)"]
     G --> H["Report generation<br/>(HTML / PDF / DOCX / CSV / JSON /<br/>per-scan-run VGS-format DOCX)"]
     H --> I["Best-effort notify:<br/>Slack / Teams / VGS webhook/push"]
 </div>
@@ -340,9 +349,14 @@ nothing to test. <code>recon_planner</code> and <code>ai_business_logic_plan</co
 additions to the original 24-node graph, both following the same
 propose-then-verify discipline as everything else in §5.3 — an AI
 suggestion is worth nothing here until something deterministic confirms it.
-<code>chain_analysis</code> runs outside the graph proper (not a <code>graph.add_node</code> call,
-called directly by <code>runner.py</code> after <code>graph.ainvoke()</code> returns), so it's not
-counted in the 27.</p>
+The newest four nodes — <code>weak_password_policy</code>, <code>csv_injection</code>,
+<code>session_invalidation</code>, <code>vulnerable_components</code> — were ported from a
+sibling DAST project and mapped onto this same architecture (deterministic
+detector → LLM triage → deterministic re-execution → adversarial
+validation, no LLM-only confirmation for any of them); see §7 for what
+each one actually checks. <code>chain_analysis</code> runs outside the graph proper
+(not a <code>graph.add_node</code> call, called directly by <code>runner.py</code> after
+<code>graph.ainvoke()</code> returns), so it's not counted in the 31.</p>
 <h3 id="51a-ai-driven-crawl-coverage-recon_planners-propose-then-crawl-loop">5.1a AI-driven crawl coverage — <code>recon_planner</code>'s propose-then-crawl loop</h3>
 <p><code>recon_planner</code> (<code>app.agents.recon_planner.run_planner_rounds</code>) used to be
 a single LLM call: propose unlinked-but-plausible paths against the site
@@ -364,15 +378,15 @@ say) gets a real shot in round 2. Bounded by
 until nothing new turns up, since each round is a real LLM call against
 the scan's budget (<code>BudgetGuard</code>); a round that confirms nothing stops the
 loop immediately rather than spending the remaining rounds for free.</p>
-<h3 id="52-whats-in-appagents-beyond-the-27-graph-nodes">5.2 What's in <code>app/agents/</code> beyond the 27 graph nodes</h3>
-<p>The <code>agents/</code> directory holds <strong>48 files total</strong> (up from 41), reflecting
-both new detection surface (<code>recon_planner.py</code>, <code>business_logic_planner.py</code>
-— the two AI-hypothesis-generating nodes added since) and the standalone
-browser extension's backend counterpart. Most files map one-to-one onto a
-graph node; a few (<code>recon.py</code>, <code>login.py</code>) do double duty as both a node's
-own implementation and shared infrastructure another node reuses
-(<code>authenticated_recon</code> reuses the same <code>ReconAgent</code> as <code>recon</code>, for
-instance). The ~20 files below are the shared infrastructure worth knowing
+<h3 id="52-whats-in-appagents-beyond-the-31-graph-nodes">5.2 What's in <code>app/agents/</code> beyond the 31 graph nodes</h3>
+<p>The <code>agents/</code> directory holds <strong>52 files total</strong> (up from 48), reflecting
+the four newest detection nodes (<code>weak_password_policy.py</code>,
+<code>csv_injection.py</code>, <code>session_invalidation.py</code>, <code>vulnerable_components.py</code>)
+plus <code>browser_session.py</code>, a new shared helper (see below). Most files map
+one-to-one onto a graph node; a few (<code>recon.py</code>, <code>login.py</code>) do double duty
+as both a node's own implementation and shared infrastructure another node
+reuses (<code>authenticated_recon</code> reuses the same <code>ReconAgent</code> as <code>recon</code>, for
+instance). The ~21 files below are the shared infrastructure worth knowing
 about beyond the checks themselves:</p>
 <table>
 <thead>
@@ -384,7 +398,7 @@ about beyond the checks themselves:</p>
 <tbody>
 <tr>
 <td><code>graph.py</code></td>
-<td><code>build_graph()</code> — wires the 27-node LangGraph DAG itself; the only file that knows the full node/edge topology</td>
+<td><code>build_graph()</code> — wires the 31-node LangGraph DAG itself; the only file that knows the full node/edge topology</td>
 </tr>
 <tr>
 <td><code>http_client.py</code></td>
@@ -417,6 +431,10 @@ about beyond the checks themselves:</p>
 <tr>
 <td><code>clickjacking_proof.py</code> / <code>xss_browser_proof.py</code></td>
 <td>Real headless-browser proof mechanisms</td>
+</tr>
+<tr>
+<td><code>browser_session.py</code></td>
+<td><code>seed_authenticated_context()</code> — the one shared helper for seeding a Playwright browser context with an <code>AuthenticatedSession</code>'s cookies/headers, replacing three independently-evolved copies of the same logic (§5.5)</td>
 </tr>
 <tr>
 <td><code>checks.py</code></td>
@@ -495,6 +513,52 @@ filtered. The fix — trying a <code>&lt;script&gt;</code> tag first, then an
 <code>&lt;img src=x onerror=...&gt;</code> fallback with no "script" substring at all — was
 verified live against a real DVWA instance across all four of its security
 levels before being considered done.</p>
+<h3 id="55-more-hard-won-fixes-false-positives-flakiness-and-a-shared-session-hazard">5.5 More hard-won fixes: false positives, flakiness, and a shared-session hazard</h3>
+<p>Four more real bugs, found and fixed in the same DAST-porting pass that
+added the four newest checks (§5.1):</p>
+<ul>
+<li><strong>Clickjacking false positive.</strong> The check used to report "framable"
+  the moment <code>X-Frame-Options</code>/CSP didn't explicitly block framing,
+  without ever checking whether the target's real content actually
+  rendered inside the iframe. <code>clickjacking_proof.py</code> now requires a real
+  headless-browser render to confirm before flagging.</li>
+<li><strong>Session-selection flakiness.</strong> Nine separate call sites used to grab
+  <code>next(iter(sessions.values()))</code> — an arbitrary session, with no
+  preference for one carrying real auth material over an empty/broken one
+  left behind by a flaky macro replay. All nine now go through
+  <code>pick_best_session()</code> (<code>app.agents.login</code>), which prefers a session that
+  actually authenticated.</li>
+<li><strong>SPA shell-detection gap.</strong> <code>fingerprint.py</code>'s Angular marker relied on
+  <code>ng-version</code>, an attribute Angular's own runtime injects only <em>after</em>
+  client-side bootstrap — essentially never present in a real app's raw,
+  non-JS-executed HTML, which is all a plain HTTP fetch ever sees. Added
+  <code>&lt;app-root&gt;</code>/<code>polyfills.js</code>/<code>runtime.js</code> markers, which are actually
+  present in the raw shell.</li>
+<li><strong>Third-party IdP scope leak.</strong> A login endpoint's auto-derived scope
+  entry (very often an Okta/Auth0 host) used to be indistinguishable from
+  a real, analyst-declared <code>Target</code>. <code>ScopeEntry.purpose</code> (<code>"target"</code> vs.
+  <code>"login_only"</code>, migration <code>0034_scope_entry_purpose</code>) now tags which is
+  which, and every discovered-endpoint/form/parameter list <code>graph.py</code>
+  produces filters <code>login_only</code> entries out before handing them to any
+  fuzzing agent — a third-party identity provider can no longer end up on
+  the receiving end of injection/XSS/SSTI payloads just because the crawl
+  happened to touch it during login.</li>
+</ul>
+<p>And one consolidation: three independently-evolved copies of "seed a
+Playwright browser context with an <code>AuthenticatedSession</code>" existed across
+the codebase (two in <code>xss_browser_proof.py</code>, one in <code>stored_xss.py</code>), all
+sharing a real bug — cookies were registered via Playwright's
+<code>add_cookies([{..., url: ...}])</code>, which derives the cookie's effective
+domain <em>and path</em> from whatever URL that call site happened to have handy,
+rather than the host-wide scope a real session cookie with no <code>Path</code>
+attribute actually has. A browser-based check navigating to a different
+path than the one the cookie happened to be seeded against could silently
+stop sending it — indistinguishable from "not logged in," no error
+anywhere. <code>browser_session.py</code>'s <code>seed_authenticated_context()</code> is now the
+single shared implementation (explicit <code>domain</code> + <code>path="/"</code>, plus
+<code>localStorage</code> seeding via an init script, which none of the three copies
+did), covered by a regression test that verifies against real Playwright
+behavior.</p>
 <hr />
 <h2 id="6-ai-provider-abstraction-any-llm-configured-once">6. AI Provider Abstraction — Any LLM, Configured Once</h2>
 <p>Every LLM-dependent agent goes through one interface
@@ -542,23 +606,84 @@ original spec's $20 target figure — the spec's number was a top-line
 product goal for total scan cost, while <code>MAX_LLM_COST_USD_PER_SCAN</code> is
 the hard technical safety rail underneath it, and it is deliberately
 tighter than the goal to leave headroom.</p>
+<h3 id="62-automatic-per-task-model-tiering">6.2 Automatic per-task model tiering</h3>
+<p><code>app/ai/model_tiers.py</code>'s <code>resolve_tiered_model(configured_model, tier)</code> is
+a pure, zero-configuration function <code>graph.py</code> and two other call sites use
+to substitute a same-family sibling of the org's one configured model for
+a small number of specific tasks — never a config surface an analyst has
+to set up, never a new database column, never a new UI control:</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Used by</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fast</code></td>
+<td><code>deserialization</code>, <code>request_smuggling</code></td>
+<td>High-volume, simple triage calls — a cheaper model matters most here</td>
+</tr>
+<tr>
+<td><code>default</code> (unchanged)</td>
+<td>Every other LLM-dependent node</td>
+<td>The org's exact configured model, untouched</td>
+</tr>
+<tr>
+<td><code>reasoning</code></td>
+<td><code>ai_business_logic_plan</code>, <code>business_logic</code>, <code>chain_analysis</code>, the executive summary</td>
+<td>Low-volume but complex (multi-step business-logic hypotheses, attack-chain composition) or writing-quality-sensitive (the customer-facing executive summary) — a stronger model is affordable at this call volume</td>
+</tr>
+</tbody>
+</table>
+<p>Three model families are recognized (<code>app/ai/model_tiers.py</code>'s
+<code>_MODEL_FAMILIES</code>), each verified against that provider's own current API
+docs at the time this was written (September 2026): Claude
+(<code>claude-haiku-4-5-20251001</code> / <code>claude-sonnet-5</code> / <code>claude-opus-5</code>), OpenAI
+(<code>gpt-5-mini</code> / <code>gpt-5</code> / <code>gpt-5-pro</code>), and xAI Grok (<code>grok-4-fast</code> /
+<code>grok-4</code> / <code>grok-4</code>, no separate reasoning tier above default as of this
+writing). <strong>Gemini is deliberately excluded</strong> — Google is retiring the
+entire Gemini 2.5 line in October 2026 and the exact current stable 3.x
+model id wasn't reliably confirmable at writing time, so rather than ship
+a guessed identifier that could silently 404 an org's scans later, a
+Gemini-configured org (or any org on a model this table doesn't recognize
+at all — a custom/self-hosted gateway included) gets exactly today's
+single-model behavior for every tier, automatically and silently, never an
+error.</p>
+<p>This is the <strong>second</strong> attempt at task-aware model selection in this
+codebase's history, and the first one that stuck — see §18, item 17 for
+why the first attempt (<code>app.ai.model_routing</code>, migrations
+<code>0029_ai_provider_config_model_tiers</code> / <code>0032_drop_ai_provider_model_tiers</code>)
+was built and then deliberately reverted, and what's structurally
+different this time.</p>
 <hr />
 <h2 id="7-vulnerability-coverage">7. Vulnerability Coverage</h2>
 <p>Coverage maps to the OWASP Top 10 (2025) and the PortSwigger Web Security
 Academy topic list. The full, exact list of every check ID, its severity,
-and its CWE is in <strong>Appendix §17</strong> (34 YAML-defined checks across 14
+and its CWE is in <strong>Appendix §17</strong> (39 YAML-defined checks across 18
 catalog files, plus a further ~13 dynamically-generated check IDs emitted
 directly by agent code for parameterized findings like <code>sqli-error</code> /
 <code>access-control-{comparison_type}</code>). By category:</p>
 <ul>
 <li><strong>Injection</strong> — SQL injection (error- and boolean-based), OS command
   injection, server-side template injection, NoSQL injection, path
-  traversal</li>
+  traversal, CSV/formula injection (a leading <code>=</code>/<code>+</code>/<code>-</code>/<code>@</code> value that
+  survives into an export without the standard leading-quote/tab/CR
+  mitigation — a real finding, not a guess: the agent best-effort probes
+  for an actual export endpoint and is honest in the write-up when it
+  can't find one)</li>
 <li><strong>Broken access control</strong> — IDOR, vertical/horizontal privilege
   escalation</li>
 <li><strong>Session &amp; auth failures</strong> — JWT alg-none/alg-confusion/weak-secret,
   missing expiration, weak session token entropy, session not invalidated
-  on logout</li>
+  on logout (confirmed via a dedicated disposable login and two
+  independent logout/reuse cycles, never the shared scan session — §5.5),
+  weak password policy acceptance (a real change-password form is
+  confirmed to accept a one-character password via an actual re-login,
+  with the original password always restored afterward — even on
+  failure, logged as <code>CRITICAL</code>)</li>
 <li><strong>Cross-site scripting</strong> — reflected/DOM/stored, with real
   headless-browser execution proof</li>
 <li><strong>Security misconfiguration</strong> — 15 separate header/cookie/TLS/disclosure
@@ -569,14 +694,18 @@ directly by agent code for parameterized findings like <code>sqli-error</code> /
 <li><strong>OAuth</strong> — <code>redirect_uri</code> allow-list bypass detection</li>
 <li><strong>Software &amp; data integrity</strong> — passive insecure-deserialization
   signature detection, client-side prototype pollution (verified in a real
-  browser)</li>
+  browser), known-vulnerable client-side components (a real headless
+  browser reads each of 9 well-known JS libraries' own self-reported
+  version off <code>window</code>, checked against the OSV.dev vulnerability
+  database — deterministic end to end, no fingerprint-guessing)</li>
 <li><strong>XXE, GraphQL introspection, cache poisoning/deception</strong></li>
 <li><strong>File upload</strong> — dangerous-extension acceptance, plus an
   image-polyglot bypass technique for endpoints that do enforce a
   getimagesize()-style content check</li>
 <li><strong>CSRF, CORS misconfiguration, clickjacking</strong> — clickjacking is
-  confirmed by a real headless-browser framing attempt, not just a
-  missing-header inference</li>
+  confirmed by a real headless-browser framing attempt that verifies real
+  content actually rendered inside the iframe, not just a
+  missing-header inference (§5.5)</li>
 <li><strong>HTTP request smuggling</strong> — timing-based detection only, by design</li>
 <li><strong>WebSocket security</strong> — cross-site WebSocket hijacking via
   Origin-validation bypass</li>
@@ -627,6 +756,20 @@ directly by agent code for parameterized findings like <code>sqli-error</code> /
   color on every generated report.</li>
 <li><strong>VGS-shaped DOCX</strong> (<code>vgs_docx_report.py</code>) — matches the original
   standalone VGS tool's report format (pie chart, version-history table).</li>
+<li><strong>Evidence payload highlighting</strong> (<code>Evidence.payload</code>, migration
+  <code>0035_evidence_payload</code>) — the exact substring that proves a finding (a
+  forged Origin value, an executed XSS marker, the weak password itself,
+  the pre-logout cookie a post-logout request still succeeded with, ...),
+  visually highlighted wherever <code>request_raw</code>/<code>response_raw</code> is shown:
+  <code>&lt;mark&gt;</code> in HTML, a highlighted run in DOCX, a background-color span in
+  PDF. Nullable and degrades gracefully — a finding without a captured
+  payload just shows unhighlighted raw text, never an error. Wired into
+  all four of the newest checks plus CSRF, proven first as a retrofit.</li>
+<li><strong>"No visual proof-of-concept" note</strong> — every report format now says so
+  explicitly whenever a finding's <code>screenshot_refs</code> end up empty, instead
+  of silently omitting the whole screenshot section (which used to read
+  as "this section was forgotten," not "this check type has no visual
+  proof to show").</li>
 </ul>
 <hr />
 <h2 id="10-vgs-integration-three-complementary-modes-all-built">10. VGS Integration — Three Complementary Modes, All Built</h2>
@@ -680,8 +823,8 @@ report-builder port and the per-scan-run export were built in addition.</p>
 <hr />
 <h2 id="11-enterprise-hardening">11. Enterprise Hardening</h2>
 <ul>
-<li><strong>RBAC</strong> — a real DB-backed <code>role_permissions</code> table across <strong>19
-  resources × 4 actions</strong> (76 grantable permission cells), not hardcoded
+<li><strong>RBAC</strong> — a real DB-backed <code>role_permissions</code> table across <strong>20
+  resources × 4 actions</strong> (80 grantable permission cells), not hardcoded
   role checks. Full matrix in <strong>Appendix §21</strong>.</li>
 <li><strong>SSO</strong> — SAML and OIDC, per-org, each with configurable default role
   assignment for federated sign-ins. (Note: these live under <code>app/auth/</code>,
@@ -834,7 +977,7 @@ mode → Load unpacked, record, export, upload.</p>
 <hr />
 <h2 id="14-testing-quality-discipline">14. Testing &amp; Quality Discipline</h2>
 <ul>
-<li><strong>111 test files, 617 collected tests</strong> — confirmed by running
+<li><strong>119 test files, 667 collected tests</strong> — confirmed by running
   <code>pytest --collect-only</code>, not estimated.</li>
 <li>Real fixtures over mocks wherever practically possible: real local HTTP
   servers standing in for a target application, a real headless browser
@@ -911,7 +1054,7 @@ mode → Load unpacked, record, export, upload.</p>
 <tr>
 <td><code>Evidence</code></td>
 <td><code>evidence</code></td>
-<td><code>finding_id</code>→findings <strong>CASCADE</strong>, <code>request_raw</code>, <code>response_raw</code>, <code>screenshot_refs</code></td>
+<td><code>finding_id</code>→findings <strong>CASCADE</strong>, <code>request_raw</code>, <code>response_raw</code>, <code>screenshot_refs</code>, <code>payload</code> (nullable — the exact substring proving the finding, highlighted in reports, §9)</td>
 </tr>
 <tr>
 <td><code>LoginMacro</code></td>
@@ -956,7 +1099,7 @@ mode → Load unpacked, record, export, upload.</p>
 <tr>
 <td><code>ScopeEntry</code></td>
 <td><code>scope_entries</code></td>
-<td><code>version_id</code>, <code>host</code>, <code>port</code>, <code>path_pattern</code>, <code>in_scope</code></td>
+<td><code>version_id</code>, <code>host</code>, <code>port</code>, <code>path_pattern</code>, <code>in_scope</code>, <code>purpose</code> (<code>"target"</code> default or <code>"login_only"</code> — §5.5)</td>
 </tr>
 <tr>
 <td><code>RolePermission</code></td>
@@ -1165,7 +1308,7 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 </tbody>
 </table>
 <hr />
-<h2 id="17-appendix-full-check-catalog-36-static-ids-dynamic-ids">17. Appendix — Full Check Catalog (36 static IDs + dynamic IDs)</h2>
+<h2 id="17-appendix-full-check-catalog-39-static-ids-dynamic-ids">17. Appendix — Full Check Catalog (39 static IDs + dynamic IDs)</h2>
 <table>
 <thead>
 <tr>
@@ -1180,7 +1323,7 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 </tr>
 <tr>
 <td><code>auth_catalog.yaml</code></td>
-<td><code>session-not-invalidated-on-logout</code> (High/613), <code>jwt-alg-none</code> (Critical/347), <code>jwt-missing-expiration</code> (Medium/613), <code>jwt-alg-confusion</code> (Critical/347), <code>jwt-weak-signing-secret</code> (Critical/330), <code>weak-session-token-entropy</code> (Medium/330)</td>
+<td><code>jwt-alg-none</code> (Critical/347), <code>jwt-missing-expiration</code> (Medium/613), <code>jwt-alg-confusion</code> (Critical/347), <code>jwt-weak-signing-secret</code> (Critical/330), <code>weak-session-token-entropy</code> (Medium/330)</td>
 </tr>
 <tr>
 <td><code>cache_poisoning_catalog.yaml</code></td>
@@ -1197,6 +1340,10 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 <tr>
 <td><code>csrf_catalog.yaml</code></td>
 <td><code>csrf-missing-protection</code> (High/352)</td>
+</tr>
+<tr>
+<td><code>csv_injection_catalog.yaml</code></td>
+<td><code>csv-formula-injection</code> (Medium/1236)</td>
 </tr>
 <tr>
 <td><code>file_upload_catalog.yaml</code></td>
@@ -1219,8 +1366,20 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 <td><code>potential-http-request-smuggling</code> (High/444)</td>
 </tr>
 <tr>
+<td><code>session_invalidation_catalog.yaml</code></td>
+<td><code>session-not-invalidated-on-logout</code> (High/613) — moved out of <code>auth_catalog.yaml</code>; <code>SessionInvalidationAgent</code> (§5.5) is the sole implementation now</td>
+</tr>
+<tr>
 <td><code>ssrf_catalog.yaml</code></td>
 <td><code>ssrf-confirmed</code> (Critical/918)</td>
+</tr>
+<tr>
+<td><code>vulnerable_components_catalog.yaml</code></td>
+<td><code>vulnerable-client-side-component</code> (High/1104)</td>
+</tr>
+<tr>
+<td><code>weak_password_policy_catalog.yaml</code></td>
+<td><code>weak-password-policy-accepted</code> (Medium/521)</td>
 </tr>
 <tr>
 <td><code>websocket_catalog.yaml</code></td>
@@ -1259,15 +1418,6 @@ decisions diverged from the original design, in both directions.</p>
 <li><strong>Smart Scan cost-optimization routing — only one narrow case built.</strong>
    See §2.1: the fingerprint is computed and shown, but doesn't gate
    scheduling anywhere except one SSTI check.</li>
-<li><strong>Per-task-type model routing — not built (twice).</strong> The spec called for
-   cheap models on recon/header checks and frontier models reserved for
-   business-logic reasoning. This was actually built once — a <code>ModelRouter</code>
-   with per-agent-role tiers and a UI to configure them (migration
-   <code>0029_ai_provider_config_model_tiers</code>) — and then deliberately removed
-   again (migration <code>0032_drop_ai_provider_model_tiers</code>) once it added real
-   configuration-surface complexity without a correspondingly clear
-   benefit. Every agent in a scan run uses the single model resolved once
-   via <code>resolve_provider_and_model()</code>, same as before that experiment.</li>
 <li><strong>Depth slider (Quick/Standard/Deep/Deep-Paranoid) — not built.</strong> No
    such setting, enum, or UI control exists anywhere in the codebase.</li>
 <li><strong>Cross-credential-set result caching — not built.</strong> The spec called for
@@ -1281,7 +1431,7 @@ decisions diverged from the original design, in both directions.</p>
    exist anywhere in the codebase.</li>
 </ol>
 <p><strong>Built beyond what was originally specified:</strong></p>
-<ol start="8">
+<ol start="7">
 <li><strong>VGS integration — both spec-recommended paths, plus a full native
    workspace, plus a third export mode.</strong> The spec recommended starting
    with webhook push alone; the native report-builder port (its own
@@ -1290,7 +1440,7 @@ decisions diverged from the original design, in both directions.</p>
 <li><strong>The image-polyglot file-upload bypass technique</strong> — not mentioned in
    the spec at all.</li>
 <li><strong>The PortSwigger Web Security Academy scraper</strong> ("Load from
-    PortSwigger") — not in the spec.</li>
+   PortSwigger") — not in the spec.</li>
 <li><strong>UI-only, per-org default AI provider configuration</strong>
     (<code>AIProviderConfig.is_default</code> + the Account-page "Set as default"
     control) — the spec described the adapter interface but not a
@@ -1307,6 +1457,10 @@ decisions diverged from the original design, in both directions.</p>
     Docker) setup, a genuinely separate standalone browser extension
     (<code>browser-extension/</code>) producing the identical macro JSON shape,
     downloadable in one click from the same UI.</li>
+<li><strong>Four scanner checks ported from a sibling DAST project, beyond the
+    spec's own check list</strong> — Weak Password Policy, CSV/Formula Injection,
+    Known Vulnerable Components, and a hardened rebuild of Failure to
+    Invalidate Session on Logout (§5.1, §7).</li>
 </ol>
 <p><strong>Matches the spec closely:</strong></p>
 <ol start="14">
@@ -1320,6 +1474,26 @@ decisions diverged from the original design, in both directions.</p>
     vendor-agnostic REST client rather than the spec's sketched abstract
     per-vendor interface — a deliberate substitution, since there's no one
     real CMDB API to build and test against honestly.</li>
+<li><strong>Per-task-type model routing — built on the second attempt.</strong> The spec
+    called for cheap models on recon/header checks and frontier models
+    reserved for business-logic reasoning (<code>docs/BUILD_SPEC.md</code>'s own
+    words: "cheap/fast models handle recon, header/config checks, and
+    pattern-matching... reserve frontier-tier models for business-logic
+    reasoning, multi-step exploit chains, and final report narrative").
+    The first attempt — <code>app.ai.model_routing</code>, a <code>ModelRouter</code> with
+    per-agent-role tiers and an Account-page UI to configure them
+    (migration <code>0029_ai_provider_config_model_tiers</code>) — was deliberately
+    removed again (migration <code>0032_drop_ai_provider_model_tiers</code>) once it
+    added real configuration-surface complexity (extra model names an
+    analyst had to correctly fill in per provider config) without a
+    correspondingly clear benefit. <code>app.ai.model_tiers</code> (§6.2) is the
+    second attempt, structurally different in the one way that mattered:
+    zero new database columns, zero new UI, nothing for an analyst to
+    configure or get wrong. An org still configures exactly one model;
+    the backend silently substitutes a same-family sibling for the small
+    set of tasks the spec called out as disproportionately cheap or
+    expensive, and falls back to that one configured model, unchanged,
+    for anything it doesn't recognize.</li>
 </ol>
 <hr />
 <h2 id="19-appendix-ai-provider-configuration-reference">19. Appendix — AI Provider &amp; Configuration Reference</h2>
@@ -1396,8 +1570,14 @@ decisions diverged from the original design, in both directions.</p>
 </table>
 <p>Note: Gemini and Grok have <strong>no</strong> <code>.env</code> settings — reachable only via a
 per-org <code>AIProviderConfig</code> in the UI.</p>
+<p>Note: model tiering (§6.2) has <strong>no setting or column of its own anywhere
+in this table or the database</strong> — it's a pure function
+(<code>resolve_tiered_model()</code>) applied on top of whichever model resolution
+above already produced, for a fixed set of call sites in <code>graph.py</code> /
+<code>runner.py</code> / <code>scans.py</code>. There is nothing here for an operator or analyst
+to configure.</p>
 <hr />
-<h2 id="20-appendix-migration-history-34-files-one-linear-chain">20. Appendix — Migration History (34 files, one linear chain)</h2>
+<h2 id="20-appendix-migration-history-36-files-one-linear-chain">20. Appendix — Migration History (36 files, one linear chain)</h2>
 <p><code>0001_initial_schema</code> → <code>0001b_widen_alembic_version_column</code> (widens
 <code>alembic_version.version_num</code> for this project's long revision slugs) →
 <code>0002_scan_findings_and_permissions</code> → <code>0003_phase2_review_candidates_and_login_config</code>
@@ -1417,20 +1597,26 @@ per-org <code>AIProviderConfig</code> in the UI.</p>
 <code>0028_credential_privilege_rank</code> → <code>0029_ai_provider_config_model_tiers</code> →
 <code>0030_ai_provider_config_secret_rotated_at</code> →
 <code>0031_drop_spark_specific_columns</code> → <code>0032_drop_ai_provider_model_tiers</code> →
-<code>0033_vgs_auto_seed_finding_memory</code>.</p>
+<code>0033_vgs_auto_seed_finding_memory</code> → <code>0034_scope_entry_purpose</code> →
+<code>0035_evidence_payload</code>.</p>
 <p>Two of these pairs are worth reading together, not in isolation: <code>0024</code>
 added columns for a since-removed, org-specific internal LLM gateway
 integration (never a general-purpose feature, and out of scope once that
 org's need went away); <code>0031</code> drops them. <code>0029</code> added per-agent-role model
 tiering (<code>model_reasoning</code>/<code>model_classification</code> columns, letting an org
 route different agents to different models); <code>0032</code> drops it, in favor of
-the single-model-per-scan design described in §1/§6 — real functionality
+the single-configured-model design described in §1/§6 — real functionality
 that shipped, was used, and was deliberately simplified back out once it
-proved to be complexity without enough benefit, not a mistake papered over.
-<code>0033</code> is the newest: a persistent <code>auto_seeded_finding_ids</code> column on
-<code>VgsReportDraft</code> (§10) that tracks every <code>Finding.id</code> an auto-seed pass has
-ever offered a report draft, independent of whether the resulting
-vulnerability still exists in the draft.</p>
+proved to be complexity without enough benefit, not a mistake papered over
+(§6.2/§18 item 17 covers the second, schema-free attempt that replaced it).
+<code>0033</code> tracks a persistent <code>auto_seeded_finding_ids</code> column on
+<code>VgsReportDraft</code> (§10) that records every <code>Finding.id</code> an auto-seed pass
+has ever offered a report draft, independent of whether the resulting
+vulnerability still exists in the draft. <code>0034</code> and <code>0035</code> are the newest:
+<code>scope_entries.purpose</code> (<code>"target"</code> vs. <code>"login_only"</code>, §5.5's IdP
+scope-leak fix) and <code>evidence.payload</code> (§9's highlighted-substring
+evidence), both additive and nullable/defaulted, so neither required a
+backfill.</p>
 <hr />
 <h2 id="21-appendix-rbac-matrix">21. Appendix — RBAC Matrix</h2>
 <p><strong>20 resources</strong>: <code>organization</code>, <code>project</code>, <code>version</code>, <code>target</code>,
@@ -1506,10 +1692,10 @@ vulnerability still exists in the draft.</p>
   called for — using the tech-stack fingerprint to actually skip
   irrelevant node scheduling, not just display it.</li>
 <li>A depth/intensity profile (Quick/Standard/Deep) as a scan-trigger option.</li>
-<li>Per-task-type model routing was actually tried once (§18, item 4) and
-  deliberately reverted — a future attempt should have a clearer answer
-  for what specific cost/quality win justifies the added configuration
-  surface before rebuilding it a second time.</li>
+<li>Extending <code>app.ai.model_tiers</code>'s family table to Gemini once Google's
+  3.x naming settles past the October 2026 retirement of the 2.5 line
+  (§6.2, §18 item 17) — deliberately deferred rather than shipping a
+  guessed model id.</li>
 <li>A more sophisticated file-upload bypass technique (JPEG polyglot, or
   chaining an accepted upload with a discovered local-file-inclusion
   vector for standalone RCE proof).</li>
@@ -1529,8 +1715,12 @@ once fully authenticated once <code>login</code> succeeds — because a pre-logi
 crawl was found live to discover exactly one form, the login page's own.
 Every request is scope-checked by <code>ScopedHttpClient</code>; redirects are queued
 as their own frontier entries rather than auto-followed; a Logout link is
-deliberately never clicked (it would kill the one shared session every
-other concurrent agent depends on). <code>recon_planner</code> (§5.1a) then runs up
+deliberately never clicked during this crawl (it would kill the one shared
+session every other concurrent agent depends on) — it's instead captured
+separately as a <code>discovered_logout_urls</code> entry, specifically so
+<code>session_invalidation</code> (§5.1, §7) has a real logout URL to test against,
+via its own dedicated, disposable login rather than the shared session.
+<code>recon_planner</code> (§5.1a) then runs up
 to two propose-then-crawl rounds over the resulting site map: each round's
 AI pass suggests additional plausible-but-unlinked paths, every suggestion
 is verified with a real request before it counts for anything, and
@@ -1573,7 +1763,7 @@ what — or whether — anything was imported. This is what makes a
 client-rendered SPA's real API surface testable at all.</p>
 <p><strong>What's the architecture, and what's AI's role given deterministic
 scanning is already in place?</strong> One scan compiles and executes the
-27-node DAG in §5.1 — real parallel fan-out, not a sequential loop — with
+31-node DAG in §5.1 — real parallel fan-out, not a sequential loop — with
 <code>chain_analysis</code> reviewing the complete set of that run's Confirmed
 findings once everything else is done. The division of labor: a
 deterministic signal is evidence, not a verdict — it establishes <em>that</em>

@@ -26,7 +26,11 @@ flowchart LR
     P --> A8["stored_xss"]
     P --> A9["file_upload"]
     P --> A10["websocket"]
+    P --> A11["weak_password_policy"]
+    P --> A12["csv_injection"]
+    P --> A13["session_invalidation"]
+    P --> A14["vulnerable_components"]
     U1 & U2 & U3 & U4 & U5 & U6 & U7 & U8 & U9 & U10 & U11 & U12 --> G
-    A1 & A2 & A3 & A4 & A5 & A6 & A7 & A8 & A9 & A10 --> G["chain_analysis<br/>(runs after the graph completes, over that<br/>run's Confirmed findings — composes<br/>multi-finding attack chains)"]
+    A1 & A2 & A3 & A4 & A5 & A6 & A7 & A8 & A9 & A10 & A11 & A12 & A13 & A14 --> G["chain_analysis<br/>(runs after the graph completes, over that<br/>run's Confirmed findings — composes<br/>multi-finding attack chains)"]
     G --> H["Report generation<br/>(HTML / PDF / DOCX / CSV / JSON /<br/>per-scan-run VGS-format DOCX)"]
     H --> I["Best-effort notify:<br/>Slack / Teams / VGS webhook/push"]

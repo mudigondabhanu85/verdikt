@@ -1,7 +1,7 @@
 # Verdikt
 
 AI multi-agent web application & API security testing platform. A single scan
-run executes a 27-node LangGraph DAG of detection agents (SQLi, XSS, access
+run executes a 31-node LangGraph DAG of detection agents (SQLi, XSS, access
 control, business logic, SSRF, file upload, and the rest of the OWASP Top 10
 plus the PortSwigger Web Security Academy topic list), plus an attack-chain
 analysis pass afterward that reviews the whole set of confirmed findings
@@ -166,7 +166,7 @@ uv run pytest
 Postgres via Docker Compose remains the documented default for real dev/staging/prod
 use (see `docker-compose.yml`); the migrations in `alembic/` target Postgres.
 
-As of this writing the suite is **111 files / 617 collected tests**
+As of this writing the suite is **119 files / 667 collected tests**
 (`uv run pytest --collect-only -q` to reproduce the count), built on real
 fixtures over mocks wherever practical — local HTTP servers standing in for
 a target app, a real headless browser for execution proofs, real
@@ -177,7 +177,7 @@ cryptographic round-trips for the credential vault.
 ```
 backend/
   app/
-    agents/      48 files — the 27-node LangGraph scan DAG (recon, injection,
+    agents/      52 files — the 31-node LangGraph scan DAG (recon, injection,
                  xss, access_control, business_logic, ssrf, file_upload, ...)
                  plus shared infra (ScopedHttpClient, the credential matrix,
                  retest, task tracking)
@@ -197,7 +197,7 @@ backend/
     importers/   TrafficImporter ABC + HAR/Burp/Zest importers
     api/routes/  28 FastAPI route modules
   alembic/       Migrations (schema + seeded role_permissions matrix)
-  tests/         pytest suite (111 files / 617 tests)
+  tests/         pytest suite (119 files / 667 tests)
 frontend/
   src/
     api/         Hand-written typed fetch client + TS types mirroring app/schemas
@@ -231,7 +231,7 @@ docs/
   secrets). `LocalKMSAdapter` (Fernet, keyed by `VAULT_MASTER_KEY`) is
   dev-only — production must implement a real KMS-backed adapter (an AWS KMS
   adapter is already available via `KMS_PROVIDER=aws`).
-- RBAC is a real `role_permissions` DB table (19 resources × 4 actions;
+- RBAC is a real `role_permissions` DB table (20 resources × 4 actions;
   org_admin / project_lead / analyst / viewer), not hardcoded role checks,
   so new roles/permissions are data, not code.
 - There is deliberately **no pre-scan authorization-letter gate** — an

@@ -42,13 +42,6 @@ _WEAK_JWT_SECRETS = [
 ]
 
 
-def find_logout_url(endpoints: list[str]) -> str | None:
-    for url in endpoints:
-        if "logout" in url.lower():
-            return url
-    return None
-
-
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
@@ -170,10 +163,6 @@ class AuthAgent:
                 )
                 if entropy_finding is not None:
                     findings.append(entropy_finding)
-
-            logout_finding = await self._check_logout_invalidation(auth_session, endpoints)
-            if logout_finding is not None:
-                findings.append(logout_finding)
 
         return findings
 
@@ -384,85 +373,6 @@ class AuthAgent:
             response_raw=f"token_length={len(token)} pattern_note={issue}",
             extra={"token_length": str(len(token)), "pattern_note": issue},
         )
-
-    async def _check_logout_invalidation(
-        self, auth_session: AuthenticatedSession, endpoints: list[str]
-    ) -> Finding | None:
-        logout_url = find_logout_url(endpoints)
-        protected_candidates = [e for e in endpoints if e != logout_url]
-        if logout_url is None or not protected_candidates:
-            return None
-        protected_url = protected_candidates[0]
-
-        try:
-            before = await self._client.get(protected_url, session=auth_session)
-            if before.status_code >= 400:
-                return None
-            await self._client.get(logout_url, session=auth_session)
-            after = await self._client.get(protected_url, session=auth_session)
-        except (ScopeViolationError, httpx.HTTPError):
-            return None
-
-        if after.status_code >= 400:
-            return None
-
-        # §2 step 1: deterministic re-verification before confirming.
-        try:
-            after_again = await self._client.get(protected_url, session=auth_session)
-        except (ScopeViolationError, httpx.HTTPError):
-            return None
-        if after_again.status_code >= 400:
-            return None
-
-        check_def = get_check("session-not-invalidated-on-logout", filename=_CATALOG_FILE)
-        finding = Finding(
-            scan_run_id=self._scan_run_id,
-            agent_job_id=self._agent_job_id,
-            check_id="session-not-invalidated-on-logout",
-            title=check_def.title,
-            severity=check_def.severity,
-            owasp_2025_category=check_def.owasp_2025_category,
-            cwe_id=check_def.cwe_id,
-            portswigger_reference_url=check_def.portswigger_reference_url,
-            cvss_vector=check_def.cvss_vector,
-            cvss_score=check_def.cvss_score,
-            affected_endpoints=[protected_url],
-            plain_language_summary=check_def.plain_language_summary,
-            technical_description=render_check_template(
-                check_def.technical_description, protected_url, {"logout_url": logout_url}
-            ),
-            steps_to_reproduce=[
-                f"1. Log in and confirm {protected_url} is accessible (returns a non-error status).",
-                f"2. Call the logout endpoint: {logout_url}",
-                f"3. Request {protected_url} again with the same session credential and observe "
-                "it still succeeds instead of being rejected.",
-            ],
-            remediation=check_def.remediation,
-            references=[*check_def.references, check_def.portswigger_reference_url],
-            confirmation_status="ai_confirmed",
-        )
-        request_raw = format_request_raw(after_again)
-        response_raw = format_response_raw(after_again)
-        screenshot_refs = await capture_and_store_evidence_screenshot(
-            scan_run_id=self._scan_run_id,
-            check_id=finding.check_id,
-            title=finding.title,
-            request_raw=request_raw,
-            response_raw=response_raw,
-        )
-        async with self._client.session_lock:
-            self._session.add(finding)
-            await self._session.flush()
-            self._session.add(
-                Evidence(
-                    finding_id=finding.id,
-                    request_raw=request_raw,
-                    response_raw=response_raw,
-                    screenshot_refs=screenshot_refs,
-                )
-            )
-            await self._session.commit()
-        return finding
 
     async def _persist_static(
         self, check_id: str, *, url: str, request_raw: str, response_raw: str, extra: dict | None = None

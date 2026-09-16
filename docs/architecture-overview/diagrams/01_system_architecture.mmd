@@ -4,15 +4,15 @@ flowchart TB
     end
 
     subgraph Backend["Verdikt Backend — FastAPI (Python)"]
-        API["REST API<br/>JWT bearer auth, RBAC-enforced"]
-        ORCH["Multi-Agent Orchestrator<br/>(LangGraph)"]
+        API["REST API — 30 route modules<br/>JWT bearer auth, RBAC-enforced"]
+        ORCH["Multi-Agent Orchestrator<br/>(LangGraph, 31-node DAG)"]
         AIABS["AI Provider Abstraction<br/>Claude / OpenAI / Gemini / Grok / Custom"]
-        RPT["Reporting Engine<br/>HTML / PDF / DOCX / CSV / JSON"]
+        RPT["Reporting Engine<br/>HTML / PDF (reportlab) / DOCX / CSV / JSON"]
         VAULT["Credential Vault<br/>(envelope encryption, pluggable KMS)"]
     end
 
     subgraph Data["Persistence"]
-        PG[("PostgreSQL")]
+        PG[("PostgreSQL<br/>~34 models")]
         OBJ[("Object Storage<br/>(screenshots, uploads, letters)")]
     end
 
@@ -21,11 +21,14 @@ flowchart TB
         LLM["LLM Provider<br/>Claude / OpenAI / Gemini / Grok /<br/>Any in-house OpenAI-compatible gateway"]
         JIRA["Jira"]
         SLACK["Slack"]
-        TEAMS["Microsoft Teams"]
+        TEAMS["Microsoft Teams<br/>(+ conversational bot)"]
+        OUTLOOK["Outlook"]
         VGS["VGS<br/>(DAST governance tool)"]
         BURP["Burp Suite Professional"]
         IDP["SSO: SAML / OIDC"]
-        CMDB["CMDB<br/>(asset inventory)"]
+        CMDB["CMDB<br/>(generic REST asset lookup)"]
+        PSWIG["PortSwigger Web<br/>Security Academy"]
+        OSV["OSV.dev<br/>(open vulnerability DB)"]
     end
 
     FE <-->|"HTTPS / JWT"| API
@@ -40,7 +43,10 @@ flowchart TB
     API -->|"ticket create/sync"| JIRA
     API -->|"scan complete"| SLACK
     API -->|"scan complete"| TEAMS
+    API -->|"scan complete"| OUTLOOK
     API -->|"push confirmed findings"| VGS
     API <-->|"trigger / import"| BURP
     API <-->|"authn"| IDP
     API -->|"asset lookup"| CMDB
+    API -->|"scrape topic write-ups"| PSWIG
+    ORCH -->|"known-vulnerable-version lookup"| OSV

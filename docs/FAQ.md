@@ -32,7 +32,10 @@ crawl starting from each in-scope `Target`'s base URL, `/robots.txt`, and
   not auto-followed at the HTTP layer — `ScopedHttpClient` never auto-follows
   redirects, so every hop stays individually scope-checked), and it skips
   Logout links on purpose — a crawl that clicks "Logout" mid-scan kills the
-  shared session every other concurrent agent is relying on.
+  shared session every other concurrent agent is relying on. It still
+  captures each one separately (`discovered_logout_urls`), so the dedicated
+  `session_invalidation` check has a real logout URL to test against via its
+  own disposable login, never the shared session.
 - **It extracts, as it goes:** every `<form>` (action, method, fields), every
   query-string parameter on every URL it fetches, and any literal
   `wss?://` string in a page or script body (WebSocket endpoints, which
@@ -245,7 +248,7 @@ live crawl finds on its own."
 
 ## 5. What's the architecture, and what's AI's role given deterministic scanning is already in place?
 
-**Orchestration:** one scan run compiles and executes a 27-node
+**Orchestration:** one scan run compiles and executes a 31-node
 [LangGraph](https://github.com/langchain-ai/langgraph) DAG
 (`app/agents/graph.py::build_graph`) — real parallel fan-out, not a
 sequential loop. Recon fans out to every check that only needs a site map
@@ -253,7 +256,8 @@ sequential loop. Recon fans out to every check that only needs a site map
 pollution/etc.) in parallel; once login establishes sessions,
 `authenticated_recon` re-crawls, then `recon_planner` runs once as a gate
 before the big post-login fan-out (injection/XSS/auth/access-control/
-business-logic/CSRF/stored-XSS/file-upload/WebSocket) — again all in
+business-logic/CSRF/stored-XSS/file-upload/WebSocket/weak-password-policy/
+CSV-injection/session-invalidation/vulnerable-components) — again all in
 parallel. `ChainAnalysisAgent` runs once more afterward, outside the graph
 proper, over the complete set of that run's Confirmed findings.
 
