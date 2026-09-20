@@ -58,7 +58,9 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [loginEndpoint, setLoginEndpoint] = useState('')
   const [extraCookies, setExtraCookies] = useState('')
-  const [extraHeaders, setExtraHeaders] = useState('')
+  const [extraHeaderRows, setExtraHeaderRows] = useState<{ name: string; value: string }[]>([
+    { name: '', value: '' },
+  ])
   const [privilegeRank, setPrivilegeRank] = useState('')
 
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -76,6 +78,25 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
       .map((pair) => pair.split('=').map((s) => s.trim()))
       .filter(([k, v]) => k && v !== undefined) as [string, string][]
     return entries.length ? Object.fromEntries(entries) : null
+  }
+
+  function headerRowsToObject(rows: { name: string; value: string }[]): Record<string, string> | null {
+    const entries = rows
+      .map(({ name, value }) => [name.trim(), value.trim()] as [string, string])
+      .filter(([name, value]) => name && value)
+    return entries.length ? Object.fromEntries(entries) : null
+  }
+
+  function updateHeaderRow(index: number, field: 'name' | 'value', value: string) {
+    setExtraHeaderRows((rows) => rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)))
+  }
+
+  function addHeaderRow() {
+    setExtraHeaderRows((rows) => [...rows, { name: '', value: '' }])
+  }
+
+  function removeHeaderRow(index: number) {
+    setExtraHeaderRows((rows) => (rows.length > 1 ? rows.filter((_, i) => i !== index) : rows))
   }
 
   const { data: credentials, isLoading } = useQuery({
@@ -107,7 +128,7 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
         // "Authorization: Bearer <token>", never a custom header name
         // like "X-API-Key"), as well as a header layered on top of a
         // real login/macro flow. See app.models.credential.CredentialSet.extra_headers.
-        extra_headers: parseKeyValuePairs(extraHeaders),
+        extra_headers: headerRowsToObject(extraHeaderRows),
         privilege_rank: privilegeRank.trim() ? Number(privilegeRank) : null,
       }),
     onSuccess: () => {
@@ -117,7 +138,7 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
       setSecret('')
       setLoginEndpoint('')
       setExtraCookies('')
-      setExtraHeaders('')
+      setExtraHeaderRows([{ name: '', value: '' }])
       setPrivilegeRank('')
     },
   })
@@ -235,12 +256,36 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
               </button>
             )}
           </div>
-          <input
-            value={extraHeaders}
-            onChange={(e) => setExtraHeaders(e.target.value)}
-            placeholder="extra static headers, e.g. X-API-Key=abc123 (comma-separated for more than one)"
-            className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
-          />
+          <div className="space-y-1 rounded border border-gray-200 bg-gray-50 p-2">
+            <p className="text-xs font-medium text-gray-600">Extra static headers (optional)</p>
+            {extraHeaderRows.map((row, i) => (
+              <div key={i} className="flex gap-2">
+                <input
+                  value={row.name}
+                  onChange={(e) => updateHeaderRow(i, 'name', e.target.value)}
+                  placeholder="Header name, e.g. X-API-Key"
+                  className="flex-1 rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+                />
+                <input
+                  value={row.value}
+                  onChange={(e) => updateHeaderRow(i, 'value', e.target.value)}
+                  placeholder="Value"
+                  className="flex-1 rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeHeaderRow(i)}
+                  disabled={extraHeaderRows.length === 1}
+                  className="text-xs text-red-600 hover:underline disabled:opacity-30"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            <button type="button" onClick={addHeaderRow} className="text-xs text-purple-700 hover:underline">
+              + Add header
+            </button>
+          </div>
           {showAdvanced && credentialType !== 'api_token' && (
             <>
               <input

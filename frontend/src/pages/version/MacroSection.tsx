@@ -252,13 +252,16 @@ export function MacroSection({ versionId, credentialId }: { versionId: string; c
             A real browser window just opened — it's below, streamed live over VNC (no extension, no local display
             needed on your end). Log in there (including any manual OTP step — the URL you gave doesn't have to be
             the final destination; following an Okta/SSO redirect and back is fine). Your mouse wheel over the box
-            below scrolls the <em>remote</em> page, not this one — scroll this page from outside the box. When
-            you're done, click <strong>"Finish recording"</strong> below (not anything inside the box) to save it.
+            below scrolls the <em>remote</em> page, not this one — scroll this page from outside the box. Need to
+            paste a password/token in rather than type it? Click the ☰ icon in the top-left corner of the box below
+            to open noVNC's own clipboard panel — paste your text there and it's typed into the remote page for you
+            (copying text back out of the remote session works the same way, in reverse). When you're done, click{' '}
+            <strong>"Finish recording"</strong> below (not anything inside the box) to save it.
           </p>
           <iframe
             title="Login macro recorder (live)"
-            src={`${VNC_BASE_URL}/vnc_lite.html?autoconnect=true&resize=scale&reconnect=true`}
-            className="block h-[550px] w-full rounded border border-gray-300 bg-black"
+            src={`${VNC_BASE_URL}/vnc.html?autoconnect=true&resize=scale&reconnect=true`}
+            className="block h-[600px] w-full rounded border border-gray-300 bg-black"
           />
           <div className="mt-2 flex items-center gap-2">
             <button
