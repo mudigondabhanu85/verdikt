@@ -10,16 +10,24 @@ Web Application) instance — nothing here is speculative.
 
 Apply the sections in order; later sections build on earlier ones (e.g.
 the VGS report changes assume `Evidence.payload` already exists). The
-document has three parts: **Part A** is earlier work in this same overall
+document has four parts: **Part A** is earlier work in this same overall
 effort (five real bug fixes, a Playwright hang fix, and a new CSP Bypass
 check, all against the same DVWA target) — apply it first. **Part B** is
 a later session's work (payload highlighting, authenticated
 clickjacking, VGS report improvements, and three more new checks) —
-apply it after Part A. **Part C** is the most recent session's work (a
-full Chatbot/LLM Pentest capability — five checks across OWASP LLM Top
-10 2026 and Agentic Top 10 2026 — plus a `CredentialSet.extra_headers`
+apply it after Part A. **Part C** is a later session's work (a full
+Chatbot/LLM Pentest capability — five checks across OWASP LLM Top 10
+2026 and Agentic Top 10 2026 — plus a `CredentialSet.extra_headers`
 feature for saving custom API auth headers alongside a login macro) —
-apply it after Part A and Part B.
+apply it after Part A and Part B. **Part D** is the most recent
+session's work: two real scan-reliability bugs found by actually running
+a full scan against DVWA and comparing it to hand-verified `curl`
+results — a session-killing crawl gap and a probe-request-building bug
+that, together, were silently suppressing every SQL injection, XSS,
+command injection, path traversal, and file-upload finding on affected
+targets. Apply Part D after A, B, and C — it doesn't depend on any of
+them structurally, but is the newest and most load-bearing fix for
+getting real, complete scan results.
 
 ---
 
@@ -1380,3 +1388,171 @@ run `POST /credentials/{id}/test-login` (or fire any other real
 authenticated request), and confirm the custom header actually arrived
 in the fixture server's captured request — not just that the field
 round-trips through the API.
+
+---
+
+# Part D — most recent session's work (apply after Part A, B, and C)
+
+Two real, independent bugs, both found the same way every other fix in
+this document was found: **not** by unit tests (which all passed
+throughout), but by running one real, full scan against a real DVWA
+instance at `security=low` and comparing the report to what a manual
+`curl` against the same target proves is actually vulnerable. Apply
+both — they don't depend on each other, but together they took a real
+DVWA scan from 43 findings (only header/cookie/CSRF/business-logic
+checks — nothing needing a real multi-request authenticated round trip)
+to 110 (adding 15 SQL injection, 3 command injection, 12 path traversal,
+9 XSS, 3 file upload, 6 CSV injection findings — the complete picture a
+DVWA-at-low-security target should produce).
+
+## 12. `recon_planner`'s AI-suggested path can log out the shared scan session
+
+**Symptom, exactly like §6 above but with a different root cause**: a
+full scan reported `header_config`/`csrf`/`business_logic` findings
+correctly, but zero findings from `injection`/`xss`/`stored_xss`/
+`dom_xss`/`file_upload` — checks that need a real authenticated
+round-trip — against a target independently confirmed vulnerable by
+hand moments earlier via raw `curl`. If your codebase already fixed §6
+(the shared-cookie-jar leak), don't assume that's the only way a scan
+session can die mid-run; this is a second, structurally different way
+to lose it.
+
+**Root cause**: if you have an AI-driven "propose unlinked-but-plausible
+paths" mechanism (`app.agents.recon_planner` in this codebase) that
+verifies each suggestion by fetching it live before treating it as
+confirmed crawl surface, check whether that verification step reuses
+the *same shared authenticated session* every other concurrently-running
+detection agent depends on. An LLM asked to guess plausible paths for
+any login-based app will naturally suggest `/logout.php` (or
+`/logout`, `/signout`, etc.) — a completely reasonable guess, and
+exactly the page a real user of the target app would expect to exist.
+If your crawler already has a logout-link exclusion (most DAST crawlers
+do, to avoid literally clicking "Logout" mid-crawl), check whether that
+exclusion only protects links discovered *inside an already-fetched
+page* (a `<a href>` scan over parsed HTML) — if so, it does **nothing**
+for a path that arrives as a direct AI suggestion instead, since that
+never passes through the same link-extraction code. The verification
+fetch (`GET /logout.php` with the real session cookies attached) is
+itself the fatal request — DVWA (and most session-based apps) redirect
+every subsequent authenticated request to a login page from that point
+on, silently and with no error anywhere. A 302 response is `< 400`, so
+naive "did it resolve" verification logic will even count the
+now-dead-session-producing logout page as a *confirmed, successfully
+resolved* suggestion and crawl further from it.
+
+**The fix — filter logout-shaped candidates before ever fetching them,
+in two places for defense in depth:**
+
+1. Wherever your AI-suggestion mechanism parses suggested paths and
+   before it fetches any of them to verify they resolve, filter out
+   anything matching a logout-shaped regex (reuse whatever pattern your
+   crawler's own link-extraction logout carve-out already uses — don't
+   write a second one):
+   ```python
+   # app/agents/recon_planner.py
+   from app.agents.recon import _LOGOUT_LINK_RE  # reuse, don't duplicate
+
+   suggested_paths = _parse_suggested_paths(response.content)[:_MAX_SUGGESTIONS]
+   suggested_paths = [p for p in suggested_paths if not _LOGOUT_LINK_RE.search(p)]
+   if not suggested_paths:
+       return []
+   ```
+2. As a second, independent layer — because the AI-suggestion path is
+   not the only conceivable way a raw URL could be handed to your
+   crawler as a seed to explore *from* (traffic import is another) —
+   filter at the crawler's own seed intake too, so nothing has to
+   remember to check this itself at every call site:
+   ```python
+   # app/agents/recon.py, in ReconAgent.__init__
+   self._extra_seed_urls = [u for u in (extra_seed_urls or []) if not _LOGOUT_LINK_RE.search(u)]
+   ```
+
+**Tests**: one test proving a logout-shaped AI suggestion is never
+fetched at all (not just absent from the final "confirmed" list) — give
+the mock transport handler an `assert`/`raise` if a logout-shaped URL is
+ever requested, so the test fails loudly if the filter regresses, rather
+than passing vacuously because the URL happened to also 404. A second,
+identically-shaped test at the crawler's `extra_seed_urls` intake for
+the same reason.
+
+**Live verification**: run a real scan against DVWA (or any login-gated
+target) with an AI provider configured (a `NullAIProviderAdapter`/no-AI
+config won't exercise this path at all, since nothing suggests anything).
+Before the fix, check your target's access log mid-scan for a `GET
+/logout.php` (or equivalent) followed immediately by every subsequent
+request 302-redirecting — after the fix, confirm that request never
+happens and deep authenticated findings return.
+
+## 13. Multi-field GET-form probes silently degrade to a no-op
+
+**Symptom**: even with §12 fixed, one specific check can still come back
+empty against a target independently confirmed vulnerable by hand —  in
+this codebase, SQL injection against DVWA's classic `?id=...&Submit=...`
+GET form specifically, while single-field GET forms (most reflected-XSS
+pages, which only ever have one field) worked fine. The giveaway, if you
+have access to the target's own access log: every probe request to the
+affected endpoint has the exact same, small response size — the target
+is serving its "please enter a value" placeholder page every single
+time, meaning the parameter driving the actual vulnerable behavior never
+actually arrived.
+
+**Root cause**: if your parameter-probing code builds a `ProbeTarget`
+dataclass carrying both the one field currently being fuzzed
+(`param_name`) and the form's *other* fields at a safe baseline value
+(`other_fields` — needed so e.g. a form's own required-but-uninteresting
+fields don't cause the server to reject the request outright), check
+whether your GET-request-building code path actually uses
+`other_fields`. A very easy asymmetry to introduce: the POST-body-
+building branch naturally has to include every field in the encoded
+body anyway, so it usually gets `other_fields` right by construction —
+```python
+body_fields = dict(target.other_fields)
+body_fields[target.param_name] = value
+```
+—  while the GET-query-building branch, written first or more simply,
+sets only the one field being tested:
+```python
+params[target.param_name] = [value]  # other_fields never touched
+```
+A single-field form works by accident either way (there's nothing in
+`other_fields` to omit). A multi-field GET form — like DVWA's SQL
+Injection page, whose own PHP explicitly gates the query behind
+`isset($_GET['Submit'])` — silently never runs its real logic at all,
+with zero errors, zero exceptions, and no signal anywhere except an
+empty finding list. This is exactly the kind of gap that's invisible to
+any test that only exercises single-field forms or query parameters.
+
+**The fix — make the GET branch match the POST branch exactly:**
+```python
+# app/agents/probing.py, build_request()
+if target.method == "GET":
+    parsed = urlsplit(target.url)
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    for name, other_value in target.other_fields.items():
+        params[name] = [other_value]
+    params[target.param_name] = [value]
+    new_query = urlencode({k: v[0] for k, v in params.items()})
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, "")), None, None
+```
+
+**Tests**: a unit test on `build_request` directly, asserting a
+`ProbeTarget` with `other_fields` populated produces a URL containing
+*both* the tested parameter's new value and every other field's baseline
+value (not just the tested one) — plus a companion test confirming a
+target with no `other_fields` still works, to guard the accidentally-
+working single-field case going forward too. A third test on whatever
+builds `ProbeTarget`s from a parsed form (`form_probe_targets` in this
+codebase) confirming a submit-button-typed field ends up in
+`other_fields` rather than silently dropped (it's excluded from the set
+of *testable* fields, correctly — but must still be carried along as a
+companion value).
+
+**Live verification**: run a real scan against a target with a known
+multi-field GET form gating real behavior behind a companion field's
+presence (DVWA's SQL Injection page is the canonical example — needs
+both `id` and `Submit`). Check the target's own access log for response
+size variance across probe requests before/after the fix — uniform sizes
+mean the parameter never varied; varied sizes (and, for DVWA
+specifically, a `Fatal error: ... You have an error in your SQL syntax`
+response body for the bare-quote payload) confirm the real request is
+now actually reaching the vulnerable code path.
