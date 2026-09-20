@@ -6,8 +6,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 from sqlalchemy import select
 
-from app.agents.dom_xss import DomXssAgent
+from app.agents.dom_xss import DomXssAgent, _fragment_param_names_by_url
 from app.agents.http_client import ScopedHttpClient
+from app.agents.recon import DiscoveredParameter, FormField, FormInfo
 from app.agents.xss_browser_proof import attempt_dom_xss_fragment_proof
 from app.models.finding import Finding
 from app.models.project import ScopeEntry
@@ -201,7 +202,7 @@ async def test_endpoints_beyond_the_cap_are_never_probed(db_adapter, monkeypatch
     call counter instead of real browser navigations."""
     calls: list[str] = []
 
-    async def _fake_proof(url, *, headless=True, session=None):
+    async def _fake_proof(url, *, headless=True, session=None, fragment_param_names=None):
         calls.append(url)
         from app.agents.xss_browser_proof import BrowserProofResult
 
@@ -225,3 +226,111 @@ async def test_endpoints_beyond_the_cap_are_never_probed(db_adapter, monkeypatch
 
     assert len(calls) == DomXssAgent.MAX_ENDPOINTS
     assert calls == endpoints[: DomXssAgent.MAX_ENDPOINTS]
+
+
+class _NamedHashFixtureHandler(BaseHTTPRequestHandler):
+    """Mirrors a very common real-world pattern (and DVWA High's own DOM
+    XSS page): the sink only fires when the fragment contains the
+    literal substring "lang=", exactly like code that does
+    `location.href.indexOf("lang=")` before ever touching the hash value
+    — a bare `#<payload>` fragment with no "lang=" prefix never trips it,
+    only `#lang=<payload>` does.
+    """
+
+    def do_GET(self):  # noqa: N802
+        body = b"""<html><body><div id="out"></div>
+        <script>
+        if (document.location.href.indexOf("lang=") >= 0) {
+            var v = document.location.href.substring(document.location.href.indexOf("lang=") + 5);
+            document.getElementById('out').innerHTML = decodeURIComponent(v);
+        }
+        </script>
+        </body></html>"""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):  # noqa: A002
+        pass
+
+
+def _named_hash_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _NamedHashFixtureHandler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+async def test_bare_fragment_misses_a_named_hash_parameter_sink():
+    server, thread = _named_hash_server()
+    try:
+        host, port = server.server_address
+        result = await attempt_dom_xss_fragment_proof(f"http://{host}:{port}/")
+        assert result.executed is False
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+async def test_named_fragment_parameter_confirms_the_same_sink():
+    server, thread = _named_hash_server()
+    try:
+        host, port = server.server_address
+        result = await attempt_dom_xss_fragment_proof(
+            f"http://{host}:{port}/", fragment_param_names=["lang"]
+        )
+        assert result.executed is True
+        assert result.payload.startswith("lang=")
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+async def test_dom_xss_agent_discovers_and_uses_form_field_names_for_the_hash(db_adapter):
+    server, thread = _named_hash_server()
+    try:
+        host, port = server.server_address
+        url = f"http://{host}:{port}/"
+        async with session_scope(db_adapter) as session:
+            client = ScopedHttpClient(
+                version_id=uuid.uuid4(),
+                scope_entries=[ScopeEntry(host=host, port=port, in_scope=True)],
+                db_session=session,
+                transport=httpx.MockTransport(lambda r: httpx.Response(404)),
+            )
+            agent = DomXssAgent(
+                client, scan_run_id=uuid.uuid4(), agent_job_id=uuid.uuid4(), db_session=session
+            )
+            forms = [FormInfo(action_url=url, method="GET", fields=[FormField(name="lang", type="text")])]
+            findings = await agent.run([url], forms=forms)
+
+            assert len(findings) == 1
+            assert findings[0].check_id == "dom-xss-fragment"
+            await client.aclose()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+def test_fragment_param_names_by_url_collects_from_get_forms_and_query_params():
+    forms = [
+        FormInfo(
+            action_url="http://x/page",
+            method="GET",
+            fields=[FormField(name="lang", type="text"), FormField(name="csrf", type="hidden")],
+        ),
+        FormInfo(action_url="http://x/other", method="POST", fields=[FormField(name="ignored", type="text")]),
+    ]
+    parameters = [
+        DiscoveredParameter(url="http://x/page", method="GET", name="lang"),
+        DiscoveredParameter(url="http://x/page", method="GET", name="tab"),
+        DiscoveredParameter(url="http://x/post-only", method="POST", name="ignored"),
+    ]
+
+    result = _fragment_param_names_by_url(forms, parameters)
+
+    assert result["http://x/page"] == ["lang", "tab"]
+    assert "http://x/other" not in result
+    assert "http://x/post-only" not in result

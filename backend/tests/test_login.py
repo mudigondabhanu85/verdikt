@@ -108,6 +108,30 @@ async def test_api_token_credential_merges_extra_cookies(db_adapter):
         await client.aclose()
 
 
+async def test_api_token_credential_merges_extra_headers(db_adapter):
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=443, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+        credential = _credential_set(
+            credential_type="api_token",
+            username="api-token",
+            secret="sk-pre-issued-token",
+            extra_headers={"X-API-Key": "abc123"},
+        )
+
+        manager = SessionManager(client)
+        auth_session = await manager.login(credential, forms=[])
+
+        assert auth_session is not None
+        assert auth_session.extra_headers == {"X-API-Key": "abc123"}
+
+        await client.aclose()
+
+
 async def test_explicit_login_config_extracts_bearer_token(db_adapter):
     async with session_scope(db_adapter) as session:
         client = ScopedHttpClient(
@@ -219,6 +243,40 @@ async def test_extra_cookies_are_merged_into_the_authenticated_session(db_adapte
         # Both the extra static cookie and the real login-derived one
         # are present — extra_cookies augments, it doesn't replace.
         assert auth_session.cookies == {"security": "low", "sid": "abc123"}
+
+        await client.aclose()
+
+
+async def test_extra_headers_are_merged_into_a_form_login_session(db_adapter):
+    """extra_headers is the header-shaped equivalent of extra_cookies —
+    same real need, but for a custom auth header (e.g. an imported API
+    collection's "X-API-Key") layered on top of a real login/macro flow
+    rather than only replacing the api_token mechanism, which can only
+    ever produce a literal Authorization: Bearer header."""
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=443, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+        credential = _credential_set(
+            username="formuser", secret="formpass", extra_headers={"X-API-Key": "abc123"}
+        )
+        form = FormInfo(
+            action_url="https://site.test/do-login",
+            method="POST",
+            fields=[
+                FormField(name="username", type="text"),
+                FormField(name="password", type="password"),
+            ],
+        )
+
+        manager = SessionManager(client)
+        auth_session = await manager.login(credential, forms=[form])
+
+        assert auth_session is not None
+        assert auth_session.extra_headers == {"X-API-Key": "abc123"}
 
         await client.aclose()
 

@@ -15,6 +15,8 @@ from app.api.routes import (
     browser_extension,
     burp,
     business_rules,
+    chatbot_agency_probes,
+    chatbot_targets,
     cmdb_configs,
     credentials,
     dashboard,
@@ -132,6 +134,8 @@ app.include_router(scans.router)
 app.include_router(review_candidates.router)
 app.include_router(findings.router)
 app.include_router(business_rules.router)
+app.include_router(chatbot_targets.router)
+app.include_router(chatbot_agency_probes.router)
 app.include_router(burp.router)
 app.include_router(objects.router)
 app.include_router(retest_jobs.router)

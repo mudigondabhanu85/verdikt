@@ -99,6 +99,7 @@ async def add_credential_set(
         login_content_type=payload.login_content_type,
         token_response_path=payload.token_response_path,
         extra_cookies=payload.extra_cookies,
+        extra_headers=payload.extra_headers,
         privilege_rank=payload.privilege_rank,
     )
     session.add(credential)

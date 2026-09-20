@@ -24,6 +24,13 @@ class CredentialSetCreate(BaseModel):
     # app.models.credential.CredentialSet.extra_cookies.
     extra_cookies: dict[str, str] | None = None
 
+    # Static headers sent on every authenticated request, e.g. a custom
+    # API-key header ("X-API-Key") an imported API collection uses
+    # instead of the standard Authorization: Bearer the api_token
+    # credential_type already handles — see
+    # app.models.credential.CredentialSet.extra_headers.
+    extra_headers: dict[str, str] | None = None
+
     # Optional — see app.models.credential.CredentialSet.privilege_rank.
     privilege_rank: int | None = None
 
@@ -48,6 +55,7 @@ class CredentialSetUpdate(BaseModel):
     login_content_type: str | None = None
     token_response_path: str | None = None
     extra_cookies: dict[str, str] | None = None
+    extra_headers: dict[str, str] | None = None
     privilege_rank: int | None = None
 
 
@@ -61,6 +69,7 @@ class CredentialSetOut(BaseModel):
     login_method: str | None
     token_response_path: str | None
     extra_cookies: dict[str, str] | None
+    extra_headers: dict[str, str] | None
     privilege_rank: int | None
 
     model_config = {"from_attributes": True}

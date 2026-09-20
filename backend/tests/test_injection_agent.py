@@ -278,6 +278,74 @@ async def test_sqli_boolean_detected_behind_a_like_wrapped_search_parameter(db_a
         await client.aclose()
 
 
+async def test_second_order_sqli_detected_on_a_different_page_than_the_form(db_adapter):
+    """Regression test for a real, live-found gap (§14, DVWA SQL
+    Injection at "High" difficulty): a form that persists a value
+    (into a session variable, here) without querying anything itself,
+    where a COMPLETELY DIFFERENT page's query is what's actually
+    injectable. Every other SQLi probe only ever compares the immediate
+    response to the same request that carried the payload, so a
+    same-page-only check would see this form as identical no matter what
+    was submitted and never report it. Confirms _probe_sqli_second_order
+    checks the containing directory's index instead and catches it.
+    """
+    server_state = {"id": ""}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        parsed = urlsplit(str(request.url))
+        if parsed.path == "/vulnerable/set-id" and request.method == "POST":
+            body = parse_qs(request.content.decode())
+            server_state["id"] = body.get("id", [""])[0]
+            return httpx.Response(200, text="Session ID set")
+        if parsed.path == "/vulnerable/":
+            # Simulates `SELECT ... WHERE user_id = '{id}'` with no
+            # escaping at all — a true-condition payload matches every
+            # row (long output), a false-condition one matches none.
+            value = server_state["id"]
+            if "OR '1'='1" in value:
+                return httpx.Response(200, text="<html>" + "<p>User row</p>" * 40 + "</html>")
+            return httpx.Response(200, text="<html>No results</html>")
+        return httpx.Response(404)
+
+    async with session_scope(db_adapter) as session:
+        scan_run = ScanRun(version_id=uuid.uuid4(), status="running", requested_by=uuid.uuid4())
+        session.add(scan_run)
+        await session.commit()
+        await session.refresh(scan_run)
+
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(handler),
+        )
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "looks vulnerable"}'
+        )
+        guard = BudgetGuard(scan_run, session, provider)
+        agent = InjectionAgent(
+            client, scan_run_id=scan_run.id, agent_job_id=uuid.uuid4(),
+            db_session=session, budget_guard=guard, ai_model="fake-model",
+        )
+
+        forms = [
+            FormInfo(
+                action_url="http://site.test/vulnerable/set-id",
+                method="POST",
+                fields=[FormField(name="id", type="text")],
+            )
+        ]
+        findings = await agent.run([], forms)
+
+        assert len(findings) == 1
+        finding = findings[0]
+        assert finding.check_id == "sqli-boolean"
+        assert "http://site.test/vulnerable/" in finding.affected_endpoints
+        assert "http://site.test/vulnerable/set-id" in finding.affected_endpoints
+
+        await client.aclose()
+
+
 async def test_no_parameters_never_calls_the_llm_for_payload_suggestions(db_adapter):
     async with session_scope(db_adapter) as session:
         provider = ScriptedAIProviderAdapter.from_responses('{"payloads": ["should never be seen"]}')

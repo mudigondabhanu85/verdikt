@@ -172,6 +172,7 @@ class SsrfAgent:
                     finding_id=finding.id,
                     request_raw=request_raw,
                     response_raw=response_raw,
+                    payload=callback_url_for(callback_host, server.port, _token),
                     screenshot_refs=screenshot_refs,
                     additional_notes=(
                         "Confirmed via a real out-of-band HTTP callback received by a listener "

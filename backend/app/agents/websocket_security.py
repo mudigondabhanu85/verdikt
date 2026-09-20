@@ -201,6 +201,7 @@ class WebSocketAgent:
                     finding_id=finding.id,
                     request_raw=request_raw,
                     response_raw=response_raw,
+                    payload=_FORGED_ORIGIN,
                     screenshot_refs=screenshot_refs,
                 )
             )

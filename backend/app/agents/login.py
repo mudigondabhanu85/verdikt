@@ -226,6 +226,8 @@ class SessionManager:
             session = AuthenticatedSession(credential_set_id=credential_set.id, bearer_token=secret)
             if credential_set.extra_cookies:
                 session.cookies = dict(credential_set.extra_cookies)
+            if credential_set.extra_headers:
+                session.extra_headers = dict(credential_set.extra_headers)
             return session
 
         # See ScopedHttpClient.reset_cookie_jar's docstring — a fresh
@@ -274,6 +276,8 @@ class SessionManager:
         if session is not None and credential_set.extra_cookies:
             # extra_cookies wins on key collision — see _session_from_response.
             session.cookies = {**session.cookies, **credential_set.extra_cookies}
+        if session is not None and credential_set.extra_headers:
+            session.extra_headers = {**session.extra_headers, **credential_set.extra_headers}
         return session
 
     async def _login_explicit(
@@ -389,5 +393,8 @@ class SessionManager:
             cookies = {**cookies, **credential_set.extra_cookies}
 
         return AuthenticatedSession(
-            credential_set_id=credential_set.id, cookies=cookies, bearer_token=bearer_token
+            credential_set_id=credential_set.id,
+            cookies=cookies,
+            bearer_token=bearer_token,
+            extra_headers=dict(credential_set.extra_headers) if credential_set.extra_headers else {},
         )

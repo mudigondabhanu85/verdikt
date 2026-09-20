@@ -21,7 +21,11 @@ from app.models.vgs_vulnerability import (
 )
 from app.reporting.grouping import FindingGroup, group_findings
 from app.reporting.html_report import BrandingInfo
-from app.reporting.vgs_docx_report import build_vulnerability_from_group, render_vgs_docx_report
+from app.reporting.vgs_docx_report import (
+    build_evidence_steps_for_group,
+    build_vulnerability_from_group,
+    render_vgs_docx_report,
+)
 from app.schemas.finding import FindingOut
 from app.schemas.vgs_vulnerability import (
     AvailableFindingOut,
@@ -303,18 +307,15 @@ async def add_report_vulnerability(
     return vuln
 
 
-async def _attach_finding_evidence(session: AsyncSession, vuln: VgsReportVulnerability, finding: Finding) -> None:
-    evidence_result = await session.execute(select(Evidence).where(Evidence.finding_id == finding.id))
-    evidence = evidence_result.scalar_one_or_none()
-    if evidence is not None and evidence.screenshot_refs:
-        session.add(
-            VgsEvidenceStep(
-                report_vulnerability_id=vuln.id,
-                step_order=0,
-                comment=evidence.additional_notes or "Captured automatically from the scan finding.",
-                screenshot_object_keys=list(evidence.screenshot_refs),
-            )
-        )
+async def _attach_finding_evidence(
+    session: AsyncSession, vuln: VgsReportVulnerability, group: FindingGroup
+) -> None:
+    instance_ids = [instance.id for instance in group.detailed_instances]
+    evidence_result = await session.execute(select(Evidence).where(Evidence.finding_id.in_(instance_ids)))
+    evidence_by_finding_id = {evidence.finding_id: evidence for evidence in evidence_result.scalars().all()}
+
+    for step in build_evidence_steps_for_group(vuln.id, group, evidence_by_finding_id):
+        session.add(step)
 
 
 async def _group_open_findings_for_version(session: AsyncSession, version_id: uuid.UUID) -> list[FindingGroup]:
@@ -389,7 +390,7 @@ async def _auto_seed_findings_into_draft(
             order_index += 1
             session.add(vuln)
             await session.flush()
-            await _attach_finding_evidence(session, vuln, group.shared)
+            await _attach_finding_evidence(session, vuln, group)
             _mark_group_as_seeded(draft, group)
 
     draft.findings_auto_seeded = True
@@ -521,7 +522,7 @@ async def add_report_vulnerability_from_finding(
     vuln = build_vulnerability_from_group(draft.id, group, order_index)
     session.add(vuln)
     await session.flush()
-    await _attach_finding_evidence(session, vuln, group.shared)
+    await _attach_finding_evidence(session, vuln, group)
     _mark_group_as_seeded(draft, group)
 
     await write_audit_log(

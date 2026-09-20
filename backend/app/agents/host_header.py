@@ -123,6 +123,7 @@ class HostHeaderAgent:
                     finding_id=finding.id,
                     request_raw=request_raw,
                     response_raw=response_raw,
+                    payload=_FORGED_HOST,
                     screenshot_refs=screenshot_refs,
                 )
             )

@@ -1,0 +1,33 @@
+# Open HTTP Redirect agent's catalog (§3, item 1). No LLM needed —
+# confirmation is a real 3xx response whose Location header points
+# verbatim at an attacker-controlled URL we substituted in.
+
+- id: open-redirect-confirmed
+  title: "Open HTTP Redirect"
+  owasp_2025_category: "A01 Broken Access Control"
+  cwe_id: "CWE-601"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N"
+  cvss_score: 4.7
+  portswigger_reference_url: "https://portswigger.net/kb/issues/00500100_open-redirection-reflected"
+  plain_language_summary: >
+    This part of the application redirects visitors to a URL supplied in
+    a request parameter without checking that it stays within the
+    application's own site. An attacker can craft a link that looks like
+    it points at this trusted application but actually sends the victim
+    on to an attacker-controlled site — useful for phishing, since the
+    initial link really is to the trusted domain.
+  technical_description: >
+    The parameter {parameter} on {url} was set to an external URL under
+    our control, and the server responded with an HTTP redirect
+    (Location header) pointing at that exact URL — confirming the
+    application will send a visitor's browser anywhere a request
+    parameter tells it to, with no allow-list or same-site check.
+  remediation: >
+    Never redirect to a URL taken directly from user input. Validate the
+    destination against a strict allow-list of known-safe paths/hosts,
+    or use an indirect reference (e.g. a short internal ID mapped
+    server-side to an approved destination) instead of a raw URL.
+  references:
+    - "https://cwe.mitre.org/data/definitions/601.html"
+    - "https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html"

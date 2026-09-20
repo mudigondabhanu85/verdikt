@@ -1,3 +1,4 @@
+import asyncio
 import time
 import uuid
 
@@ -5,10 +6,44 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from app.agents.http_client import ScopedHttpClient, ScopeViolationError, install_commit_backstop
+from app.agents.http_client import (
+    AuthenticatedSession,
+    ScopedHttpClient,
+    ScopeViolationError,
+    install_commit_backstop,
+)
 from app.models.project import ScopeEntry
 from app.models.traffic import TrafficInteraction
 from tests.conftest import session_scope
+
+
+async def test_session_extra_headers_are_sent_on_every_request(db_adapter):
+    """AuthenticatedSession.extra_headers is the header-shaped equivalent
+    of CredentialSet.extra_cookies — a static header (e.g. a custom
+    "X-API-Key") forced onto every request for that identity, applied
+    whether or not a real login/macro flow also runs.
+    """
+    seen_headers: dict[str, str] = {}
+
+    async def _capture(request: httpx.Request) -> httpx.Response:
+        seen_headers.update(request.headers)
+        return httpx.Response(200, json={"ok": True})
+
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(_capture),
+        )
+        auth_session = AuthenticatedSession(
+            credential_set_id=uuid.uuid4(),
+            extra_headers={"X-API-Key": "abc123"},
+        )
+        await client.get("http://site.test/api/resource", session=auth_session)
+
+        assert seen_headers.get("x-api-key") == "abc123"
+        await client.aclose()
 
 
 async def test_hard_backstop_timeout_fires_independent_of_client_timeout(db_adapter, monkeypatch):
@@ -296,6 +331,78 @@ async def test_malformed_url_that_passes_scope_check_raises_scope_violation_not_
         client._client.request = _raise_invalid_url
         with pytest.raises(ScopeViolationError):
             await client.get("http://site.test/some-malformed-endpoint")
+        await client.aclose()
+
+
+async def test_set_cookie_response_never_populates_the_shared_jar(db_adapter):
+    """Real, live-found bug (§ "run a scan and validate the fixes"): a
+    genuine full scan against DVWA saw injection/xss/stored_xss/
+    file_upload/csp_bypass all find nothing on a target independently
+    confirmed vulnerable moments earlier by hand. Root cause traced to
+    httpx.AsyncClient's own implicit cookie jar: it auto-extracts every
+    Set-Cookie it ever sees (any request, including a plain anonymous
+    one with session=None), and — confirmed by reading httpx's own
+    Request.__init__ — merges that jar into every subsequent outgoing
+    request's Cookie header via Cookies.set_cookie_header(), appended
+    after whatever this class already built explicitly. PHP (DVWA's own
+    stack) takes the LAST same-named cookie in a merged header, so a
+    stale/different identity's PHPSESSID appended after the real one
+    silently wins server-side, downgrading an authenticated probe to an
+    anonymous one with no error anywhere.
+
+    The original fix attempt — reactively clearing the jar right after
+    each request — closes most of the window but not all of it under
+    genuine concurrency: a second request can be *built* (reading the
+    still-dirty jar) while a first request's response already populated
+    it but that request's own cleanup hasn't run yet. That precise gap
+    is real but too timing-sensitive to force open reliably through the
+    public API in a unit test (a sequential test always sees the reactive
+    clear() finish before the next request builds, and so cannot tell
+    the two fixes apart merely by running requests one after another).
+
+    What's fully deterministic, and what this test proves: a real
+    Set-Cookie response never populates the jar at all — the actual fix,
+    checked directly on the client's own jar rather than inferred from a
+    single request's own before/after behavior (which the pre-existing
+    reactive clear() would already satisfy on its own, sequentially, and
+    so can't distinguish the two fixes). A jar that can never become
+    non-empty in the first place has nothing for
+    Cookies.set_cookie_header() to ever merge into a concurrent,
+    explicitly-authenticated request, regardless of how the two happen
+    to interleave.
+    """
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"set-cookie": "PHPSESSID=leaked-anonymous-id"})
+
+    async with session_scope(db_adapter) as session:
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+
+        # A plain anonymous request whose response sets a real session
+        # cookie — the exact shape of what leaked live against DVWA.
+        # Checked on the client's own jar mid-request (via a hook fired
+        # before this request's own reactive clear() runs), not after
+        # the fact — a check made only afterward can't tell this fix
+        # apart from the pre-existing reactive clear(), which already
+        # leaves the jar empty by the time a single sequential request
+        # returns either way.
+        seen_during_request: list[int] = []
+        real_extract = client._client.cookies.extract_cookies
+
+        def _spy_extract(response):
+            real_extract(response)
+            seen_during_request.append(len(client._client.cookies))
+
+        client._client.cookies.extract_cookies = _spy_extract
+        await client.get("http://site.test/set-cookie")
+
+        assert seen_during_request == [0]
+        assert len(client._client.cookies) == 0
+
         await client.aclose()
 
 

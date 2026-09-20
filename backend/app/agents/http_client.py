@@ -1,4 +1,5 @@
 import asyncio
+import http.cookiejar
 import socket
 import ssl
 import time
@@ -12,6 +13,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.scope import is_in_scope
 from app.models.project import ScopeEntry
 from app.models.traffic import TrafficInteraction
+
+
+class _NoOpCookieJar(http.cookiejar.CookieJar):
+    """Never stores anything extracted from a response's Set-Cookie
+    header — see ScopedHttpClient.__init__'s docstring for why the
+    shared httpx.AsyncClient's own cookie jar must never accumulate a
+    single cookie, not just be reactively cleared after each request.
+    """
+
+    def extract_cookies(self, response, request):  # noqa: D102 — see class docstring
+        pass
 
 
 class ScopeViolationError(Exception):
@@ -85,6 +97,15 @@ class AuthenticatedSession:
     credential_set_id: UUID
     cookies: dict[str, str] = field(default_factory=dict)
     bearer_token: str | None = None
+    # Static headers sent on every request for this identity, merged in
+    # alongside the Authorization/Cookie headers this class already
+    # builds — the header-shaped equivalent of `cookies` above. Real,
+    # concrete need: an imported API collection often authenticates via
+    # a custom header (e.g. "X-API-Key") rather than a bearer token, and
+    # the existing bearer_token mechanism only ever produces a literal
+    # "Authorization: Bearer <token>" header, with no way to use a
+    # different header name.
+    extra_headers: dict[str, str] = field(default_factory=dict)
     # Nothing in this codebase populates this today (SessionManager only
     # ever produces cookies/a bearer token) — kept here, always empty
     # until something does, so app.agents.browser_session's shared
@@ -198,7 +219,15 @@ class ScopedHttpClient:
         self._scope_entries = scope_entries
         self._session = db_session
         self._client = httpx.AsyncClient(
-            timeout=timeout, follow_redirects=False, transport=transport
+            timeout=timeout,
+            follow_redirects=False,
+            transport=transport,
+            # A no-op jar, not httpx's default — see _NoOpCookieJar's
+            # docstring. Every identity's cookies are already sent
+            # explicitly per-request below; this just guarantees the
+            # client-level jar has nothing in it to leak between them,
+            # ever, rather than trying to win a race against it.
+            cookies=_NoOpCookieJar(),
         )
         # Every agent shares this one AsyncSession (Phase 2's LangGraph
         # orchestrator runs several agents truly concurrently), but a
@@ -277,6 +306,8 @@ class ScopedHttpClient:
                 headers["Authorization"] = f"Bearer {session.bearer_token}"
             if session.cookies:
                 headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in session.cookies.items())
+            if session.extra_headers:
+                headers.update(session.extra_headers)
 
         start = time.monotonic()
         try:
@@ -327,6 +358,8 @@ class ScopedHttpClient:
                 # several identities concurrently on one client and must
                 # never let them leak into a shared jar.
                 headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in session.cookies.items())
+            if session.extra_headers:
+                headers.update(session.extra_headers)
         if content_type:
             headers["Content-Type"] = content_type
         if extra_headers:
@@ -350,23 +383,39 @@ class ScopedHttpClient:
         except httpx.InvalidURL as exc:
             raise ScopeViolationError(f"URL httpx refuses to parse: {url} ({exc})") from exc
         finally:
-            # httpx.AsyncClient auto-extracts and persists every
-            # Set-Cookie it ever sees into its own implicit jar,
-            # regardless of the fact that every cookie this class sends
-            # is already built explicitly above — directly contradicting
-            # this class's own stated "never let identities leak into a
-            # shared jar" design. Real, observed failure against DVWA: a
-            # scan with 9+ agents hammering the target truly concurrently
-            # (many of them anonymous, session=None) filled this jar with
-            # a churn of different PHPSESSID values; once contaminated,
-            # httpx started merging jar cookies into supposedly-explicit
-            # session-bearing requests too, silently downgrading
-            # authenticated probes to anonymous ones for the rest of the
-            # scan — injection/xss found nothing not because DVWA wasn't
-            # vulnerable, but because every probe after the jar got
-            # polluted was quietly redirected to the login page instead.
-            # Clearing after every single request guarantees the jar
-            # never accumulates anything to leak in the first place.
+            # Real, observed failure against DVWA: httpx.AsyncClient
+            # auto-extracts and persists every Set-Cookie it ever sees
+            # into its own implicit jar, and merges that jar into every
+            # SUBSEQUENT outgoing request's Cookie header (appended after
+            # whatever this method already built explicitly above) —
+            # directly contradicting this class's "never let identities
+            # leak into a shared jar" design. A scan with 9+ agents
+            # hammering the target truly concurrently (many of them
+            # anonymous, session=None) filled this jar with a churn of
+            # different PHPSESSID values; once contaminated, httpx merged
+            # jar cookies into supposedly-explicit session-bearing
+            # requests too — PHP takes the LAST same-named cookie in a
+            # merged header, so a stale/anonymous PHPSESSID appended after
+            # the real one silently won — injection/xss/stored_xss/
+            # file_upload/csp_bypass all found nothing in one real scan
+            # not because DVWA wasn't vulnerable, but because every probe
+            # after the jar got polluted was quietly redirected to the
+            # login page instead.
+            #
+            # Clearing the jar here reactively is NOT sufficient under
+            # real concurrency: a second request can be *built* (and read
+            # the still-dirty jar) while a first request's response has
+            # already populated it but this `finally` hasn't run yet —
+            # confirmed by tracing httpx's own Request.__init__, which
+            # merges Client.cookies into the request via
+            # Cookies.set_cookie_header() whenever the client-level jar
+            # is non-empty at build time, regardless of an explicit
+            # Cookie header already being present. The actual fix is
+            # upstream, in __init__: the client is constructed with
+            # `cookies=_NoOpCookieJar()`, which never stores a Set-Cookie
+            # in the first place — the jar is now permanently empty, so
+            # there is nothing to race over. This clear() is a harmless,
+            # redundant belt-and-suspenders left in place, not the fix.
             self._client.cookies.clear()
         elapsed_ms = (time.monotonic() - start) * 1000
 

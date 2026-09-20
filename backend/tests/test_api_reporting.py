@@ -38,6 +38,7 @@ async def _seed_scan_run_with_findings(
                     technical_description="technical text",
                     remediation="remediation text",
                     retest_status=spec.get("retest_status", "open"),
+                    steps_to_reproduce=spec.get("steps_to_reproduce", []),
                 )
             )
         await session.commit()
@@ -144,6 +145,46 @@ async def test_report_vgs_docx_groups_findings_by_check_and_title(client, db_ada
     assert full_text.count("CVSS Score:") == 1
     assert "site.test/a" in full_text
     assert "site.test/b" in full_text
+
+
+async def test_report_vgs_docx_includes_steps_to_reproduce_per_endpoint(client, db_adapter):
+    """§ items 4/5: the one-shot per-scan-run VGS export must carry each
+    finding's real steps_to_reproduce verbatim, with one evidence step
+    per affected endpoint (not just the first one found) — a developer
+    should be able to tell exactly how to reproduce each confirmed
+    instance of the vulnerability."""
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+    scan_run_id = await _seed_scan_run_with_findings(
+        db_adapter,
+        version_id,
+        findings=[
+            {
+                "check_id": "missing-hsts",
+                "severity": "Low",
+                "affected_endpoints": ["http://site.test/a"],
+                "steps_to_reproduce": ["1. Request http://site.test/a over HTTPS.", "2. Observe no HSTS header."],
+            },
+            {
+                "check_id": "missing-hsts",
+                "severity": "Low",
+                "affected_endpoints": ["http://site.test/b"],
+                "steps_to_reproduce": ["1. Request http://site.test/b over HTTPS.", "2. Observe no HSTS header."],
+            },
+        ],
+    )
+
+    resp = await client.get(f"/scan-runs/{scan_run_id}/report.vgs.docx", headers=admin["headers"])
+    assert resp.status_code == 200, resp.text
+
+    from docx import Document
+
+    document = Document(io.BytesIO(resp.content))
+    full_text = "\n".join(p.text for p in document.paragraphs)
+    assert "1. Request http://site.test/a over HTTPS." in full_text
+    assert "1. Request http://site.test/b over HTTPS." in full_text
+    assert full_text.count("Step 1 of 2:") == 1
+    assert full_text.count("Step 2 of 2:") == 1
 
 
 async def test_diff_report_classifies_new_fixed_and_still_open(client, db_adapter):

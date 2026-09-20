@@ -1,0 +1,42 @@
+# CSP bypass agent's catalog (§3) — a Content-Security-Policy that
+# allows 'self' in script-src is not the same guarantee as "no script
+# injection possible": any same-origin endpoint that reflects a
+# JSONP-style "callback" parameter into its response, unescaped, as a
+# function-call prefix, is itself a script the policy has no way to
+# distinguish from a legitimate one. See app.agents.csp_bypass_proof.
+
+- id: csp-bypass-jsonp-callback
+  title: "Content-Security-Policy Bypass via Same-Origin JSONP Callback"
+  owasp_2025_category: "A02 Security Misconfiguration"
+  cwe_id: "CWE-693"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+  cvss_score: 7.4
+  portswigger_reference_url: "https://portswigger.net/web-security/csp/bypasses"
+  plain_language_summary: >
+    This page's Content-Security-Policy is supposed to stop injected
+    scripts from running, but a same-origin endpoint it (or a script it
+    loads) references reflects a "callback" parameter directly into its
+    response, unescaped. Because the policy trusts anything loaded from
+    the site's own origin, an attacker can point a script tag at that
+    endpoint with a malicious callback value and run arbitrary
+    JavaScript exactly as if the policy weren't there at all.
+  technical_description: >
+    {url} sends a Content-Security-Policy that permits scripts from
+    'self'. {jsonp_url} is a same-origin endpoint that reflects its
+    "callback" query parameter directly into the response body,
+    unescaped, as a function-call prefix (e.g. requesting
+    "?callback=x" returns "x({{...}})"). Loading {url} in a real
+    browser and injecting a <script src="{jsonp_url_with_payload}">
+    element — exactly as an attacker-controlled gadget already present
+    on the page could — executed arbitrary JavaScript in that page's
+    origin despite the policy.
+  remediation: >
+    Never reflect a request parameter directly into a script-context
+    response. If a JSONP-style API is required, validate the callback
+    name against a strict allow-list (e.g. `^[A-Za-z_$][\w$]*$` and a
+    known set of expected values), and prefer CORS-based JSON APIs plus
+    a "strict-dynamic"/nonce-based CSP over relying on 'self' alone.
+  references:
+    - "https://cwe.mitre.org/data/definitions/693.html"
+    - "https://portswigger.net/web-security/csp/bypasses"

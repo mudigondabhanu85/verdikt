@@ -80,6 +80,7 @@ export interface CredentialSetOut {
   login_method: string | null
   token_response_path: string | null
   extra_cookies: Record<string, string> | null
+  extra_headers: Record<string, string> | null
   privilege_rank: number | null
 }
 
@@ -106,6 +107,31 @@ export interface BusinessRuleOut {
   title: string
   config: Record<string, unknown>
   source: 'analyst' | 'ai_generated'
+}
+
+// Mirrors app/schemas/chatbot_target.py's ChatbotTargetOut — a
+// conversational endpoint for chatbot/LLM prompt-injection testing
+// (app.agents.chatbot_injection). No auto-discovery is possible, so this
+// is always hand-authored, the same reason CredentialSet is.
+export interface ChatbotTargetOut {
+  id: string
+  version_id: string
+  label: string
+  endpoint_url: string
+  http_method: string
+  content_type: string
+  response_text_path: string
+  auth_header_name: string | null
+  masked_reference: string | null
+}
+
+// Mirrors app/schemas/chatbot_agency_probe.py's ChatbotAgencyProbeOut —
+// an analyst's plain-language description of an action one specific
+// ChatbotTarget should never agree to/perform (LLM03 Excessive Agency).
+export interface ChatbotAgencyProbeOut {
+  id: string
+  chatbot_target_id: string
+  forbidden_action: string
 }
 
 // Mirrors app/schemas/business_rule.py's per-rule-type config shapes

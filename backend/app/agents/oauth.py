@@ -155,6 +155,7 @@ class OAuthAgent:
                     finding_id=finding.id,
                     request_raw=request_raw,
                     response_raw=response_raw,
+                    payload=_ATTACKER_REDIRECT,
                     screenshot_refs=screenshot_refs,
                 )
             )

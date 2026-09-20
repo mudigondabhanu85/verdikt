@@ -1,0 +1,178 @@
+# Chatbot/LLM prompt-injection agent's catalog (Phase 1 of the OWASP LLM
+# Top 10 checklist — see app.agents.chatbot_injection). Category labels
+# use OWASP's own LLM Top 10 2026 taxonomy (LLM01/LLM08) directly rather
+# than the traditional OWASP Top 10 Web categories every other check in
+# this catalog uses — a chatbot's prompt-injection surface doesn't map
+# cleanly onto that list, and forcing it there would misdescribe the risk.
+
+- id: chatbot-prompt-injection-direct
+  title: "Chatbot Direct Prompt Injection"
+  owasp_2025_category: "LLM01 Prompt Injection"
+  cwe_id: "CWE-1427"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+  cvss_score: 7.5
+  portswigger_reference_url: "https://portswigger.net/web-security/llm-attacks"
+  plain_language_summary: >
+    This chatbot can be made to ignore its own instructions and follow
+    whatever an attacker tells it to do instead, simply by phrasing a
+    message the right way. An attacker could use this to make the bot
+    say things it shouldn't, misrepresent the organization, or — for a
+    bot with any ability to take real actions — attempt to steer it
+    toward doing something it was never authorized to do.
+  technical_description: >
+    Sending {url} the message {payload} caused the chatbot's reply to
+    contain the exact marker requested, verbatim — direct proof the
+    message overrode whatever instructions the bot was actually given,
+    rather than the bot simply refusing or responding on-topic.
+  remediation: >
+    Treat every user message as untrusted input, the same as any other
+    injection surface — never let it be concatenated directly into the
+    model's instruction context with equal trust to the system prompt.
+    Use a model/API that supports a genuine system/user role separation,
+    add an instruction-hierarchy-aware system prompt, and validate that
+    output conforms to expected shape/intent before acting on it or
+    relaying it, especially before any downstream action a confirmed
+    injection could otherwise steer.
+  references:
+    - "https://cwe.mitre.org/data/definitions/1427.html"
+    - "https://owasp.org/www-project-top-10-for-large-language-model-applications/"
+
+- id: chatbot-system-prompt-extraction
+  title: "Chatbot System Prompt / Hidden Context Exposure"
+  owasp_2025_category: "LLM08 Hidden Context Exposure"
+  cwe_id: "CWE-200"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+  cvss_score: 5.3
+  portswigger_reference_url: "https://portswigger.net/web-security/llm-attacks"
+  plain_language_summary: >
+    Asking this chatbot the right way reveals its own internal
+    instructions, configuration, or the tools/data sources it has access
+    to — information that was meant to stay hidden from users. An
+    attacker can use this to understand exactly how the bot is guarded
+    and craft a more effective attack around what it reveals.
+  technical_description: >
+    Sending {url} the message {payload} produced a reply that an
+    independent review confirmed reads as genuine leaked system-prompt
+    or configuration content, not a refusal or an on-topic answer —
+    reviewed twice, once as an initial assessment and once by a second,
+    explicitly adversarial pass instructed to try to disprove the first.
+  remediation: >
+    Never rely on the system prompt alone to keep sensitive instructions,
+    tool lists, or data-source details confidential — treat anything
+    placed in the model's context as potentially recoverable. Keep
+    genuinely sensitive logic and credentials out of the prompt entirely
+    (enforce them in code around the model instead), and add output
+    filtering that blocks responses resembling the system prompt's own
+    structure/wording.
+  references:
+    - "https://cwe.mitre.org/data/definitions/200.html"
+    - "https://owasp.org/www-project-top-10-for-large-language-model-applications/"
+
+- id: chatbot-improper-output-handling
+  title: "Chatbot Improper Output Handling"
+  owasp_2025_category: "LLM10 Improper Output Handling"
+  cwe_id: "CWE-79"
+  severity: "Medium"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:N"
+  cvss_score: 4.7
+  portswigger_reference_url: "https://portswigger.net/web-security/llm-attacks"
+  plain_language_summary: >
+    This chatbot echoes attacker-controlled text back in its own reply
+    without neutralizing HTML-special characters. If anything downstream
+    — an admin dashboard, a chat widget, a logging/analytics view, an
+    email digest of conversations — ever renders this bot's replies as
+    HTML without separately escaping them, a malicious message sent to
+    the bot could execute as script wherever that reply is displayed.
+  technical_description: >
+    Sending {url} the message {payload} caused the chatbot's reply to
+    contain that exact markup unescaped, verbatim, rather than with its
+    angle brackets neutralized — confirming the bot's own output pipeline
+    does not sanitize attacker-controlled content before including it in
+    a reply. This proves the underlying flaw (no output sanitization) at
+    the API/JSON level; it does not by itself prove a specific page
+    renders this reply unsanitized, since no such page was identified as
+    part of this check — treat it as a confirmed root cause requiring
+    remediation regardless of whether a live downstream renderer is
+    known yet.
+  remediation: >
+    Treat a chatbot's own reply text as untrusted output, the same as any
+    other value that originated from user input — HTML-escape it at
+    render time in every surface that displays it (dashboards, widgets,
+    logs, digests), rather than trusting the model or the API layer to
+    have already neutralized it. Prefer a strict allow-list of expected
+    reply formatting over raw HTML pass-through.
+  references:
+    - "https://cwe.mitre.org/data/definitions/79.html"
+    - "https://owasp.org/www-project-top-10-for-large-language-model-applications/"
+
+- id: chatbot-excessive-agency
+  title: "Chatbot Excessive Agency"
+  owasp_2025_category: "LLM03 Excessive Agency"
+  cwe_id: "CWE-863"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+  cvss_score: 7.5
+  portswigger_reference_url: "https://portswigger.net/web-security/llm-attacks"
+  plain_language_summary: >
+    This chatbot can be talked into agreeing to, confirming, or
+    simulating an action it was never authorized to take on the
+    requester's behalf — an attacker doesn't need to compromise anything
+    technical, just phrase a request the right way and the bot believes
+    it has permission it should not have.
+  technical_description: >
+    Sending {url} the message {payload}, framed as testing the forbidden
+    action "{forbidden_action}", produced a reply that an independent
+    review confirmed genuinely agrees to, confirms, or simulates having
+    performed that action — not a refusal, an escalation-to-a-human
+    response, or a restatement of the request — reviewed twice, once as
+    an initial assessment and once by a second, explicitly adversarial
+    pass instructed to try to disprove the first.
+  remediation: >
+    Never let a model's own judgment be the sole authorization check for
+    a real, consequential action — enforce authorization in code around
+    the model (verify the requester's actual identity/entitlement against
+    the system of record) before any tool call or state change executes,
+    regardless of how confident or authoritative the model's own output
+    sounds. Treat the model as a request-drafting layer, not a
+    decision-making one, for anything irreversible or high-impact.
+  references:
+    - "https://cwe.mitre.org/data/definitions/863.html"
+    - "https://owasp.org/www-project-top-10-for-large-language-model-applications/"
+
+- id: chatbot-unexpected-code-execution
+  title: "Chatbot Unexpected Code Execution"
+  owasp_2025_category: "ASI05 Unexpected Code Execution"
+  cwe_id: "CWE-94"
+  severity: "Critical"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
+  cvss_score: 9.8
+  portswigger_reference_url: "https://portswigger.net/web-security/llm-attacks"
+  plain_language_summary: >
+    This chatbot can be talked into running attacker-supplied code and
+    reporting back as if it actually executed it — the same underlying
+    risk as classic command injection, just reached by asking an AI
+    agent to run something instead of exploiting a web form directly.
+    Depending on what execution environment sits behind the bot, this
+    could mean real arbitrary code execution on real infrastructure.
+  technical_description: >
+    Sending {url} the message {payload} produced a reply that an
+    independent review confirmed genuinely indicates the requested code
+    was run/executed and reports an outcome — not a refusal, an
+    explanation that it cannot execute code, or a description of what
+    the code would do without claiming to have run it — reviewed twice,
+    once as an initial assessment and once by a second, explicitly
+    adversarial pass instructed to try to disprove the first.
+  remediation: >
+    Never give a model the ability to execute arbitrary code/commands it
+    was handed by a user, directly or indirectly. If code execution is a
+    genuine feature, run it in a tightly sandboxed, resource-limited
+    environment with no access to sensitive systems, validate/allow-list
+    what can be executed before it ever reaches an interpreter, and treat
+    any model claim of "I ran this" as unverified until confirmed through
+    a separate, code-level audit trail — never trust the model's own
+    narration of what it did.
+  references:
+    - "https://cwe.mitre.org/data/definitions/94.html"
+    - "https://owasp.org/www-project-top-10-for-large-language-model-applications/"

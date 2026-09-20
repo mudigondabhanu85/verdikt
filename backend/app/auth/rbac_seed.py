@@ -25,6 +25,7 @@ RESOURCES = (
     "org_branding",
     "saml_config",
     "vgs_vulnerability",
+    "chatbot_target",
 )
 ACTIONS = ("create", "read", "update", "delete")
 
@@ -56,6 +57,7 @@ def baseline_grants() -> list[tuple[str, str, str]]:
         "ticketing_config",
         "cmdb_config",
         "vgs_config",
+        "chatbot_target",
     ):
         for action in ACTIONS:
             grants.append(("project_lead", resource, action))
@@ -75,6 +77,10 @@ def baseline_grants() -> list[tuple[str, str, str]]:
     # effectively has) so that stays out of analyst's blanket grants.
     grants.append(("analyst", "finding", "update"))
     grants.append(("analyst", "business_rule", "create"))
+    # Same "analyst can hand-author the testing input, delete stays
+    # lead/admin-only" pattern as business_rule — configuring a chatbot
+    # target is part of running the scan, not an administrative action.
+    grants.append(("analyst", "chatbot_target", "create"))
 
     # viewer: read-only everywhere.
     for resource in RESOURCES:
@@ -184,3 +190,10 @@ def vgs_vulnerability_resource_grants() -> list[tuple[str, str, str]]:
     incremental migration adding this resource, same reasoning as
     scan_resource_grants() above."""
     return _grants_for_resource("vgs_vulnerability")
+
+
+def chatbot_target_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "chatbot_target" resource rows — used by the incremental
+    migration adding this resource, same reasoning as
+    scan_resource_grants() above."""
+    return _grants_for_resource("chatbot_target")

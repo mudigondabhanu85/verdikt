@@ -3,6 +3,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -117,7 +118,7 @@ _INJECTION_METADATA = {
         ),
     },
     "path-traversal": {
-        "title": "Path Traversal",
+        "title": "Path Traversal / Local File Inclusion",
         "owasp_2025_category": "A01 Broken Access Control",
         "cwe_id": "CWE-22",
         "severity": "High",
@@ -176,6 +177,11 @@ class InjectionCandidate:
     baseline_response: httpx.Response
     probe_response: httpx.Response
     probe_fn: ProbeFn
+    # Set only by _probe_sqli_second_order — the page whose response
+    # actually carried the true/false signal, when it's a different page
+    # than the one the payload was submitted to. None means "same page",
+    # the case every other probe function covers.
+    consumer_url: str | None = None
 
 
 _MAX_PARAMETERS_IN_PAYLOAD_PROMPT = 40
@@ -341,12 +347,108 @@ async def _probe_sqli_boolean(
     return None
 
 
+def _consumer_page_url(url: str) -> str | None:
+    """The directory URL one level up from a page's own filename — e.g.
+    ".../vulnerabilities/sqli/session-input.php" -> ".../vulnerabilities/sqli/".
+    Returns None for a URL that's already a directory index (nothing
+    shallower to distinguish from itself).
+
+    This is the "consumer page" _probe_sqli_second_order checks instead
+    of the target's own response — see that function's docstring for why
+    a same-directory index page is a reasonable, generalizable guess for
+    where a session-scoped input actually gets used, not a DVWA-specific
+    hardcode.
+    """
+    parsed = urlsplit(url)
+    if not parsed.path or parsed.path.endswith("/"):
+        return None
+    directory = parsed.path.rsplit("/", 1)[0] + "/"
+    return urlunsplit((parsed.scheme, parsed.netloc, directory, "", ""))
+
+
+async def _probe_sqli_second_order(
+    client: ScopedHttpClient, target: ProbeTarget, session: AuthenticatedSession | None = None
+) -> InjectionCandidate | None:
+    """Second-order (a.k.a. stored) SQL injection: some forms don't query
+    a database themselves at all — they just persist a value (into a
+    session variable, a database row, a config file) that a DIFFERENT
+    page's query uses later. _probe_sqli_boolean and _probe_sqli_error
+    are both structurally blind to this: they only ever compare the
+    immediate response to the same request that carried the payload, so
+    a form like this always looks identical regardless of what was
+    submitted, and the actual vulnerability goes completely unreported.
+
+    A real, live-found example (§14): DVWA's own SQL Injection page at
+    "High" difficulty replaces its normal <form> with a link that opens
+    a popup (now itself discoverable — app.agents.recon's onclick-link
+    support) whose only job is `$_SESSION['id'] = $_POST['id']`; the
+    actual unescaped `WHERE user_id = '$id'` query — just as injectable
+    as at "Low" — runs on a completely different page the next time it's
+    loaded. This targets the one directory-relative page most likely to
+    be that "different page": the target's own containing directory's
+    index (`_consumer_page_url`) — cheap to guess generically (no
+    DVWA-specific path hardcoded) since a session-scoped helper endpoint
+    overwhelmingly lives right next to the page that actually uses it.
+
+    POST-only: a GET parameter's own page already gets tested directly
+    by every other probe, so this would just be redundant work for it.
+    """
+    if target.method != "POST":
+        return None
+    consumer_url = _consumer_page_url(target.url)
+    if consumer_url is None or consumer_url == target.url:
+        return None
+
+    for true_payload, false_payload in _SQLI_BOOLEAN_PAYLOAD_PAIRS:
+        await fetch_with_value(client, target, true_payload, session)
+        true_resp = await client.get(consumer_url, session=session)
+        await fetch_with_value(client, target, false_payload, session)
+        false_resp = await client.get(consumer_url, session=session)
+        if true_resp.status_code != false_resp.status_code:
+            continue
+        len_true, len_false = len(true_resp.text), len(false_resp.text)
+        if abs(len_true - len_false) > max(20, 0.05 * max(len_true, len_false, 1)):
+            return InjectionCandidate(
+                payload_type="sqli-boolean",
+                target=target,
+                payload=true_payload,
+                deterministic_signal=(
+                    f"After submitting this form, {consumer_url}'s response length differs "
+                    f"meaningfully between a true condition ({len_true} bytes) and a false "
+                    f"condition ({len_false} bytes) — consistent with the submitted value "
+                    "reaching an unescaped SQL query on a different page than the one it was "
+                    "submitted to."
+                ),
+                baseline_response=false_resp,
+                probe_response=true_resp,
+                probe_fn=_probe_sqli_second_order,
+                consumer_url=consumer_url,
+            )
+    return None
+
+
 async def _probe_command_injection(
     client: ScopedHttpClient, target: ProbeTarget, session: AuthenticatedSession | None = None
 ) -> InjectionCandidate | None:
     marker = f"VERDIKT{uuid.uuid4().hex[:8]}"
     baseline = await fetch_with_value(client, target, BASELINE_VALUE, session)
-    for template in ("; echo {marker}", "| echo {marker}", "`echo {marker}`"):
+    # The first three are the "obvious" separators — but a blacklist-style
+    # filter that strips exact substrings like "; ", "| " (with a
+    # trailing space) or "&" entirely defeats all three while leaving the
+    # underlying shell call just as injectable (verified live: DVWA High's
+    # exec filter strips '||', '&', ';', '| ' (pipe+space), '-', '$', '(',
+    # ')', '`' — notably NOT a bare '|' with no trailing space, and not a
+    # literal newline). The last three exist specifically to survive that
+    # class of filter, each via a different separator a naive blacklist
+    # commonly misses:
+    for template in (
+        "; echo {marker}",
+        "| echo {marker}",
+        "`echo {marker}`",
+        "|echo {marker}",  # pipe, no trailing space — survives a "| " (pipe+space) blacklist entry
+        "\necho {marker}",  # a raw newline separates shell commands exactly like ';' does
+        "&& echo {marker}",  # a filter that blocks lone ';'/'|' commonly leaves '&&' untouched
+    ):
         payload = template.format(marker=marker)
         probe = await fetch_with_value(client, target, payload, session)
         if marker in probe.text and marker not in baseline.text:
@@ -463,6 +565,7 @@ async def _probe_nosqli(
 _PROBE_FNS: list[ProbeFn] = [
     _probe_sqli_error,
     _probe_sqli_boolean,
+    _probe_sqli_second_order,
     _probe_command_injection,
     _probe_ssti,
     _probe_path_traversal,
@@ -643,20 +746,35 @@ class InjectionAgent:
             portswigger_reference_url=meta["portswigger_reference_url"],
             cvss_vector=meta["cvss_vector"],
             cvss_score=meta["cvss_score"],
-            affected_endpoints=[candidate.target.url],
+            affected_endpoints=(
+                [candidate.target.url, candidate.consumer_url]
+                if candidate.consumer_url
+                else [candidate.target.url]
+            ),
             plain_language_summary=meta["plain_language_summary"],
             technical_description=(
                 f"{candidate.deterministic_signal} An independent adversarial "
                 f"review attempted to disprove this and could not: "
                 f"{validation_verdict.reasoning}"
             ),
-            steps_to_reproduce=[
-                f"1. Send a {candidate.target.method} request to {candidate.target.url} with "
-                f"parameter '{candidate.target.param_name}' set to an innocuous baseline value.",
-                f"2. Send the same request with '{candidate.target.param_name}' set to: "
-                f"{candidate.payload}",
-                f"3. Compare the two responses: {candidate.deterministic_signal}",
-            ],
+            steps_to_reproduce=(
+                [
+                    f"1. Submit a {candidate.target.method} request to {candidate.target.url} with "
+                    f"parameter '{candidate.target.param_name}' set to an innocuous baseline value, "
+                    f"then load {candidate.consumer_url}.",
+                    f"2. Submit the same request with '{candidate.target.param_name}' set to: "
+                    f"{candidate.payload} — then load {candidate.consumer_url} again.",
+                    f"3. Compare the two loads of {candidate.consumer_url}: {candidate.deterministic_signal}",
+                ]
+                if candidate.consumer_url
+                else [
+                    f"1. Send a {candidate.target.method} request to {candidate.target.url} with "
+                    f"parameter '{candidate.target.param_name}' set to an innocuous baseline value.",
+                    f"2. Send the same request with '{candidate.target.param_name}' set to: "
+                    f"{candidate.payload}",
+                    f"3. Compare the two responses: {candidate.deterministic_signal}",
+                ]
+            ),
             remediation=meta["remediation"],
             references=[meta["portswigger_reference_url"], f"https://cwe.mitre.org/data/definitions/"
             f"{meta['cwe_id'].split('-')[1]}.html"],
@@ -680,6 +798,7 @@ class InjectionAgent:
                     finding_id=finding.id,
                     request_raw=request_raw,
                     response_raw=response_raw,
+                    payload=candidate.payload,
                     screenshot_refs=screenshot_refs,
                 )
             )

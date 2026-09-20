@@ -92,6 +92,8 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             targets=targets,
             credential_sets=[credential],
             business_rules=[],
+            chatbot_targets=[],
+            chatbot_agency_probes=[],
             budget_guard=guard,
             ai_model="fake-model",
             scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],
@@ -113,6 +115,7 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             "deserialization",
             "dom_xss",
             "ssrf",
+            "open_redirect",
             "prototype_pollution",
             "request_smuggling",
             "oauth",
@@ -124,6 +127,7 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             "xss",
             "auth",
             "access_control",
+            "chatbot_injection",
             "ai_business_logic_plan",
             "business_logic",
             "csrf",
@@ -134,6 +138,8 @@ async def test_graph_runs_agents_with_real_parallelism_and_merges_state(db_adapt
             "csv_injection",
             "session_invalidation",
             "vulnerable_components",
+            "csp_bypass",
+            "api_version",
         }
         assert all(j.status == "completed" for j in jobs), jobs
 
@@ -226,6 +232,8 @@ async def test_graph_wires_the_right_model_tier_to_the_right_node(db_adapter, mo
             targets=[Target(host="site.test", port=80, base_url="http://site.test/")],
             credential_sets=[],
             business_rules=[],
+            chatbot_targets=[],
+            chatbot_agency_probes=[],
             budget_guard=guard,
             ai_model="claude-sonnet-5",
             scope_entries=[ScopeEntry(host="site.test", port=80, in_scope=True)],

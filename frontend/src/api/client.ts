@@ -8,6 +8,8 @@ import type {
   BurpImportResult,
   BurpScanCreated,
   BusinessRuleOut,
+  ChatbotAgencyProbeOut,
+  ChatbotTargetOut,
   CMDBConfigOut,
   CredentialSetOut,
   DashboardOut,
@@ -295,6 +297,7 @@ export const api = {
         login_content_type?: string | null
         token_response_path?: string | null
         extra_cookies?: Record<string, string> | null
+        extra_headers?: Record<string, string> | null
         privilege_rank?: number | null
       },
     ) => request<CredentialSetOut>(`/versions/${versionId}/credentials`, { method: 'POST', body }),
@@ -312,6 +315,7 @@ export const api = {
         login_content_type?: string | null
         token_response_path?: string | null
         extra_cookies?: Record<string, string> | null
+        extra_headers?: Record<string, string> | null
         privilege_rank?: number | null
       },
     ) =>
@@ -365,6 +369,39 @@ export const api = {
       request<BusinessRuleOut>(`/versions/${versionId}/business-rules`, { method: 'POST', body }),
     delete: (versionId: string, ruleId: string) =>
       request<void>(`/versions/${versionId}/business-rules/${ruleId}`, { method: 'DELETE' }),
+  },
+
+  chatbotTargets: {
+    list: (versionId: string) => request<ChatbotTargetOut[]>(`/versions/${versionId}/chatbot-targets`),
+    create: (
+      versionId: string,
+      body: {
+        label: string
+        endpoint_url: string
+        http_method: string
+        request_body_template: string
+        content_type: string
+        response_text_path: string
+        auth_header_name?: string | null
+        auth_header_value?: string | null
+      },
+    ) => request<ChatbotTargetOut>(`/versions/${versionId}/chatbot-targets`, { method: 'POST', body }),
+    delete: (versionId: string, targetId: string) =>
+      request<void>(`/versions/${versionId}/chatbot-targets/${targetId}`, { method: 'DELETE' }),
+  },
+
+  chatbotAgencyProbes: {
+    list: (versionId: string, targetId: string) =>
+      request<ChatbotAgencyProbeOut[]>(`/versions/${versionId}/chatbot-targets/${targetId}/agency-probes`),
+    create: (versionId: string, targetId: string, body: { forbidden_action: string }) =>
+      request<ChatbotAgencyProbeOut>(`/versions/${versionId}/chatbot-targets/${targetId}/agency-probes`, {
+        method: 'POST',
+        body,
+      }),
+    delete: (versionId: string, targetId: string, probeId: string) =>
+      request<void>(`/versions/${versionId}/chatbot-targets/${targetId}/agency-probes/${probeId}`, {
+        method: 'DELETE',
+      }),
   },
 
   scanRuns: {

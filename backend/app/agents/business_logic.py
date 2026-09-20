@@ -110,6 +110,13 @@ class BusinessLogicCandidate:
     deterministic_signal: str
     evidence_response: httpx.Response
     endpoint: str
+    # Only set for rule types with a genuine substituted-value payload
+    # (resource_isolation's swapped ID, price_or_quantity_tampering's
+    # tampered value) — workflow_order and race_condition_limited_use
+    # findings differ by *sequence* or *concurrency*, not by any
+    # substring in the request itself, so there's nothing honest to set
+    # here for those.
+    payload: str | None = None
 
 
 DetectFn = Callable[
@@ -159,6 +166,7 @@ async def _detect_resource_isolation(
                         ),
                         evidence_response=alt_resp,
                         endpoint=alt_url,
+                        payload=alt_url,
                     )
         return None
 
@@ -205,6 +213,7 @@ async def _detect_resource_isolation(
                     ),
                     evidence_response=alt_resp,
                     endpoint=alt_url,
+                    payload=alt_url,
                 )
     return None
 
@@ -280,6 +289,7 @@ async def _detect_price_tampering(
                 ),
                 evidence_response=tampered_resp,
                 endpoint=url,
+                payload=tamper_value,
             )
     return None
 
@@ -475,6 +485,7 @@ class BusinessLogicAgent:
                     finding_id=finding.id,
                     request_raw=request_raw,
                     response_raw=response_raw,
+                    payload=candidate.payload,
                     screenshot_refs=screenshot_refs,
                 )
             )

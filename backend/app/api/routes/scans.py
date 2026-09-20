@@ -34,7 +34,11 @@ from app.reporting.grouping import group_findings
 from app.reporting.html_report import BrandingInfo, render_html_report
 from app.reporting.pdf_report import render_pdf_report
 from app.reporting.screenshots import load_screenshots_by_finding
-from app.reporting.vgs_docx_report import build_vulnerability_from_group, render_vgs_docx_report
+from app.reporting.vgs_docx_report import (
+    build_evidence_steps_for_group,
+    build_vulnerability_from_group,
+    render_vgs_docx_report,
+)
 from app.schemas.attack_chain import AttackChainOut
 from app.schemas.finding import FindingOut
 from app.schemas.scan import AgentJobOut, ScanRunCreate, ScanRunDetail, ScanRunDiffOut, ScanRunOut
@@ -489,25 +493,22 @@ async def get_report_vgs_docx(
         for order_index, group in enumerate(groups)
     ]
 
+    all_detailed_instance_ids = [
+        instance.id for group in groups for instance in group.detailed_instances
+    ]
+    evidence_by_finding_id: dict[uuid.UUID, Evidence] = {}
+    if all_detailed_instance_ids:
+        evidence_result = await session.execute(
+            select(Evidence).where(Evidence.finding_id.in_(all_detailed_instance_ids))
+        )
+        evidence_by_finding_id = {e.finding_id: e for e in evidence_result.scalars().all()}
+
     evidence_steps_by_vuln_id: dict[uuid.UUID, list[VgsEvidenceStep]] = {}
     screenshot_object_keys: set[str] = set()
     for vuln, group in zip(vulnerabilities, groups):
-        evidence_result = await session.execute(
-            select(Evidence).where(Evidence.finding_id == group.shared.id)
-        )
-        evidence = evidence_result.scalar_one_or_none()
-        steps: list[VgsEvidenceStep] = []
-        if evidence is not None and evidence.screenshot_refs:
-            steps.append(
-                VgsEvidenceStep(
-                    id=uuid.uuid4(),
-                    report_vulnerability_id=vuln.id,
-                    step_order=0,
-                    comment=evidence.additional_notes or "Captured automatically from the scan finding.",
-                    screenshot_object_keys=list(evidence.screenshot_refs),
-                )
-            )
-            screenshot_object_keys.update(evidence.screenshot_refs)
+        steps = build_evidence_steps_for_group(vuln.id, group, evidence_by_finding_id)
+        for step in steps:
+            screenshot_object_keys.update(step.screenshot_object_keys)
         evidence_steps_by_vuln_id[vuln.id] = steps
 
     storage = get_object_storage()

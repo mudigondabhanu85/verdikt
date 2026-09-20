@@ -7,6 +7,8 @@ from app.models.api_key import ApiKey
 from app.models.attack_chain import AttackChain, AttackChainEvidence
 from app.models.audit import AuditLogEntry
 from app.models.business_rule import BusinessRule
+from app.models.chatbot_agency_probe import ChatbotAgencyProbe
+from app.models.chatbot_target import ChatbotTarget
 from app.models.cmdb_config import CMDBConfig
 from app.models.credential import CredentialSet
 from app.models.finding import Evidence, Finding
@@ -38,6 +40,8 @@ __all__ = [
     "AttackChainEvidence",
     "AuditLogEntry",
     "BusinessRule",
+    "ChatbotAgencyProbe",
+    "ChatbotTarget",
     "CMDBConfig",
     "CredentialSet",
     "Evidence",

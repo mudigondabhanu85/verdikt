@@ -112,6 +112,36 @@ async def test_credential_set_extra_cookies_round_trip(client):
     assert listed.json()[0]["extra_cookies"] == {"security": "low"}
 
 
+async def test_credential_set_extra_headers_round_trip(client):
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+
+    resp = await client.post(
+        f"/versions/{version_id}/credentials",
+        json={
+            "label": "API Key",
+            "credential_type": "api_token",
+            "username": "n/a",
+            "secret": "irrelevant",
+            "extra_headers": {"X-API-Key": "abc123"},
+        },
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["extra_headers"] == {"X-API-Key": "abc123"}
+
+    listed = await client.get(f"/versions/{version_id}/credentials", headers=admin["headers"])
+    assert listed.json()[0]["extra_headers"] == {"X-API-Key": "abc123"}
+
+    updated = await client.patch(
+        f"/versions/{version_id}/credentials/{resp.json()['id']}",
+        json={"extra_headers": {"X-API-Key": "rotated"}},
+        headers=admin["headers"],
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["extra_headers"] == {"X-API-Key": "rotated"}
+
+
 def _fake_recording_handle(start_url: str = "https://site.test/login"):
     from app.agents.macro import RecordingHandle
 

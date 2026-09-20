@@ -8,12 +8,14 @@ from langgraph.graph import END, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.access_control import AccessControlAgent
+from app.agents.chatbot_injection import ChatbotInjectionAgent
 from app.agents.auth_agent import AuthAgent
 from app.agents.business_logic import BusinessLogicAgent
 from app.agents.business_logic_planner import BusinessLogicPlannerAgent
 from app.agents.cache_poisoning import CachePoisoningAgent
 from app.agents.clickjacking import ClickjackingAgent
 from app.agents.cors import CorsAgent
+from app.agents.csp_bypass import CspBypassAgent
 from app.agents.csrf import CsrfAgent
 from app.agents.csv_injection import CsvInjectionAgent
 from app.agents.deserialization import DeserializationAgent
@@ -33,6 +35,8 @@ from app.agents.scope import filter_forms_out_login_only, filter_out_login_only,
 from app.agents.recon_planner import run_planner_rounds
 from app.agents.request_smuggling import RequestSmugglingAgent
 from app.agents.session_invalidation import SessionInvalidationAgent
+from app.agents.api_version import ApiVersionAgent
+from app.agents.open_redirect import OpenRedirectAgent
 from app.agents.ssrf import SsrfAgent
 from app.agents.stored_xss import StoredXssAgent
 from app.agents.traffic_seed import seed_from_imported_traffic
@@ -45,6 +49,8 @@ from app.ai.budget import BudgetGuard, budget_stop_error
 from app.ai.model_tiers import resolve_tiered_model
 from app.config import get_settings
 from app.models.business_rule import BusinessRule
+from app.models.chatbot_agency_probe import ChatbotAgencyProbe
+from app.models.chatbot_target import ChatbotTarget
 from app.models.credential import CredentialSet
 from app.models.finding import Finding
 from app.models.project import ScopeEntry
@@ -59,6 +65,10 @@ class ScanState(TypedDict, total=False):
     discovered_forms: list[FormInfo]
     discovered_responses: dict[str, httpx.Response]
     discovered_websocket_endpoints: list[str]
+    # Endpoints referenced only from a JS fetch()/XMLHttpRequest.open()
+    # string literal, never any <a href>/<form> — see
+    # app.agents.recon._JS_ENDPOINT_URL_RE.
+    discovered_api_endpoints: list[str]
     # Logout links (see app.agents.recon._extract_links) — captured
     # separately from discovered_endpoints because a logout link is
     # deliberately never allowed into that list at all.
@@ -90,6 +100,8 @@ def build_graph(
     targets: list[Target],
     credential_sets: list[CredentialSet],
     business_rules: list[BusinessRule],
+    chatbot_targets: list[ChatbotTarget],
+    chatbot_agency_probes: list[ChatbotAgencyProbe],
     budget_guard: BudgetGuard,
     ai_model: str,
     scope_entries: list[ScopeEntry],
@@ -263,6 +275,7 @@ def build_graph(
             "anonymous_responses": agent.discovered_responses,
             "discovered_websocket_endpoints": all_websocket_endpoints,
             "discovered_logout_urls": agent.discovered_logout_urls,
+            "discovered_api_endpoints": agent.discovered_api_endpoints,
             "tech_stack_fingerprint": fingerprint,
         }
 
@@ -303,7 +316,7 @@ def build_graph(
         job = await _start_job("clickjacking")
         agent = ClickjackingAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
         try:
-            findings = await agent.run(state.get("discovered_endpoints", []))
+            findings = await agent.run(state.get("discovered_endpoints", []), state.get("sessions", {}))
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
@@ -377,6 +390,17 @@ def build_graph(
         )
         try:
             findings = await agent.run(state.get("discovered_endpoints", []), state.get("sessions", {}))
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def csp_bypass_node(state: ScanState) -> dict:
+        job = await _start_job("csp_bypass")
+        agent = CspBypassAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
+        try:
+            findings = await agent.run(state.get("discovered_responses", {}), state.get("sessions", {}))
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
@@ -480,7 +504,12 @@ def build_graph(
         job = await _start_job("dom_xss")
         agent = DomXssAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
         try:
-            findings = await agent.run(state.get("discovered_endpoints", []), state.get("sessions", {}))
+            findings = await agent.run(
+                state.get("discovered_endpoints", []),
+                state.get("sessions", {}),
+                state.get("discovered_forms", []),
+                state.get("discovered_parameters", []),
+            )
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
@@ -492,6 +521,35 @@ def build_graph(
         agent = SsrfAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
         try:
             findings = await agent.run(state.get("discovered_parameters", []), state.get("discovered_forms", []))
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def open_redirect_node(state: ScanState) -> dict:
+        job = await _start_job("open_redirect")
+        agent = OpenRedirectAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
+        try:
+            findings = await agent.run(
+                state.get("discovered_parameters", []), state.get("discovered_forms", [])
+            )
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        await _finish_job(job, status="completed", stats={"findings_confirmed": len(findings)})
+        return {"findings": findings}
+
+    async def api_version_node(state: ScanState) -> dict:
+        job = await _start_job("api_version")
+        agent = ApiVersionAgent(client, scan_run_id=scan_run_id, agent_job_id=job.id, db_session=session)
+        try:
+            endpoints = list(
+                dict.fromkeys(
+                    state.get("discovered_endpoints", []) + state.get("discovered_api_endpoints", [])
+                )
+            )
+            findings = await agent.run(endpoints)
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
             raise
@@ -650,6 +708,9 @@ def build_graph(
         merged_logout_urls = list(
             dict.fromkeys(state.get("discovered_logout_urls", []) + agent.discovered_logout_urls)
         )
+        merged_api_endpoints = list(
+            dict.fromkeys(state.get("discovered_api_endpoints", []) + agent.discovered_api_endpoints)
+        )
         # Same §5 scope-leak filter as recon_node — this crawl can
         # discover *new* login-only-host URLs of its own (e.g. a
         # dashboard link to "manage your Okta account"), not just
@@ -666,6 +727,7 @@ def build_graph(
             "discovered_responses": merged_responses,
             "discovered_websocket_endpoints": merged_websocket_endpoints,
             "discovered_logout_urls": merged_logout_urls,
+            "discovered_api_endpoints": merged_api_endpoints,
         }
 
     async def recon_planner_node(state: ScanState) -> dict:
@@ -838,6 +900,30 @@ def build_graph(
         )
         return {"findings": findings}
 
+    async def chatbot_injection_node(state: ScanState) -> dict:
+        job = await _start_job("chatbot_injection")
+        agent = ChatbotInjectionAgent(
+            client,
+            scan_run_id=scan_run_id,
+            agent_job_id=job.id,
+            db_session=session,
+            budget_guard=budget_guard,
+            ai_model=ai_model,
+        )
+        try:
+            findings = await agent.run(chatbot_targets, state.get("sessions", {}), chatbot_agency_probes)
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
+        status = "skipped" if agent.budget_exceeded else "completed"
+        await _finish_job(
+            job,
+            status=status,
+            stats={"findings_confirmed": len(findings)},
+            error=budget_stop_error(agent),
+        )
+        return {"findings": findings}
+
     async def ai_business_logic_plan_node(state: ScanState) -> dict:
         """Proposes additional BusinessRule rows from the site map/tech
         stack (app.agents.business_logic_planner) so business_logic_node
@@ -914,6 +1000,8 @@ def build_graph(
     graph.add_node("deserialization", deserialization_node)
     graph.add_node("dom_xss", dom_xss_node)
     graph.add_node("ssrf", ssrf_node)
+    graph.add_node("open_redirect", open_redirect_node)
+    graph.add_node("api_version", api_version_node)
     graph.add_node("prototype_pollution", prototype_pollution_node)
     graph.add_node("request_smuggling", request_smuggling_node)
     graph.add_node("oauth", oauth_node)
@@ -923,6 +1011,7 @@ def build_graph(
     graph.add_node("xss", xss_node)
     graph.add_node("auth", auth_node)
     graph.add_node("access_control", access_control_node)
+    graph.add_node("chatbot_injection", chatbot_injection_node)
     graph.add_node("ai_business_logic_plan", ai_business_logic_plan_node)
     graph.add_node("business_logic", business_logic_node)
     graph.add_node("csrf", csrf_node)
@@ -933,12 +1022,12 @@ def build_graph(
     graph.add_node("csv_injection", csv_injection_node)
     graph.add_node("session_invalidation", session_invalidation_node)
     graph.add_node("vulnerable_components", vulnerable_components_node)
+    graph.add_node("csp_bypass", csp_bypass_node)
 
     graph.set_entry_point("recon")
     graph.add_edge("recon", "header_config")
     graph.add_edge("recon", "host_header")
     graph.add_edge("recon", "cors")
-    graph.add_edge("recon", "clickjacking")
     graph.add_edge("recon", "xxe")
     graph.add_edge("recon", "graphql")
     graph.add_edge("recon", "deserialization")
@@ -951,10 +1040,17 @@ def build_graph(
     graph.add_edge("login", "authenticated_recon")
     graph.add_edge("authenticated_recon", "recon_planner")
     graph.add_edge("recon_planner", "dom_xss")
+    # Moved here from a direct "recon" edge (§3 item 3): clickjacking now
+    # tests a logged-in user's own view of the page, not just an
+    # anonymous one — needs both the authenticated crawl's real endpoint
+    # list and a populated `sessions` dict, neither of which exist yet
+    # at the point "recon" itself finishes.
+    graph.add_edge("recon_planner", "clickjacking")
     graph.add_edge("recon_planner", "injection")
     graph.add_edge("recon_planner", "xss")
     graph.add_edge("recon_planner", "auth")
     graph.add_edge("recon_planner", "access_control")
+    graph.add_edge("recon_planner", "chatbot_injection")
     graph.add_edge("recon_planner", "ai_business_logic_plan")
     graph.add_edge("ai_business_logic_plan", "business_logic")
     graph.add_edge("recon_planner", "csrf")
@@ -965,6 +1061,9 @@ def build_graph(
     graph.add_edge("recon_planner", "csv_injection")
     graph.add_edge("recon_planner", "session_invalidation")
     graph.add_edge("recon_planner", "vulnerable_components")
+    graph.add_edge("recon_planner", "csp_bypass")
+    graph.add_edge("recon_planner", "api_version")
+    graph.add_edge("recon_planner", "open_redirect")
     graph.add_edge("header_config", END)
     graph.add_edge("host_header", END)
     graph.add_edge("cors", END)
@@ -974,6 +1073,7 @@ def build_graph(
     graph.add_edge("deserialization", END)
     graph.add_edge("dom_xss", END)
     graph.add_edge("ssrf", END)
+    graph.add_edge("open_redirect", END)
     graph.add_edge("prototype_pollution", END)
     graph.add_edge("request_smuggling", END)
     graph.add_edge("oauth", END)
@@ -983,6 +1083,7 @@ def build_graph(
     graph.add_edge("xss", END)
     graph.add_edge("auth", END)
     graph.add_edge("access_control", END)
+    graph.add_edge("chatbot_injection", END)
     graph.add_edge("business_logic", END)
     graph.add_edge("stored_xss", END)
     graph.add_edge("file_upload", END)
@@ -991,5 +1092,7 @@ def build_graph(
     graph.add_edge("csv_injection", END)
     graph.add_edge("session_invalidation", END)
     graph.add_edge("vulnerable_components", END)
+    graph.add_edge("csp_bypass", END)
+    graph.add_edge("api_version", END)
 
     return graph.compile()

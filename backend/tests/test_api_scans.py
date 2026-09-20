@@ -472,6 +472,7 @@ async def test_full_scan_flow_completes_and_produces_report(client, fixture_site
         "deserialization",
         "dom_xss",
         "ssrf",
+        "open_redirect",
         "prototype_pollution",
         "request_smuggling",
         "oauth",
@@ -483,6 +484,7 @@ async def test_full_scan_flow_completes_and_produces_report(client, fixture_site
         "xss",
         "auth",
         "access_control",
+        "chatbot_injection",
         "ai_business_logic_plan",
         "business_logic",
         "csrf",
@@ -493,6 +495,8 @@ async def test_full_scan_flow_completes_and_produces_report(client, fixture_site
         "csv_injection",
         "session_invalidation",
         "vulnerable_components",
+        "csp_bypass",
+        "api_version",
         "chain_analysis",
     }
     assert all(job["status"] == "completed" for job in body["agent_jobs"]), body["agent_jobs"]

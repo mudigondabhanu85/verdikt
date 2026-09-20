@@ -355,6 +355,7 @@ class XSSAgent:
                     finding_id=finding.id,
                     request_raw=format_request_raw(reproduced.probe_response),
                     response_raw=format_response_raw(reproduced.probe_response),
+                    payload=reproduced.payload,
                     screenshot_refs=screenshot_refs,
                 )
             )

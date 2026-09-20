@@ -12,6 +12,8 @@ from app.ai.budget import BudgetGuard, budget_stop_error
 from app.ai.model_tiers import resolve_tiered_model
 from app.db import session as db_session
 from app.models.business_rule import BusinessRule
+from app.models.chatbot_agency_probe import ChatbotAgencyProbe
+from app.models.chatbot_target import ChatbotTarget
 from app.models.credential import CredentialSet
 from app.models.finding import Finding
 from app.models.project import ScopeEntry
@@ -140,6 +142,22 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
                     )
                 ).scalars()
             )
+            chatbot_targets = list(
+                (
+                    await session.execute(
+                        select(ChatbotTarget).where(ChatbotTarget.version_id == scan_run.version_id)
+                    )
+                ).scalars()
+            )
+            chatbot_agency_probes = list(
+                (
+                    await session.execute(
+                        select(ChatbotAgencyProbe).join(
+                            ChatbotTarget, ChatbotAgencyProbe.chatbot_target_id == ChatbotTarget.id
+                        ).where(ChatbotTarget.version_id == scan_run.version_id)
+                    )
+                ).scalars()
+            )
 
             # One lock for every write to this shared AsyncSession across
             # the whole scan run — Phase 2's LangGraph orchestrator runs
@@ -163,6 +181,8 @@ async def execute_scan_run(scan_run_id: uuid.UUID) -> None:
                 targets=targets,
                 credential_sets=credential_sets,
                 business_rules=business_rules,
+                chatbot_targets=chatbot_targets,
+                chatbot_agency_probes=chatbot_agency_probes,
                 budget_guard=budget_guard,
                 ai_model=ai_model,
                 scope_entries=scope_entries,

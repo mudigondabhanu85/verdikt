@@ -22,11 +22,68 @@ from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from matplotlib.patches import Patch
 
+from app.models.finding import Evidence
 from app.models.vgs_vulnerability import VgsEvidenceStep, VgsReportDraft, VgsReportVulnerability
 from app.reporting.grouping import FindingGroup
 from app.reporting.html_report import BrandingInfo
 
 _MAX_LISTED_ENDPOINTS = 20
+
+
+def build_evidence_steps_for_group(
+    vuln_id: uuid.UUID,
+    group: FindingGroup,
+    evidence_by_finding_id: dict[uuid.UUID, Evidence | None],
+) -> list[VgsEvidenceStep]:
+    """One evidence step per detailed instance (FindingGroup.detailed_instances
+    — up to grouping.py's _MAX_DETAILED_INSTANCES cap), each carrying that
+    finding's real steps_to_reproduce verbatim plus whatever screenshots its
+    Evidence row captured, so a developer reading the report sees the actual
+    reproduction steps and proof the scanner used rather than a generic note.
+    Multiple instances of the same check_id/title (e.g. the same header
+    missing on 5 different pages) become 5 distinct, individually-
+    reproducible steps instead of one undifferentiated blob covering only
+    the first endpoint found.
+
+    Shared by both the curated VGS workspace (which persists the result via
+    the caller's own session.add) and the one-shot per-scan-run VGS export
+    (which never persists anything) — `evidence_by_finding_id` is passed in
+    rather than queried here so this stays a pure builder either caller can
+    use regardless of how they source their Evidence rows.
+    """
+    instances = group.detailed_instances
+    steps: list[VgsEvidenceStep] = []
+    for step_idx, instance in enumerate(instances):
+        evidence = evidence_by_finding_id.get(instance.id)
+        steps_text = "\n".join(instance.steps_to_reproduce or [])
+        endpoint = instance.affected_endpoints[0] if instance.affected_endpoints else None
+        notes = evidence.additional_notes if evidence is not None else None
+
+        body_parts = []
+        if endpoint and len(instances) > 1:
+            body_parts.append(f"Endpoint: {endpoint}")
+        if steps_text:
+            body_parts.append(steps_text)
+        if notes:
+            body_parts.append(notes)
+        comment = "\n\n".join(body_parts) or "Captured automatically from the scan finding."
+
+        screenshot_keys = (
+            list(evidence.screenshot_refs) if evidence is not None and evidence.screenshot_refs else []
+        )
+        if not steps_text and not screenshot_keys and not notes:
+            continue
+
+        steps.append(
+            VgsEvidenceStep(
+                id=uuid.uuid4(),
+                report_vulnerability_id=vuln_id,
+                step_order=step_idx,
+                comment=comment,
+                screenshot_object_keys=screenshot_keys,
+            )
+        )
+    return steps
 
 
 def build_vulnerability_from_group(
@@ -261,8 +318,15 @@ def render_vgs_docx_report(
         document.add_paragraph(vuln.description)
 
         document.add_heading("Evidence", level=4)
-        for step_idx, step in enumerate(evidence_steps_by_vuln_id.get(vuln.id, []), 1):
-            document.add_paragraph(f"Step {step_idx}: {step.comment}")
+        steps = evidence_steps_by_vuln_id.get(vuln.id, [])
+        if not steps:
+            document.add_paragraph("No evidence captured for this vulnerability.")
+        for step_idx, step in enumerate(steps, 1):
+            step_para = document.add_paragraph()
+            step_para.add_run(
+                f"Step {step_idx} of {len(steps)}:" if len(steps) > 1 else "Steps to reproduce:"
+            ).bold = True
+            document.add_paragraph(step.comment)
             for object_key in step.screenshot_object_keys:
                 image_bytes = screenshot_bytes_by_object_key.get(object_key)
                 if image_bytes:

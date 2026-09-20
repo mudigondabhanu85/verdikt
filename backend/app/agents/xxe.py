@@ -117,6 +117,7 @@ class XxeAgent:
             request_raw=request_raw,
             response_raw=response_raw,
         )
+        disclosure_match = _FILE_DISCLOSURE_MARKER_RE.search(probe_again.text)
         async with self._client.session_lock:
             self._session.add(finding)
             await self._session.flush()
@@ -125,6 +126,7 @@ class XxeAgent:
                     finding_id=finding.id,
                     request_raw=request_raw,
                     response_raw=response_raw,
+                    payload=disclosure_match.group(0) if disclosure_match else None,
                     screenshot_refs=screenshot_refs,
                 )
             )

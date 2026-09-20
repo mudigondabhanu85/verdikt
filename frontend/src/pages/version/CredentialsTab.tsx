@@ -58,6 +58,7 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [loginEndpoint, setLoginEndpoint] = useState('')
   const [extraCookies, setExtraCookies] = useState('')
+  const [extraHeaders, setExtraHeaders] = useState('')
   const [privilegeRank, setPrivilegeRank] = useState('')
 
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -67,7 +68,7 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
   const [editLoginEndpoint, setEditLoginEndpoint] = useState('')
   const [editPrivilegeRank, setEditPrivilegeRank] = useState('')
 
-  function parseExtraCookies(raw: string): Record<string, string> | null {
+  function parseKeyValuePairs(raw: string): Record<string, string> | null {
     const trimmed = raw.trim()
     if (!trimmed) return null
     const entries = trimmed
@@ -99,7 +100,14 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
         username: credentialType === 'api_token' ? 'api-token' : username,
         secret,
         login_endpoint: credentialType === 'api_token' ? null : loginEndpoint || null,
-        extra_cookies: credentialType === 'api_token' ? null : parseExtraCookies(extraCookies),
+        extra_cookies: credentialType === 'api_token' ? null : parseKeyValuePairs(extraCookies),
+        // Unlike extra_cookies, this applies for BOTH credential types —
+        // it's the header-shaped escape hatch for api_token specifically
+        // (which otherwise can only ever send a literal
+        // "Authorization: Bearer <token>", never a custom header name
+        // like "X-API-Key"), as well as a header layered on top of a
+        // real login/macro flow. See app.models.credential.CredentialSet.extra_headers.
+        extra_headers: parseKeyValuePairs(extraHeaders),
         privilege_rank: privilegeRank.trim() ? Number(privilegeRank) : null,
       }),
     onSuccess: () => {
@@ -109,6 +117,7 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
       setSecret('')
       setLoginEndpoint('')
       setExtraCookies('')
+      setExtraHeaders('')
       setPrivilegeRank('')
     },
   })
@@ -169,7 +178,10 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
         Secrets are envelope-encrypted server-side and never echoed back — the list below only ever shows a masked
         reference. Leave "login endpoint" blank to fall back to automatic &lt;form&gt; discovery during recon.
         "API token" skips login entirely — for an imported OpenAPI/Postman collection with no login flow, just a
-        pre-issued bearer token/API key sent on every request. Set "privilege rank" on two or more credentials
+        pre-issued bearer token/API key sent on every request. Use "extra static headers" to save a custom auth
+        header (e.g. an API key under a header name other than Authorization) alongside a login macro, or to give an
+        API token credential a header name other than "Authorization: Bearer". Set "privilege rank" on two or more
+        credentials
         (higher = more privileged) to enable role-vs-role vertical escalation testing — e.g. does a Standard User's
         session get into an endpoint only an Admin's should.
       </p>
@@ -223,6 +235,12 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
               </button>
             )}
           </div>
+          <input
+            value={extraHeaders}
+            onChange={(e) => setExtraHeaders(e.target.value)}
+            placeholder="extra static headers, e.g. X-API-Key=abc123 (comma-separated for more than one)"
+            className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+          />
           {showAdvanced && credentialType !== 'api_token' && (
             <>
               <input

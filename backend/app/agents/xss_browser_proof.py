@@ -19,6 +19,7 @@ page load, and GET-based reflection covers the overwhelming majority of
 real-world reflected XSS. Documented simplification, not a silent gap.
 """
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 
@@ -28,6 +29,18 @@ from playwright.async_api import async_playwright
 from app.agents.browser_session import seed_authenticated_context
 from app.agents.http_client import AuthenticatedSession
 from app.agents.probing import ProbeTarget, build_request
+
+# Same defensive backstop as app.agents.http_client's
+# _HARD_REQUEST_TIMEOUT_SECONDS, applied to every function in this module:
+# playwright.chromium.launch() and page.evaluate() have no timeout of
+# their own the way page.goto() does, and a real, live-found scan hang
+# (app.agents.csp_bypass_proof, under heavy concurrent Playwright load
+# from many checks launching browsers at once) proved this can leave a
+# scan stuck at "running" forever with zero error and no diagnosable
+# cause. Wrapping every attempt in one explicit asyncio-level deadline
+# guarantees forward progress regardless of which specific call inside
+# it doesn't return.
+_HARD_PROOF_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass
@@ -43,7 +56,17 @@ class BrowserProofResult:
 
 
 def _proof_marker() -> str:
-    return f"verdikt_proof_{uuid.uuid4().hex[:12]}"
+    # No English prefix on purpose — "verdikt_proof_" (the original
+    # prefix here) supplies exactly the "p" that a filter like DVWA
+    # High's needs to complete its <(.*)s(.*)c(.*)r(.*)i(.*)p(.*)t regex
+    # against the surrounding `<img src=... onerror='window["{marker}"]=
+    # true'>` skeleton, which otherwise has every other required letter
+    # (s/src, c/src, r/onerror, i/window, t/true) but no "p" of its own.
+    # A pure lowercase-hex marker can only ever contribute a-f, none of
+    # which is s/i/p/t, so it can never complete that sequence no matter
+    # what random hex comes out — see _xss_execution_payloads' docstring
+    # for the full reasoning.
+    return f"vfy{uuid.uuid4().hex[:12]}"
 
 
 def visible_proof_banner_js(marker: str) -> str:
@@ -119,14 +142,31 @@ _DISPLAY_PAYLOADS = (
 # bearing element (onerror) does — different sinks, same two payloads
 # happen to cover both.
 #
+# The real_payload carries ONLY the flag-set — never the visible_proof_banner_js
+# inline. A second, live-found gap: the original version *did* inline the
+# full banner script here, and that banner's own English/JS text (words
+# like "createElement", "appendChild", "cssText") is long enough that it
+# almost always contains the letters s, c, r, i, p, t *somewhere* later in
+# the string in that relative order — exactly the pattern DVWA High's
+# regex (and plenty of real-world WAFs using the same "does this loosely
+# resemble <script>" heuristic) matches on, greedily eating everything
+# from the opening "<" through that incidental "t" and mangling the
+# payload into a harmless fragment. `window["{marker}"]=true` alone has no
+# "s" in it at all (the <img> wrapper's own "src" does have one, but
+# nothing after it up to the closing quote ever supplies the "p" the
+# pattern also needs), so it survives filters that strip anything
+# resembling a <script> tag. The banner is drawn afterward, directly via
+# page.evaluate() once execution is already confirmed — Playwright
+# injecting it client-side never goes through the target's own filter at
+# all, so its length/content is irrelevant to detection.
+#
 # Returns (real_payload, display_payload) pairs — real_payload is what's
-# actually sent/navigated to (carries the proof banner + window flag);
+# actually sent/navigated to (carries only the window-flag set);
 # display_payload is what a Finding's write-up should cite instead.
 def _xss_execution_payloads(marker: str) -> list[tuple[str, str]]:
-    banner_js = visible_proof_banner_js(marker)
     real_payloads = (
-        f'<script>window["{marker}"]=true;{banner_js}</script>',
-        f'<img src=x onerror=\'window["{marker}"]=true;{banner_js}\'>',
+        f'<script>window["{marker}"]=true;</script>',
+        f'<img src=x onerror=\'window["{marker}"]=true\'>',
     )
     return list(zip(real_payloads, _DISPLAY_PAYLOADS))
 
@@ -142,8 +182,23 @@ async def attempt_browser_proof(
 ) -> BrowserProofResult:
     """Only meaningful for target.method == "GET" — see module docstring.
     Callers are responsible for checking that before calling this.
+    """
+    try:
+        return await asyncio.wait_for(
+            _attempt_browser_proof(target, headless=headless, session=session),
+            timeout=_HARD_PROOF_TIMEOUT_SECONDS,
+        )
+    except (TimeoutError, asyncio.TimeoutError):
+        return BrowserProofResult(executed=False, screenshot_png=None)
 
-    A fresh Playwright browser context carries no cookies at all, which
+
+async def _attempt_browser_proof(
+    target: ProbeTarget,
+    *,
+    headless: bool,
+    session: AuthenticatedSession | None,
+) -> BrowserProofResult:
+    """A fresh Playwright browser context carries no cookies at all, which
     silently defeated this proof for every login-gated page (a real,
     live-found gap — DVWA's own reflected-XSS page requires an
     authenticated session, matching the exact class of bug already fixed
@@ -188,7 +243,14 @@ async def attempt_browser_proof(
                 if executed:
                     winning_payload = display_payload
                     break
-            screenshot = await page.screenshot(full_page=True) if executed else None
+            if executed:
+                # The banner is injected here, client-side via Playwright,
+                # never as part of the payload the target itself sees —
+                # see _xss_execution_payloads' docstring for why that
+                # distinction is what makes this proof reliable against a
+                # filter like DVWA High's at all.
+                await page.evaluate(visible_proof_banner_js(marker))
+                screenshot = await page.screenshot(full_page=True)
         except PlaywrightError:
             # Target unreachable from a real browser (DNS, TLS, timeout,
             # etc.), a synthetic test double the httpx-level agent could
@@ -205,7 +267,11 @@ async def attempt_browser_proof(
 
 
 async def attempt_dom_xss_fragment_proof(
-    url: str, *, headless: bool = True, session: AuthenticatedSession | None = None
+    url: str,
+    *,
+    headless: bool = True,
+    session: AuthenticatedSession | None = None,
+    fragment_param_names: list[str] | None = None,
 ) -> BrowserProofResult:
     """Loads `url` with an XSS payload appended as the URL fragment
     (`#...`), which never reaches the server — real execution here proves
@@ -213,14 +279,48 @@ async def attempt_dom_xss_fragment_proof(
     somewhere unsafe (innerHTML, document.write, eval, ...), independent
     of anything the server itself does.
 
+    Tries the bare fragment (`#<payload>`) first, then — if given any
+    `fragment_param_names` — a `#{name}=<payload>` framing for each one.
+    A real, live-found gap: a bare fragment alone misses any page whose
+    own client-side JS parses the hash as `key=value` rather than reading
+    the whole thing raw (a very common real-world pattern — hash-based
+    SPA routing, "current tab" state, and DVWA High's own DOM-XSS page
+    all work this way: `document.location.href.indexOf("default=")`
+    requires the literal substring "default=" to be present before the
+    sink even fires, silently doing nothing for a bare-fragment payload
+    that never contains it). `fragment_param_names` should be whatever
+    parameter/field names were already discovered for this exact URL
+    elsewhere (a query string or a GET form) — a hash-parsing sink
+    overwhelmingly reuses the same name as the page's own visible
+    query-string convention, not an arbitrary new one.
+
     Same login-gated-page gap as attempt_browser_proof above applies here
     too — a DOM XSS sink on a page you can't even reach without a session
     cookie never gets a chance to run.
     """
+    try:
+        return await asyncio.wait_for(
+            _attempt_dom_xss_fragment_proof(
+                url, headless=headless, session=session, fragment_param_names=fragment_param_names
+            ),
+            timeout=_HARD_PROOF_TIMEOUT_SECONDS,
+        )
+    except (TimeoutError, asyncio.TimeoutError):
+        return BrowserProofResult(executed=False, screenshot_png=None)
+
+
+async def _attempt_dom_xss_fragment_proof(
+    url: str,
+    *,
+    headless: bool,
+    session: AuthenticatedSession | None,
+    fragment_param_names: list[str] | None,
+) -> BrowserProofResult:
     marker = _proof_marker()
     executed = False
     screenshot = None
     winning_payload: str | None = None
+    fragment_prefixes = ["", *(f"{name}=" for name in dict.fromkeys(fragment_param_names or []))]
 
     try:
         async with async_playwright() as playwright:
@@ -228,20 +328,27 @@ async def attempt_dom_xss_fragment_proof(
             context = await browser.new_context(ignore_https_errors=True)
             await seed_authenticated_context(context, session, url)
             page = await context.new_page()
-            for payload, display_payload in _xss_execution_payloads(marker):
-                # A navigation that changes only the fragment is treated
-                # by the browser as same-document (fires "hashchange",
-                # no reload) — the page's own <script> block, which is
-                # what actually reads location.hash, would never re-run
-                # for a second payload attempt without forcing a real
-                # fresh navigation first.
-                await page.goto("about:blank")
-                await page.goto(f"{url}#{payload}", wait_until="load", timeout=_NAVIGATION_TIMEOUT_MS)
-                executed = bool(await page.evaluate(f'window["{marker}"] === true'))
+            for prefix in fragment_prefixes:
+                for payload, display_payload in _xss_execution_payloads(marker):
+                    # A navigation that changes only the fragment is treated
+                    # by the browser as same-document (fires "hashchange",
+                    # no reload) — the page's own <script> block, which is
+                    # what actually reads location.hash, would never re-run
+                    # for a second payload attempt without forcing a real
+                    # fresh navigation first.
+                    await page.goto("about:blank")
+                    await page.goto(
+                        f"{url}#{prefix}{payload}", wait_until="load", timeout=_NAVIGATION_TIMEOUT_MS
+                    )
+                    executed = bool(await page.evaluate(f'window["{marker}"] === true'))
+                    if executed:
+                        winning_payload = f"{prefix}{display_payload}"
+                        break
                 if executed:
-                    winning_payload = display_payload
                     break
-            screenshot = await page.screenshot(full_page=True) if executed else None
+            if executed:
+                await page.evaluate(visible_proof_banner_js(marker))
+                screenshot = await page.screenshot(full_page=True)
             await browser.close()
     except PlaywrightError:
         # Same reasoning as attempt_browser_proof above: unreachable

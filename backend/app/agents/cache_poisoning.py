@@ -160,6 +160,7 @@ class CachePoisoningAgent:
                     finding_id=finding.id,
                     request_raw=request_raw,
                     response_raw=response_raw,
+                    payload=marker,
                     screenshot_refs=screenshot_refs,
                 )
             )

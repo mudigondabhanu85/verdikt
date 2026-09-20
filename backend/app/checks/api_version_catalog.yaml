@@ -1,0 +1,36 @@
+# API version enumeration agent's catalog (§3, item 1). No LLM needed —
+# confirmation is a real, deterministic diff between two live JSON
+# responses: a deprecated API version discloses field names a
+# currently-referenced version of the same resource does not.
+
+- id: api-deprecated-version-excessive-data-exposure
+  title: "API Excessive Data Exposure via Deprecated Version"
+  owasp_2025_category: "A01 Broken Access Control"
+  cwe_id: "CWE-213"
+  severity: "High"
+  cvss_vector: "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+  cvss_score: 7.5
+  portswigger_reference_url: "https://portswigger.net/web-security/api-testing"
+  plain_language_summary: >
+    This API is exposed under more than one version number, and an
+    older/different version of the same endpoint returns sensitive
+    fields (such as password hashes or tokens) that the version the
+    application actually uses does not. Deprecating an API version by
+    simply adding a newer one, without ever disabling the old one, is a
+    common way for exactly this kind of accidental over-exposure to
+    survive in production long after it was supposedly fixed.
+  technical_description: >
+    {url} references API version {current_version}, but version
+    {leaking_version} of the same resource ({leaking_url}) is still
+    reachable and its response includes the additional field(s)
+    {leaked_fields} not present in the {current_version} response —
+    confirmed by fetching both live and comparing their JSON bodies.
+  remediation: >
+    Retire deprecated API versions instead of leaving them reachable
+    indefinitely; where an old version must stay available, ensure every
+    version returns the same, minimum-necessary field set (apply
+    field-level authorization consistently across all versions, not just
+    the current one).
+  references:
+    - "https://cwe.mitre.org/data/definitions/213.html"
+    - "https://owasp.org/www-project-api-security/"

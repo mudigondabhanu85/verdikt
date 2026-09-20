@@ -47,6 +47,16 @@ class CredentialSet(Base):
     # can only ever be scanned at whatever its cookie-absent default is.
     extra_cookies: Mapped[dict[str, str] | None] = mapped_column(JSON)
 
+    # Static headers sent on every authenticated request for this
+    # credential, the header-shaped equivalent of extra_cookies above —
+    # applied whether or not a real login/macro flow also runs, so an
+    # imported API collection's custom auth header (e.g. "X-API-Key",
+    # not the standard "Authorization: Bearer" the api_token type
+    # already handles) can be saved and reused for API scans, and a
+    # header can be layered on top of a recorded login macro's own
+    # session state rather than only replacing it.
+    extra_headers: Mapped[dict[str, str] | None] = mapped_column(JSON)
+
     # Optional, analyst-set — higher number means more privileged. NULL
     # (the default) means "not ranked", which excludes this credential
     # from app.agents.access_control's role-vs-role vertical escalation

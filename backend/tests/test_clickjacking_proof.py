@@ -1,11 +1,19 @@
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from app.agents.clickjacking_proof import attempt_clickjacking_proof
+from app.agents.http_client import AuthenticatedSession
 
 
 class _ClickjackingFixtureHandler(BaseHTTPRequestHandler):
-    """/framable has no protection; /blocked sends X-Frame-Options: DENY."""
+    """/framable has no protection; /blocked sends X-Frame-Options: DENY.
+    /dashboard is a login-gated page (§3 item 3): with the right session
+    cookie it renders a real authenticated screen; without it, the same
+    unprotected page renders an empty "please sign in" shell — a real
+    clickjacking-relevant page this check is otherwise structurally
+    blind to without a session.
+    """
 
     def do_GET(self):  # noqa: N802
         if self.path == "/framable":
@@ -13,6 +21,14 @@ class _ClickjackingFixtureHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html")
             self.end_headers()
             self.wfile.write(b"<html><body>sensitive account settings</body></html>")
+        elif self.path == "/dashboard":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            if "session=valid" in (self.headers.get("Cookie") or ""):
+                self.wfile.write(b"<html><body>account balance: $42,000 - transfer funds</body></html>")
+            else:
+                self.wfile.write(b"<html><body></body></html>")
         elif self.path == "/blocked":
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
@@ -68,6 +84,35 @@ async def test_page_with_x_frame_options_deny_is_not_framable():
 
         assert result.framable is False
         assert result.screenshot_png is None
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+async def test_login_gated_page_is_not_framable_without_a_session():
+    server, thread = _server()
+    try:
+        host, port = server.server_address
+        result = await attempt_clickjacking_proof(f"http://{host}:{port}/dashboard", headless=True)
+
+        assert result.framable is False
+        assert result.screenshot_png is None
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+async def test_login_gated_page_is_confirmed_framable_with_a_session():
+    server, thread = _server()
+    try:
+        host, port = server.server_address
+        session = AuthenticatedSession(credential_set_id=uuid.uuid4(), cookies={"session": "valid"})
+        result = await attempt_clickjacking_proof(
+            f"http://{host}:{port}/dashboard", headless=True, session=session
+        )
+
+        assert result.framable is True
+        assert result.screenshot_png is not None
     finally:
         server.shutdown()
         thread.join(timeout=2)

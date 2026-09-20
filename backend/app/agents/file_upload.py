@@ -317,6 +317,7 @@ class FileUploadAgent:
                     finding_id=finding.id,
                     request_raw=request_raw,
                     response_raw=response_raw,
+                    payload=uploaded_url,
                     screenshot_refs=screenshot_refs,
                     additional_notes=(
                         f"Confirmed by actually fetching the uploaded file back at {uploaded_url} "

@@ -146,6 +146,7 @@ class GraphQLAgent:
                     finding_id=finding.id,
                     request_raw=request_raw,
                     response_raw=response_raw,
+                    payload=_INTROSPECTION_QUERY,
                     screenshot_refs=screenshot_refs,
                 )
             )

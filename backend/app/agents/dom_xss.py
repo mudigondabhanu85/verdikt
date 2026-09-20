@@ -12,10 +12,33 @@ import uuid
 
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
 from app.agents.login import pick_best_session
+from app.agents.recon import DiscoveredParameter, FormInfo
 from app.agents.xss import XSS_FINDING_METADATA
 from app.agents.xss_browser_proof import attempt_dom_xss_fragment_proof
 from app.models.finding import Evidence, Finding
 from app.storage.local_disk import get_object_storage
+
+
+def _fragment_param_names_by_url(
+    forms: list[FormInfo], parameters: list[DiscoveredParameter]
+) -> dict[str, list[str]]:
+    """A hash-parsing DOM sink overwhelmingly reuses the same parameter
+    name as whatever query-string/form-field convention the page already
+    uses visibly (see attempt_dom_xss_fragment_proof's docstring) — this
+    collects that per-URL name list once, from both sources, so
+    DomXssAgent doesn't need to re-derive it per endpoint.
+    """
+    names_by_url: dict[str, list[str]] = {}
+    for form in forms:
+        if form.method != "GET":
+            continue
+        names = [f.name for f in form.fields if f.type not in ("hidden", "submit", "button")]
+        if names:
+            names_by_url.setdefault(form.action_url, []).extend(names)
+    for parameter in parameters:
+        if parameter.method == "GET":
+            names_by_url.setdefault(parameter.url, []).append(parameter.name)
+    return {url: list(dict.fromkeys(names)) for url, names in names_by_url.items()}
 
 
 class DomXssAgent:
@@ -49,21 +72,26 @@ class DomXssAgent:
         self,
         endpoints: list[str],
         sessions: dict[uuid.UUID, AuthenticatedSession] | None = None,
+        forms: list[FormInfo] | None = None,
+        parameters: list[DiscoveredParameter] | None = None,
     ) -> list[Finding]:
         # Same login-gated-page fix as app.agents.injection/stored_xss —
         # without a session cookie, a real headless browser navigating to
         # a login-gated page just lands on the login form, so a DOM XSS
         # sink behind auth never gets a chance to run at all.
         self._auth_session = pick_best_session(sessions)
+        fragment_names_by_url = _fragment_param_names_by_url(forms or [], parameters or [])
         findings: list[Finding] = []
         for url in endpoints[: self.MAX_ENDPOINTS]:
-            finding = await self._check_endpoint(url)
+            finding = await self._check_endpoint(url, fragment_names_by_url.get(url, []))
             if finding is not None:
                 findings.append(finding)
         return findings
 
-    async def _check_endpoint(self, url: str) -> Finding | None:
-        result = await attempt_dom_xss_fragment_proof(url, session=self._auth_session)
+    async def _check_endpoint(self, url: str, fragment_param_names: list[str]) -> Finding | None:
+        result = await attempt_dom_xss_fragment_proof(
+            url, session=self._auth_session, fragment_param_names=fragment_param_names
+        )
         if not result.executed:
             return None
 
@@ -119,8 +147,9 @@ class DomXssAgent:
             self._session.add(
                 Evidence(
                     finding_id=finding.id,
-                    request_raw=f"GET {url}#<payload> (fragment never sent to the server)",
+                    request_raw=f"GET {url}#{result.payload} (fragment never sent to the server)",
                     response_raw="(see screenshot evidence — injected script executed client-side)",
+                    payload=result.payload,
                     screenshot_refs=screenshot_refs,
                 )
             )

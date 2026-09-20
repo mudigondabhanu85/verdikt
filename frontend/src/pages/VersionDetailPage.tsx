@@ -6,6 +6,7 @@ import { ScopeTab } from './version/ScopeTab'
 import { TargetsTab } from './version/TargetsTab'
 import { CredentialsTab } from './version/CredentialsTab'
 import { BusinessRulesTab } from './version/BusinessRulesTab'
+import { ChatbotTargetsTab } from './version/ChatbotTargetsTab'
 import { ScanRunsTab } from './version/ScanRunsTab'
 import { TrafficTab } from './version/TrafficTab'
 import { BurpTab } from './version/BurpTab'
@@ -45,6 +46,7 @@ export function VersionDetailPage() {
           { key: 'targets', label: 'Targets', content: <TargetsTab versionId={versionId} /> },
           { key: 'credentials', label: 'Credentials', content: <CredentialsTab versionId={versionId} /> },
           { key: 'business-rules', label: 'Business Rules', content: <BusinessRulesTab versionId={versionId} /> },
+          { key: 'chatbot-targets', label: 'Chatbot Targets', content: <ChatbotTargetsTab versionId={versionId} /> },
           { key: 'traffic', label: 'Traffic', content: <TrafficTab versionId={versionId} /> },
           { key: 'burp', label: 'Burp', content: <BurpTab versionId={versionId} /> },
         ]}

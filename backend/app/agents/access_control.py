@@ -459,6 +459,17 @@ class AccessControlAgent:
                     finding_id=finding.id,
                     request_raw=request_raw,
                     response_raw=response_raw,
+                    # Only horizontal (IDOR) candidates have a genuine
+                    # substituted-value payload — the endpoint itself,
+                    # since that's where the swapped ID actually lives
+                    # (see app.agents.idor's substitute_path_segment/
+                    # substitute_query_param). Vertical/role_vertical
+                    # findings differ by *who's asking*, not by any
+                    # substring in the request itself, so there's
+                    # nothing honest to highlight there.
+                    payload=(
+                        candidate.endpoint if candidate.comparison_type == "horizontal" else None
+                    ),
                     screenshot_refs=screenshot_refs,
                 )
             )

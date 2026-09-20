@@ -92,7 +92,13 @@ def _real_png_bytes() -> bytes:
 
 
 async def _make_finding(
-    db_adapter, version_id, *, retest_status="open", with_screenshot=False
+    db_adapter,
+    version_id,
+    *,
+    retest_status="open",
+    with_screenshot=False,
+    steps_to_reproduce=None,
+    endpoint="http://site.test/",
 ) -> Finding:
     async with session_scope(db_adapter) as session:
         scan_run = ScanRun(version_id=version_id, status="completed", requested_by=uuid.uuid4())
@@ -113,11 +119,12 @@ async def _make_finding(
             cwe_id="CWE-693",
             cvss_vector="AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:N",
             cvss_score=3.0,
-            affected_endpoints=["http://site.test/"],
+            affected_endpoints=[endpoint],
             plain_language_summary="summary",
             technical_description="technical",
             remediation="remediate",
             retest_status=retest_status,
+            steps_to_reproduce=steps_to_reproduce or [],
         )
         session.add(finding)
         await session.flush()
@@ -337,6 +344,92 @@ async def test_add_from_finding_copies_fields_and_evidence_and_flags_already_add
     # The available-findings list now flags it as already added.
     listed = await client.get(f"/versions/{version.id}/vgs-report-draft/available-findings", headers=headers)
     assert listed.json()[0]["already_added"] is True
+
+
+async def test_add_from_finding_carries_steps_to_reproduce_verbatim_into_evidence(vgs_client):
+    """§ item 4: a developer reading the VGS report must see the real
+    steps_to_reproduce the scanner followed, not just a generic note."""
+    client, db_adapter = vgs_client
+    _org, _user, version, headers = await _create_org_admin(db_adapter)
+
+    finding = await _make_finding(
+        db_adapter,
+        version.id,
+        with_screenshot=True,
+        steps_to_reproduce=[
+            "1. Request http://site.test/ over HTTPS.",
+            "2. Observe the response has no Strict-Transport-Security header.",
+        ],
+    )
+
+    added = await client.post(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/from-finding/{finding.id}",
+        headers=headers,
+    )
+    assert added.status_code == 201, added.text
+    vuln_id = added.json()["id"]
+
+    steps = await client.get(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/{vuln_id}/evidence-steps",
+        headers=headers,
+    )
+    assert steps.status_code == 200
+    comment = steps.json()[0]["comment"]
+    assert "1. Request http://site.test/ over HTTPS." in comment
+    assert "2. Observe the response has no Strict-Transport-Security header." in comment
+    assert steps.json()[0]["screenshot_object_keys"] == ["vgs-evidence/fixture-key.png"]
+
+
+async def test_auto_seed_creates_one_evidence_step_per_endpoint_up_to_the_detailed_cap(vgs_client):
+    """§ item 5: a check confirmed on multiple endpoints should read as
+    distinct, individually-reproducible steps in the report, not one
+    undifferentiated blob covering only the first endpoint found."""
+    client, db_adapter = vgs_client
+    _org, _user, version, headers = await _create_org_admin(db_adapter)
+
+    async with session_scope(db_adapter) as session:
+        scan_run = ScanRun(version_id=version.id, status="completed", requested_by=uuid.uuid4())
+        session.add(scan_run)
+        await session.flush()
+        job = AgentJob(scan_run_id=scan_run.id, agent_type="header_config", status="completed")
+        session.add(job)
+        await session.flush()
+
+        for i in range(3):
+            endpoint = f"http://site.test/page{i}"
+            finding = Finding(
+                scan_run_id=scan_run.id,
+                agent_job_id=job.id,
+                check_id="missing-csp",
+                title="Missing Content-Security-Policy",
+                severity="Medium",
+                owasp_2025_category="A02 Security Misconfiguration",
+                cwe_id="CWE-693",
+                cvss_vector="AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+                cvss_score=5.0,
+                affected_endpoints=[endpoint],
+                plain_language_summary="summary",
+                technical_description="technical",
+                remediation="remediate",
+                retest_status="open",
+                steps_to_reproduce=[f"1. Request {endpoint}.", "2. Observe no CSP header."],
+            )
+            session.add(finding)
+        await session.commit()
+
+    listed = await client.get(f"/versions/{version.id}/vgs-report-draft/vulnerabilities", headers=headers)
+    assert listed.status_code == 200
+    [vuln] = [v for v in listed.json() if v["title"] == "Missing Content-Security-Policy"]
+
+    steps = await client.get(
+        f"/versions/{version.id}/vgs-report-draft/vulnerabilities/{vuln['id']}/evidence-steps",
+        headers=headers,
+    )
+    assert steps.status_code == 200
+    bodies = steps.json()
+    assert len(bodies) == 3
+    endpoints_seen = {f"http://site.test/page{i}" for i in range(3)}
+    assert all(any(ep in step["comment"] for ep in endpoints_seen) for step in bodies)
 
 
 async def _make_findings_sharing_check_id(db_adapter, version_id, endpoints: list[str]) -> list[Finding]:
