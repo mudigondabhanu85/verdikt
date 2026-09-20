@@ -6,6 +6,8 @@ erDiagram
     VERSION ||--o{ TARGET : "points at"
     VERSION ||--o{ CREDENTIAL_SET : "authenticates via"
     VERSION ||--o{ BUSINESS_RULE : "declares"
+    VERSION ||--o{ CHATBOT_TARGET : "conversational endpoint"
+    CHATBOT_TARGET ||--o{ CHATBOT_AGENCY_PROBE : "forbidden actions"
     VERSION ||--o{ TRAFFIC_INTERACTION : "seeds from"
     VERSION ||--o{ SCAN_RUN : "is scanned by"
     SCAN_RUN ||--o{ AGENT_JOB : "runs"

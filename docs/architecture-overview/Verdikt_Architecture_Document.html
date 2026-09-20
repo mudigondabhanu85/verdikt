@@ -76,17 +76,23 @@ build fell short and where it went further.</em></p>
 <hr />
 <h2 id="1-executive-summary">1. Executive Summary</h2>
 <p>Verdikt is an AI-assisted, multi-agent DAST (Dynamic Application Security
-Testing) platform that performs manual-assessment-quality web and API
-penetration testing at automated speed. A single scan run executes a
-<strong>31-node LangGraph DAG</strong> covering the OWASP Top 10 (2025) and the full
-PortSwigger Web Security Academy topic list, followed by a cross-cutting
-attack-chain-composition step that runs outside the graph proper — each
-detection agent combining deterministic, re-executable HTTP-level probing
-with LLM-assisted triage and adversarial validation. The result is a report
-an experienced penetration tester would recognize as their own work:
-confirmed findings only, real evidence (request/response pairs, browser
-screenshots), plain-language and technical write-ups side by side, and a
-remediation path for every issue.</p>
+Testing) platform that performs manual-assessment-quality web, API, and
+LLM/chatbot penetration testing at automated speed. A single scan run
+executes a <strong>35-node LangGraph DAG</strong> covering the OWASP Top 10 (2025), the
+OWASP Top 10 for LLM Applications (2026), the OWASP Agentic Security
+Initiative Top 10 (2026), and the full PortSwigger Web Security Academy
+topic list, followed by a cross-cutting attack-chain-composition step that
+runs outside the graph proper — each detection agent combining
+deterministic, re-executable HTTP-level probing with LLM-assisted triage
+and adversarial validation. The result is a report an experienced
+penetration tester would recognize as their own work: confirmed findings
+only, real evidence (request/response pairs, browser screenshots),
+plain-language and technical write-ups side by side, and a remediation
+path for every issue. One target type in that DAG — an analyst-configured
+<code>ChatbotTarget</code> (§4/§7) — is conversational rather than crawlable, so the
+same scan run covers four fundamentally different surfaces in one pass:
+traditional multi-page web applications, JavaScript SPAs, JSON/REST APIs,
+and LLM-backed chatbots.</p>
 <p>The system is explicitly designed so <strong>no single AI vendor is
 load-bearing</strong>. Every LLM-dependent agent talks to a pluggable <code>AIProviderAdapter</code>
 interface — Claude, OpenAI, Gemini, Grok, or any self-hosted/in-house model
@@ -98,13 +104,13 @@ configuration, is substitute a same-family sibling of that one configured
 model for a small number of specific tasks whose volume or complexity
 profile differs sharply from the rest of the scan (§6.2) — this is
 zero-configuration model tiering, not per-agent routing an analyst sets up.</p>
-<p><strong>Current state, verified against the running codebase:</strong> 52 files under
-<code>app/agents/</code> (31 of them graph nodes, the rest shared infrastructure and
-support modules), 30 API route modules, ~34 persisted data models, 10
-external integrations, 18 YAML check catalogs (39 statically defined check
-IDs, plus a further dozen dynamically-generated ones), 36 Alembic
-migrations, 20 RBAC resources, and a backend test suite of <strong>119 files /
-667 collected tests</strong> — all figures confirmed by direct inspection and by
+<p><strong>Current state, verified against the running codebase:</strong> 57 files under
+<code>app/agents/</code> (35 of them graph nodes, the rest shared infrastructure and
+support modules), 32 API route modules, 36 persisted data models, 10
+external integrations, 22 YAML check catalogs (47 statically defined check
+IDs, plus a further dozen dynamically-generated ones), 39 Alembic
+migrations, 21 RBAC resources, and a backend test suite of <strong>126 files /
+721 collected tests</strong> — all figures confirmed by direct inspection and by
 running the test collector, not estimated. Full reference tables for every
 one of these are in the appendices (§13–§24).</p>
 <hr />
@@ -152,7 +158,7 @@ reports and the API (<code>scan_run.tech_stack_fingerprint</code>). What the ori
 design additionally called for — using that fingerprint to skip scheduling
 entire categories of irrelevant checks, described in the spec as "likely
 the single biggest token-savings lever available" — <strong>is not built as
-general graph-level routing</strong>. The 31-node LangGraph DAG has zero
+general graph-level routing</strong>. The 35-node LangGraph DAG has zero
 conditional edges; every node always runs regardless of the detected stack.
 The one narrow exception that <em>is</em> built: SSTI probing inside <code>injection.py</code>
 skips itself when no template-rendering signal was observed during recon.
@@ -161,21 +167,22 @@ largest gap between the original cost-optimization design and the current
 implementation — see §18 for the complete list of such deltas.</p>
 <hr />
 <h2 id="3-high-level-architecture">3. High-Level Architecture</h2>
-<div class="mermaid">flowchart TB
+<pre class="mermaid">
+flowchart TB
     subgraph Client["Browser"]
         FE["React + TypeScript SPA<br/>(Vite, TanStack Query, Tailwind)"]
     end
 
     subgraph Backend["Verdikt Backend — FastAPI (Python)"]
-        API["REST API — 30 route modules<br/>JWT bearer auth, RBAC-enforced"]
-        ORCH["Multi-Agent Orchestrator<br/>(LangGraph, 31-node DAG)"]
+        API["REST API — 32 route modules<br/>JWT bearer auth, RBAC-enforced"]
+        ORCH["Multi-Agent Orchestrator<br/>(LangGraph, 35-node DAG)"]
         AIABS["AI Provider Abstraction<br/>Claude / OpenAI / Gemini / Grok / Custom"]
         RPT["Reporting Engine<br/>HTML / PDF (reportlab) / DOCX / CSV / JSON"]
         VAULT["Credential Vault<br/>(envelope encryption, pluggable KMS)"]
     end
 
     subgraph Data["Persistence"]
-        PG[("PostgreSQL<br/>~34 models")]
+        PG[("PostgreSQL<br/>36 models")]
         OBJ[("Object Storage<br/>(screenshots, uploads, letters)")]
     end
 
@@ -213,21 +220,21 @@ implementation — see §18 for the complete list of such deltas.</p>
     API -->|"asset lookup"| CMDB
     API -->|"scrape topic write-ups"| PSWIG
     ORCH -->|"known-vulnerable-version lookup"| OSV
-</div>
-
+</pre>
 <p><strong>Backend:</strong> Python, FastAPI, SQLAlchemy 2.0 (async), Alembic migrations
-(36 files, one linear chain), PostgreSQL. Dialect-agnostic ORM layer, so
+(39 files, one linear chain), PostgreSQL. Dialect-agnostic ORM layer, so
 the test suite runs against ephemeral SQLite with zero external services
 (with one deliberately-accepted limitation: SQLite doesn't enforce
 <code>ON DELETE CASCADE</code>, so cascade behavior is verified live against the real
 Postgres, not by the unit suite).</p>
 <p><strong>Frontend:</strong> Vite + React + TypeScript, TanStack Query for server state,
 React Router, Tailwind CSS. A hand-written typed fetch client
-(<code>src/api/client.ts</code>, 23 namespaced sub-objects, 62 exported types in
+(<code>src/api/client.ts</code>, 28 namespaced sub-objects, 67 exported types in
 <code>src/api/types.ts</code>) mirrors the backend's Pydantic schemas.</p>
-<p><strong>Agent orchestration:</strong> LangGraph builds a 31-node directed graph per scan
+<p><strong>Agent orchestration:</strong> LangGraph builds a 35-node directed graph per scan
 run, with genuine parallel fan-out where checks don't depend on each other
-(12 nodes off <code>recon</code>, 14 more off <code>authenticated_recon</code>), and explicit
+(11 nodes off <code>recon</code>, 19 more off <code>recon_planner</code>, one of which —
+<code>ai_business_logic_plan</code> — itself fans out to <code>business_logic</code>), and explicit
 sequencing where they do (every authenticated check waits on <code>login</code>
 succeeding). <code>chain_analysis</code> is deliberately <em>not</em> a graph node — it runs
 as a separate step in <code>runner.py</code> after <code>graph.ainvoke()</code> completes, since
@@ -241,9 +248,10 @@ uploaded traffic files.</p>
 <h2 id="4-core-data-model">4. Core Data Model</h2>
 <p>Every engagement is modeled as a hierarchy that mirrors how a real pentest
 is scoped and re-run over time. This is a simplified view for readability —
-the full field-level reference for all ~34 models is in <strong>Appendix
+the full field-level reference for all 36 models is in <strong>Appendix
 §15</strong>.</p>
-<div class="mermaid">erDiagram
+<pre class="mermaid">
+erDiagram
     ORGANIZATION ||--o{ PROJECT : owns
     ORGANIZATION ||--o{ USER : has
     PROJECT ||--o{ VERSION : "has engagements"
@@ -251,6 +259,8 @@ the full field-level reference for all ~34 models is in <strong>Appendix
     VERSION ||--o{ TARGET : "points at"
     VERSION ||--o{ CREDENTIAL_SET : "authenticates via"
     VERSION ||--o{ BUSINESS_RULE : "declares"
+    VERSION ||--o{ CHATBOT_TARGET : "conversational endpoint"
+    CHATBOT_TARGET ||--o{ CHATBOT_AGENCY_PROBE : "forbidden actions"
     VERSION ||--o{ TRAFFIC_INTERACTION : "seeds from"
     VERSION ||--o{ SCAN_RUN : "is scanned by"
     SCAN_RUN ||--o{ AGENT_JOB : "runs"
@@ -262,8 +272,7 @@ the full field-level reference for all ~34 models is in <strong>Appendix
     SCAN_RUN ||--o{ ATTACK_CHAIN : "composes into"
     ATTACK_CHAIN ||--o{ ATTACK_CHAIN_EVIDENCE : "cites"
     TARGET ||--o| SCOPE_ENTRY : "auto-derives"
-</div>
-
+</pre>
 <p>Key design points, each verified against real migration/model code:</p>
 <ul>
 <li><strong>Scope is a real technical control, not a UI reminder.</strong> <code>ScopedHttpClient</code>
@@ -296,16 +305,40 @@ the full field-level reference for all ~34 models is in <strong>Appendix
   <code>TicketingConfig</code>, <code>OidcProviderConfig</code>, and <code>VGSConfig</code> — every one of
   them stores <code>encrypted_*</code> + <code>masked_reference</code> and never returns
   plaintext.</li>
+<li><strong><code>CredentialSet.extra_headers</code></strong> — static headers forced onto every
+  request for that credential, the header-shaped equivalent of the
+  pre-existing <code>extra_cookies</code> (used e.g. to pin DVWA's <code>security</code>
+  difficulty cookie). Real, concrete motivation: an imported Postman/API
+  collection often authenticates via a custom header (<code>X-API-Key</code> and
+  similar) rather than a bearer token, and <code>credential_type="api_token"</code>
+  could previously only ever produce a literal <code>Authorization: Bearer
+  &lt;token&gt;</code> header. <code>extra_headers</code> applies on top of <em>any</em> credential
+  type — <code>api_token</code>, form-login, or a recorded macro — so a custom
+  header can also be layered onto a real login flow rather than only
+  replacing it. Applied in <code>ScopedHttpClient</code> alongside <code>extra_cookies</code>,
+  before any caller-supplied per-request header override.</li>
+<li><strong><code>ChatbotTarget</code> / <code>ChatbotAgencyProbe</code></strong> — analyst-configured
+  conversational endpoints for the LLM/Chatbot Pentest capability (§7):
+  <code>ChatbotTarget</code> records how to talk to a chat API (<code>endpoint_url</code>,
+  <code>http_method</code>, a <code>request_body_template</code> with a literal <code>{message}</code>
+  placeholder — the same templating convention <code>CredentialSet.
+  login_body_template</code> already uses — <code>response_text_path</code>, a dot-path
+  into the JSON reply reusing the existing CMDB dot-path walker, and an
+  optional envelope-encrypted auth header). <code>ChatbotAgencyProbe</code> is a
+  sibling table, one row per analyst-declared forbidden action (e.g.
+  <em>"Process a refund without a valid order ID"</em>), the same "row per
+  testable thing, FK to its parent, <code>created_by</code> for audit" shape
+  <code>BusinessRule</code> itself uses.</li>
 </ul>
 <hr />
 <h2 id="5-the-multi-agent-scanning-engine">5. The Multi-Agent Scanning Engine</h2>
-<h3 id="51-scan-lifecycle-the-real-verified-31-node-dag">5.1 Scan lifecycle — the real, verified 31-node DAG</h3>
-<div class="mermaid">flowchart LR
+<h3 id="51-scan-lifecycle-the-real-verified-35-node-dag">5.1 Scan lifecycle — the real, verified 35-node DAG</h3>
+<pre class="mermaid">
+flowchart LR
     A["POST /versions/{id}/scan-runs"] --> B["recon<br/>(unauthenticated crawl +<br/>inline tech-stack fingerprint)"]
     B --> U1["header_config"]
     B --> U2["host_header"]
     B --> U3["cors"]
-    B --> U4["clickjacking"]
     B --> U5["xxe"]
     B --> U6["graphql"]
     B --> U7["deserialization"]
@@ -318,10 +351,12 @@ the full field-level reference for all ~34 models is in <strong>Appendix
     L --> E["authenticated_recon<br/>(full-depth authenticated crawl)"]
     E --> P["recon_planner<br/>(up to 2 propose-then-crawl rounds:<br/>AI suggests unlinked-but-plausible paths,<br/>each verified live, then crawled from —<br/>see §5.1a)"]
     P --> A1["dom_xss"]
+    P --> U4["clickjacking"]
     P --> A2["injection<br/>(SQLi / cmd-inj / SSTI /<br/>path traversal / NoSQLi)"]
     P --> A3["xss"]
     P --> A4["auth<br/>(JWT / session)"]
     P --> A5["access_control"]
+    P --> A15["chatbot_injection<br/>(LLM01/LLM08/LLM10/LLM03/ASI05 —<br/>see §7)"]
     P --> BP["ai_business_logic_plan<br/>(AI proposes hypotheses only —<br/>never a verdict, see §5.3)"]
     BP --> A6["business_logic"]
     P --> A7["csrf"]
@@ -332,12 +367,14 @@ the full field-level reference for all ~34 models is in <strong>Appendix
     P --> A12["csv_injection"]
     P --> A13["session_invalidation"]
     P --> A14["vulnerable_components"]
-    U1 & U2 & U3 & U4 & U5 & U6 & U7 & U8 & U9 & U10 & U11 & U12 --> G
-    A1 & A2 & A3 & A4 & A5 & A6 & A7 & A8 & A9 & A10 & A11 & A12 & A13 & A14 --> G["chain_analysis<br/>(runs after the graph completes, over that<br/>run's Confirmed findings — composes<br/>multi-finding attack chains)"]
+    P --> A16["csp_bypass"]
+    P --> A17["api_version"]
+    P --> A18["open_redirect"]
+    U1 & U2 & U3 & U5 & U6 & U7 & U8 & U9 & U10 & U11 & U12 --> G
+    A1 & U4 & A2 & A3 & A4 & A5 & A15 & A6 & A7 & A8 & A9 & A10 & A11 & A12 & A13 & A14 & A16 & A17 & A18 --> G["chain_analysis<br/>(runs after the graph completes, over that<br/>run's Confirmed findings — composes<br/>multi-finding attack chains)"]
     G --> H["Report generation<br/>(HTML / PDF / DOCX / CSV / JSON /<br/>per-scan-run VGS-format DOCX)"]
     H --> I["Best-effort notify:<br/>Slack / Teams / VGS webhook/push"]
-</div>
-
+</pre>
 <p>There are genuinely <strong>no conditional edges anywhere in this graph</strong> —
 <code>add_conditional_edges</code> is never called. Every node listed always runs.
 Recon deliberately runs twice: once unauthenticated (all a purely anonymous
@@ -349,14 +386,24 @@ nothing to test. <code>recon_planner</code> and <code>ai_business_logic_plan</co
 additions to the original 24-node graph, both following the same
 propose-then-verify discipline as everything else in §5.3 — an AI
 suggestion is worth nothing here until something deterministic confirms it.
-The newest four nodes — <code>weak_password_policy</code>, <code>csv_injection</code>,
-<code>session_invalidation</code>, <code>vulnerable_components</code> — were ported from a
-sibling DAST project and mapped onto this same architecture (deterministic
-detector → LLM triage → deterministic re-execution → adversarial
-validation, no LLM-only confirmation for any of them); see §7 for what
-each one actually checks. <code>chain_analysis</code> runs outside the graph proper
-(not a <code>graph.add_node</code> call, called directly by <code>runner.py</code> after
-<code>graph.ainvoke()</code> returns), so it's not counted in the 31.</p>
+<code>clickjacking</code> fans out from <code>recon_planner</code>, not <code>recon</code> — it tests a
+logged-in user's own view of the page, which needs both the authenticated
+crawl's real endpoint list and a populated <code>sessions</code> dict, neither of
+which exist yet at the point <code>recon</code> itself finishes. Four nodes —
+<code>weak_password_policy</code>, <code>csv_injection</code>, <code>session_invalidation</code>,
+<code>vulnerable_components</code> — were ported from a sibling DAST project and
+mapped onto this same architecture (deterministic detector → LLM triage →
+deterministic re-execution → adversarial validation, no LLM-only
+confirmation for any of them). Three more — <code>csp_bypass</code>, <code>api_version</code>,
+<code>open_redirect</code> — are single-check nodes following that same discipline.
+The newest node, <code>chatbot_injection</code>, is the sole node for the entire
+Chatbot/LLM Pentest capability (§7) — all 5 of its checks live as methods
+on one <code>ChatbotInjectionAgent.run()</code> rather than one node per check, the
+same "one node, many checks" shape <code>injection</code>/<code>auth</code>/<code>access_control</code>
+already use. See §7 for what each one actually checks. <code>chain_analysis</code>
+runs outside the graph proper (not a <code>graph.add_node</code> call, called
+directly by <code>runner.py</code> after <code>graph.ainvoke()</code> returns), so it's not
+counted in the 35.</p>
 <h3 id="51a-ai-driven-crawl-coverage-recon_planners-propose-then-crawl-loop">5.1a AI-driven crawl coverage — <code>recon_planner</code>'s propose-then-crawl loop</h3>
 <p><code>recon_planner</code> (<code>app.agents.recon_planner.run_planner_rounds</code>) used to be
 a single LLM call: propose unlinked-but-plausible paths against the site
@@ -398,7 +445,7 @@ about beyond the checks themselves:</p>
 <tbody>
 <tr>
 <td><code>graph.py</code></td>
-<td><code>build_graph()</code> — wires the 31-node LangGraph DAG itself; the only file that knows the full node/edge topology</td>
+<td><code>build_graph()</code> — wires the 35-node LangGraph DAG itself; the only file that knows the full node/edge topology</td>
 </tr>
 <tr>
 <td><code>http_client.py</code></td>
@@ -475,7 +522,8 @@ about beyond the checks themselves:</p>
 </tbody>
 </table>
 <h3 id="53-confirmed-only-findings-pipeline">5.3 Confirmed-Only Findings pipeline</h3>
-<div class="mermaid">flowchart LR
+<pre class="mermaid">
+flowchart LR
     A["Deterministic probe<br/>(HTTP-level signal)"] -->|"no signal"| X1["discarded"]
     A -->|"signal found"| B["LLM triage<br/>(classify: vulnerable?)"]
     B -->|"not vulnerable"| X2["discarded"]
@@ -484,8 +532,7 @@ about beyond the checks themselves:</p>
     C -->|"reproduces"| D{"Can prove real-world<br/>impact automatically?<br/>(browser execution,<br/>OOB callback, etc.)"}
     D -->|"yes"| E["Finding<br/>(confirmed, with evidence)"]
     D -->|"no — needs human judgment"| F["ReviewCandidate<br/>(pending promotion)"]
-</div>
-
+</pre>
 <p>Every step is genuinely re-executable: a Finding's "steps to reproduce" are
 the exact request that was actually sent, not a templated example. Where
 automatable, the strongest possible proof is used — a real headless
@@ -566,7 +613,8 @@ behavior.</p>
 a runtime configuration choice, resolved in this <strong>exact, code-verified
 order</strong> for every scan (<code>resolve_provider_and_model()</code> in
 <code>app/ai/provider.py</code>):</p>
-<div class="mermaid">flowchart TD
+<pre class="mermaid">
+flowchart TD
     A["Scan run starts"] --> B{"scan_run.ai_provider_config_id<br/>set and not deleted?"}
     B -->|"yes"| C["Use that AIProviderConfig"]
     B -->|"no"| D{"Org has an AIProviderConfig<br/>with is_default = True?<br/>(looked up via Project.org_id,<br/>joined through Version)"}
@@ -576,8 +624,7 @@ order</strong> for every scan (<code>resolve_provider_and_model()</code> in
     E --> G
     F --> G
     G --> H["ClaudeAdapter / OpenAIAdapter / GeminiAdapter /<br/>GrokAdapter / GenericOpenAIAdapter<br/>(any OpenAI-chat-completions-compatible endpoint)"]
-</div>
-
+</pre>
 <p><strong>Six adapter classes exist</strong> (<code>app/ai/adapters/</code>): <code>ClaudeAdapter</code>,
 <code>OpenAIAdapter</code>, <code>GeminiAdapter</code>, <code>GrokAdapter</code> (a subclass of
 <code>GenericOpenAIAdapter</code>), <code>GenericOpenAIAdapter</code> itself (any OpenAI
@@ -660,12 +707,14 @@ was built and then deliberately reverted, and what's structurally
 different this time.</p>
 <hr />
 <h2 id="7-vulnerability-coverage">7. Vulnerability Coverage</h2>
-<p>Coverage maps to the OWASP Top 10 (2025) and the PortSwigger Web Security
-Academy topic list. The full, exact list of every check ID, its severity,
-and its CWE is in <strong>Appendix §17</strong> (39 YAML-defined checks across 18
-catalog files, plus a further ~13 dynamically-generated check IDs emitted
-directly by agent code for parameterized findings like <code>sqli-error</code> /
-<code>access-control-{comparison_type}</code>). By category:</p>
+<p>Coverage maps to the OWASP Top 10 (2025), the OWASP Top 10 for LLM
+Applications (2026), the OWASP Agentic Security Initiative Top 10 (2026),
+and the PortSwigger Web Security Academy topic list. The full, exact list
+of every check ID, its severity, and its CWE is in <strong>Appendix §17</strong> (47
+YAML-defined checks across 22 catalog files, plus a further ~13
+dynamically-generated check IDs emitted directly by agent code for
+parameterized findings like <code>sqli-error</code> / <code>access-control-{comparison_type}</code>).
+By category:</p>
 <ul>
 <li><strong>Injection</strong> — SQL injection (error- and boolean-based), OS command
   injection, server-side template injection, NoSQL injection, path
@@ -712,7 +761,51 @@ directly by agent code for parameterized findings like <code>sqli-error</code> /
 <li><strong>Business logic</strong> — analyst-declared rules covering resource isolation
   (IDOR), workflow-order bypass, price/quantity tampering, and race
   conditions</li>
+<li><strong>API-specific</strong> — deprecated API version excessive data exposure
+  (an older, still-live version of an endpoint returning fields a
+  current version has since restricted), open redirect</li>
+<li><strong>CSP bypass</strong> — a JSONP callback endpoint reachable under an
+  allow-listed script-src host, defeating an otherwise-correct CSP</li>
+<li><strong>LLM / Chatbot Pentest</strong> — a wholly new capability this session,
+  covering a conversational endpoint the crawler can't discover on its
+  own (an analyst-configured <code>ChatbotTarget</code>, §4), checked by one agent
+  (<code>ChatbotInjectionAgent</code>) against the OWASP LLM Top 10 2026 and
+  Agentic Top 10 2026:</li>
+<li><strong>LLM01 Prompt Injection</strong> (<code>chatbot-prompt-injection-direct</code>) —
+    deterministic: asks the bot to echo a unique <code>VFY{hex}</code> marker
+    verbatim; confirmed only if a fresh marker survives a second,
+    independent request.</li>
+<li><strong>LLM08 Hidden Context Exposure</strong> (<code>chatbot-system-prompt-extraction</code>)
+    — AI-triage + adversarial-validation (the same two-pass confirmation
+    pipeline <code>access_control.py</code> already uses): a deterministic
+    extraction-attempt candidate, an AI triage verdict, then a live
+    re-execution and a second, adversarial AI pass before persisting.</li>
+<li><strong>LLM10 Improper Output Handling</strong> (<code>chatbot-improper-output-handling</code>)
+    — deterministic: an XSS-shaped marker (<code>&lt;{marker}&gt;alert(1)&lt;/{marker}&gt;</code>)
+    that must survive unescaped in the bot's own reply — the JSON-API
+    equivalent of reflected XSS for a chat endpoint that isn't a crawlable
+    HTML form.</li>
+<li><strong>LLM03 Excessive Agency</strong> (<code>chatbot-excessive-agency</code>) — AI-judged
+    against analyst-declared <code>ChatbotAgencyProbe</code> rows (§4): a battery of
+    social-engineering-framed messages asking the bot to agree to a
+    forbidden action, judged on reply <em>semantics</em> via the same triage +
+    adversarial-validation pipeline as LLM08, not HTTP diffing.</li>
+<li><strong>ASI05 Unexpected Code Execution</strong> (<code>chatbot-unexpected-code-execution</code>)
+    — AI-judged: asks the bot to run attacker-supplied code and checks
+    whether the reply claims to have actually executed it (Verdikt never
+    executes anything itself — text in, text out, judge the reply, the
+    same shape as every other AI-judged check here).</li>
 </ul>
+<p>All five share one <code>_ai_triage_and_validate()</code> helper for the
+  AI-judged checks and one <code>_send_message()</code> helper for chatbot
+  transport (auth-header decryption, <code>response_text_path</code> extraction) —
+  no per-check duplication. Deliberately deferred, with reasons on
+  record: ASI02 Tool Misuse (the "unauthorized purpose" half is already
+  LLM03 under a different name; the "malicious arguments to a real tool
+  call" half needs tool/function-manifest introspection Verdikt doesn't
+  have yet) and indirect injection via RAG-corpus poisoning (no safe,
+  generic way to plant content into an arbitrary target's retrieval
+  corpus).</p>
 <hr />
 <h2 id="8-retest-rescan-attack-chain-analysis">8. Retest, Rescan &amp; Attack Chain Analysis</h2>
 <ul>
@@ -784,8 +877,8 @@ directly by agent code for parameterized findings like <code>sqli-error</code> /
    (<code>/vgs</code>, <code>/vgs/:versionId</code> routes; <code>vgs_vulnerabilities.py</code>'s
    <code>library_router</code> and <code>draft_router</code>; <code>VgsReportDraft</code> /
    <code>VgsReportVulnerability</code> / <code>VgsEvidenceStep</code> / <code>VgsVulnerabilityLibraryEntry</code>
-   models):
-   - The <strong>Vulnerability Picker</strong> offers real, scan-confirmed findings
+   models):</li>
+<li>The <strong>Vulnerability Picker</strong> offers real, scan-confirmed findings
      grouped by vulnerability type (via the same <code>group_findings()</code> used by
      standard reports), auto-seeded into a new report draft — and re-seeded
      on every load, not just the first. A dedicated <code>auto_seeded_finding_ids</code>
@@ -794,17 +887,17 @@ directly by agent code for parameterized findings like <code>sqli-error</code> /
      vulnerability — this is what lets a later scan's newly-confirmed
      vulnerability class appear automatically without resurrecting something
      already deliberately removed (the two behaviors are genuinely in
-     tension; this is the fix that satisfies both).
-   - Each selected vulnerability supports <strong>delete and in-place severity
-     editing</strong> directly from the picker, not just from the curated library.
-   - <strong>Manage Vulnerabilities</strong> includes a one-click <strong>"Load from
+     tension; this is the fix that satisfies both).</li>
+<li>Each selected vulnerability supports <strong>delete and in-place severity
+     editing</strong> directly from the picker, not just from the curated library.</li>
+<li><strong>Manage Vulnerabilities</strong> includes a one-click <strong>"Load from
      PortSwigger"</strong> action (<code>app/integrations/portswigger/client.py</code>'s
      <code>fetch_topics()</code>, 13 real seeded Web Security Academy URLs) — a native
      port of the original standalone VGS tool's scrape-to-Excel workflow,
-     collapsed into a single server-side action.
-   - <strong>Evidence</strong> supports numbered steps, each with one or more
-     screenshots addable at any time, not just at step creation.
-   - <strong>Generate Report</strong> (<code>GET /versions/{id}/vgs-report-draft/report.docx</code>)
+     collapsed into a single server-side action.</li>
+<li><strong>Evidence</strong> supports numbered steps, each with one or more
+     screenshots addable at any time, not just at step creation.</li>
+<li><strong>Generate Report</strong> (<code>GET /versions/{id}/vgs-report-draft/report.docx</code>)
      produces the same DOCX shape as the original VGS tool.</li>
 <li><strong>Per-scan-run VGS-format export, with no curation step at all</strong>
    (<code>GET /scan-runs/{id}/report.vgs.docx</code>) — the newest of the three modes.
@@ -854,6 +947,32 @@ report-builder port and the per-scan-run export were built in addition.</p>
 <li><strong>Credential envelope encryption</strong> — every stored secret is encrypted via
   a pluggable <code>KMSAdapter</code> before touching the database; API responses only
   ever include a masked reference.</li>
+<li><strong>Multi-tenant data isolation</strong> — every resource chain (Project → Version →
+  ScanRun → Finding) is scoped to an <code>org_id</code>, and every API route resolves
+  through the authenticated user's own <code>org_id</code> before touching anything —
+  one org's scan data is never queryable by another org's users at the
+  query layer, not just hidden in the UI.</li>
+<li><strong>What leaves the organization's own infrastructure, and what doesn't</strong> —
+  the one genuine third-party data flow is AI-assisted triage: when it
+  runs (SQLi/XSS/access-control confirmation, business-logic hypothesis
+  generation), truncated request/response snippets from the target
+  application (~2000 characters, centered on the relevant diff) go to
+  whichever LLM provider is configured for that scan. By default that's a
+  hosted provider (Claude, OpenAI, Gemini, or Grok — §6) — real,
+  unavoidable third-party egress for that data, the same as any product
+  built on a hosted LLM. Two ways to eliminate it entirely, both already
+  supported with no code changes: point the AI provider config at a
+  <strong>self-hosted/on-prem OpenAI-compatible endpoint</strong> (<code>provider: "custom"</code>),
+  or run with <strong>no AI provider configured at all</strong> — every deterministic
+  check (the majority of the check catalog: every header/cookie/TLS
+  misconfiguration, CSRF, clickjacking, open redirect, CSP bypass, API
+  version exposure, file upload, and more) still runs and produces real,
+  confirmed findings; only the LLM-assisted confirmation/triage steps are
+  skipped. Evidence (screenshots, captured request/response pairs) is
+  stored on local disk or S3 by default — under the <em>deploying
+  organization's own</em> infrastructure/AWS account, never anything
+  Verdikt-controlled. No analytics/telemetry SDK (Sentry, PostHog,
+  Segment, Mixpanel, or similar) exists anywhere in the codebase.</li>
 <li><strong>Safe-by-default agent behavior</strong> — the File Upload agent never actually
   executes an uploaded payload; the SSRF agent uses only a scanner-controlled
   callback target; the deserialization and request-smuggling agents are
@@ -880,7 +999,8 @@ covers what's architecturally true of each path.</p>
 <h3 id="131-docker-compose">13.1 Docker Compose</h3>
 <p>Verified end-to-end against a completely fresh environment (empty Postgres
 volume, no host <code>.venv</code>/<code>node_modules</code>):</p>
-<div class="mermaid">flowchart TB
+<pre class="mermaid">
+flowchart TB
     subgraph Host["Host Machine (macOS / Linux / Windows)"]
         subgraph Compose["docker compose up --build"]
             DB[("db<br/>postgres:16-alpine<br/>named volume: verdikt_pgdata<br/>host port 5433 (avoids native-Postgres collision)")]
@@ -893,8 +1013,7 @@ volume, no host <code>.venv</code>/<code>node_modules</code>):</p>
     Browser -->|"HTTP"| FEC
     Browser -->|"HTTP :8095"| BE
     Browser -->|"VNC-in-iframe<br/>127.0.0.1:6080"| BE
-</div>
-
+</pre>
 <ul>
 <li><strong><code>--loop asyncio</code> is not a stylistic choice</strong> — uvicorn's default
   <code>--loop auto</code> silently selects <code>uvloop</code>, which is incompatible with
@@ -977,7 +1096,7 @@ mode → Load unpacked, record, export, upload.</p>
 <hr />
 <h2 id="14-testing-quality-discipline">14. Testing &amp; Quality Discipline</h2>
 <ul>
-<li><strong>119 test files, 667 collected tests</strong> — confirmed by running
+<li><strong>126 test files, 721 collected tests</strong> — confirmed by running
   <code>pytest --collect-only</code>, not estimated.</li>
 <li>Real fixtures over mocks wherever practically possible: real local HTTP
   servers standing in for a target application, a real headless browser
@@ -986,7 +1105,15 @@ mode → Load unpacked, record, export, upload.</p>
 <li><strong>Live-validated</strong>, not just unit-tested: run against a real, running
   OWASP Juice Shop instance and a real DVWA instance across all four of its
   security levels (Low, Medium, High, Impossible), with results manually
-  cross-checked against what's actually exploitable at each level.</li>
+  cross-checked against what's actually exploitable at each level. The
+  Chatbot/LLM Pentest capability (§7) was additionally validated end to
+  end against a real local fixture chatbot server for each of its 5
+  checks, and again in a combined demo run covering all four target
+  categories in one pass: a traditional web app (DVWA), a JavaScript SPA
+  (Juice Shop), a JSON REST API (a purpose-built vulnerable fixture with a
+  real BOLA and real SQL injection), and an LLM-backed chatbot (a
+  purpose-built fixture triggering all 5 chatbot checks) — real scans
+  through the real product against all four, not simulated.</li>
 <li>Every bug fix in this system's history was root-caused against a real
   target, not inferred from a stack trace alone.</li>
 </ul>
@@ -1032,6 +1159,16 @@ mode → Load unpacked, record, export, upload.</p>
 <td><code>version_id</code>, <code>rule_type</code>, <code>title</code>, <code>config</code> (JSON), <code>created_by</code></td>
 </tr>
 <tr>
+<td><code>ChatbotTarget</code></td>
+<td><code>chatbot_targets</code></td>
+<td><code>version_id</code>, <code>endpoint_url</code>, <code>http_method</code>, <code>request_body_template</code> (<code>{message}</code> placeholder), <code>content_type</code>, <code>response_text_path</code>, <code>auth_header_name</code>, <code>encrypted_auth_header_value</code>, <code>masked_reference</code></td>
+</tr>
+<tr>
+<td><code>ChatbotAgencyProbe</code></td>
+<td><code>chatbot_agency_probes</code></td>
+<td><code>chatbot_target_id</code>→chatbot_targets <strong>CASCADE</strong>, <code>forbidden_action</code> (Text), <code>created_by</code></td>
+</tr>
+<tr>
 <td><code>CMDBConfig</code></td>
 <td><code>cmdb_configs</code></td>
 <td><code>org_id</code>, <code>lookup_url_template</code>, <code>auth_header_name</code>, <code>encrypted_auth_header_value</code>, <code>owner_json_path</code>, <code>criticality_json_path</code></td>
@@ -1039,7 +1176,7 @@ mode → Load unpacked, record, export, upload.</p>
 <tr>
 <td><code>CredentialSet</code></td>
 <td><code>credential_sets</code></td>
-<td><code>version_id</code>, <code>credential_type</code>, <code>encrypted_secret</code>, <code>login_endpoint</code>, <code>login_body_template</code>, <code>token_response_path</code>, <code>extra_cookies</code> (JSON)</td>
+<td><code>version_id</code>, <code>credential_type</code>, <code>encrypted_secret</code>, <code>login_endpoint</code>, <code>login_body_template</code>, <code>token_response_path</code>, <code>extra_cookies</code> (JSON), <code>extra_headers</code> (JSON)</td>
 </tr>
 <tr>
 <td><code>FindingTicket</code></td>
@@ -1176,7 +1313,7 @@ mode → Load unpacked, record, export, upload.</p>
 <p><strong><code>AuthorizationRecord</code>, referenced in the original design's guardrail #1,
 does not exist in the current model set</strong> — confirmed removed (§18).</p>
 <hr />
-<h2 id="16-appendix-full-api-route-reference-30-modules">16. Appendix — Full API Route Reference (30 modules)</h2>
+<h2 id="16-appendix-full-api-route-reference-32-modules">16. Appendix — Full API Route Reference (32 modules)</h2>
 <table>
 <thead>
 <tr>
@@ -1214,12 +1351,20 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 <td><code>POST /business-rules</code>, <code>GET /business-rules</code>, <code>DELETE /business-rules/{id}</code></td>
 </tr>
 <tr>
+<td><code>chatbot_targets.py</code></td>
+<td><code>POST /versions/{id}/chatbot-targets</code>, <code>GET /versions/{id}/chatbot-targets</code>, <code>DELETE /versions/{id}/chatbot-targets/{target_id}</code></td>
+</tr>
+<tr>
+<td><code>chatbot_agency_probes.py</code></td>
+<td><code>POST /versions/{id}/chatbot-targets/{target_id}/agency-probes</code>, <code>GET /versions/{id}/chatbot-targets/{target_id}/agency-probes</code>, <code>DELETE /versions/{id}/chatbot-targets/{target_id}/agency-probes/{probe_id}</code></td>
+</tr>
+<tr>
 <td><code>cmdb_configs.py</code></td>
 <td><code>POST /cmdb-configs</code>, <code>GET /cmdb-configs</code>, <code>DELETE /cmdb-configs/{id}</code>, <code>POST /cmdb-configs/{id}/lookup</code></td>
 </tr>
 <tr>
 <td><code>credentials.py</code></td>
-<td><code>POST /credentials</code>, <code>GET /credentials</code>, <code>PATCH /credentials/{id}</code>, <code>DELETE /credentials/{id}</code>, <code>POST /credentials/{id}/test-login</code>, <code>POST /credentials/{id}/record-macro/start</code>, <code>POST /credentials/{id}/record-macro/{recording_id}/finish</code>, <code>POST /credentials/{id}/record-macro/{recording_id}/cancel</code>, <code>GET /credentials/{id}/macros</code>, <code>DELETE /credentials/{id}/macros/{macro_id}</code></td>
+<td><code>POST /credentials</code> (accepts <code>extra_cookies</code>/<code>extra_headers</code>), <code>GET /credentials</code>, <code>PATCH /credentials/{id}</code>, <code>DELETE /credentials/{id}</code>, <code>POST /credentials/{id}/test-login</code>, <code>POST /credentials/{id}/record-macro/start</code>, <code>POST /credentials/{id}/record-macro/{recording_id}/finish</code>, <code>POST /credentials/{id}/record-macro/{recording_id}/cancel</code>, <code>GET /credentials/{id}/macros</code>, <code>DELETE /credentials/{id}/macros/{macro_id}</code></td>
 </tr>
 <tr>
 <td><code>dashboard.py</code></td>
@@ -1308,7 +1453,7 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 </tbody>
 </table>
 <hr />
-<h2 id="17-appendix-full-check-catalog-39-static-ids-dynamic-ids">17. Appendix — Full Check Catalog (39 static IDs + dynamic IDs)</h2>
+<h2 id="17-appendix-full-check-catalog-47-static-ids-dynamic-ids">17. Appendix — Full Check Catalog (47 static IDs + dynamic IDs)</h2>
 <table>
 <thead>
 <tr>
@@ -1322,6 +1467,10 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 <td><code>missing-hsts</code> (Low/319), <code>missing-csp</code> (Low/693), <code>missing-x-frame-options</code> (Medium/1021), <code>missing-x-content-type-options</code> (Low/693), <code>missing-referrer-policy</code> (Low/200), <code>missing-permissions-policy</code> (Low/693), <code>cookie-missing-secure</code> (Medium/614), <code>cookie-missing-httponly</code> (Medium/1004), <code>cookie-missing-samesite</code> (Low/1275), <code>server-version-disclosure</code> (Low/200), <code>verbose-error-stack-trace</code> (Medium/209), <code>directory-listing-enabled</code> (Medium/548), <code>plaintext-http</code> (High/319), <code>weak-tls-version</code> (Medium/326), <code>autocomplete-enabled-password-field</code> (Low/522)</td>
 </tr>
 <tr>
+<td><code>api_version_catalog.yaml</code></td>
+<td><code>api-deprecated-version-excessive-data-exposure</code> (High/213)</td>
+</tr>
+<tr>
 <td><code>auth_catalog.yaml</code></td>
 <td><code>jwt-alg-none</code> (Critical/347), <code>jwt-missing-expiration</code> (Medium/613), <code>jwt-alg-confusion</code> (Critical/347), <code>jwt-weak-signing-secret</code> (Critical/330), <code>weak-session-token-entropy</code> (Medium/330)</td>
 </tr>
@@ -1330,12 +1479,20 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 <td><code>web-cache-poisoning-unkeyed-input</code> (High/441), <code>web-cache-deception</code> (High/524)</td>
 </tr>
 <tr>
+<td><code>chatbot_injection_catalog.yaml</code></td>
+<td><code>chatbot-prompt-injection-direct</code> (High/1427, LLM01), <code>chatbot-system-prompt-extraction</code> (Medium/200, LLM08), <code>chatbot-improper-output-handling</code> (Medium/79, LLM10), <code>chatbot-excessive-agency</code> (High/863, LLM03), <code>chatbot-unexpected-code-execution</code> (Critical/94, ASI05) — see §7</td>
+</tr>
+<tr>
 <td><code>clickjacking_catalog.yaml</code></td>
 <td><code>clickjacking-confirmed</code> (Medium/1021)</td>
 </tr>
 <tr>
 <td><code>cors_catalog.yaml</code></td>
 <td><code>cors-reflected-origin-with-credentials</code> (Critical/942), <code>cors-wildcard-origin</code> (Low/942)</td>
+</tr>
+<tr>
+<td><code>csp_bypass_catalog.yaml</code></td>
+<td><code>csp-bypass-jsonp-callback</code> (High/693)</td>
 </tr>
 <tr>
 <td><code>csrf_catalog.yaml</code></td>
@@ -1360,6 +1517,10 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 <tr>
 <td><code>oauth_catalog.yaml</code></td>
 <td><code>oauth-redirect-uri-validation-bypass</code> (Critical/601)</td>
+</tr>
+<tr>
+<td><code>open_redirect_catalog.yaml</code></td>
+<td><code>open-redirect-confirmed</code> (Medium/601)</td>
 </tr>
 <tr>
 <td><code>request_smuggling_catalog.yaml</code></td>
@@ -1431,7 +1592,7 @@ decisions diverged from the original design, in both directions.</p>
    exist anywhere in the codebase.</li>
 </ol>
 <p><strong>Built beyond what was originally specified:</strong></p>
-<ol start="7">
+<ol>
 <li><strong>VGS integration — both spec-recommended paths, plus a full native
    workspace, plus a third export mode.</strong> The spec recommended starting
    with webhook push alone; the native report-builder port (its own
@@ -1463,7 +1624,7 @@ decisions diverged from the original design, in both directions.</p>
     Invalidate Session on Logout (§5.1, §7).</li>
 </ol>
 <p><strong>Matches the spec closely:</strong></p>
-<ol start="14">
+<ol>
 <li>The AI Provider Abstraction itself, including the exact
     <code>CustomEndpointAdapter</code> concept the spec named by placeholder
     (implemented as <code>GenericOpenAIAdapter</code>).</li>
@@ -1577,7 +1738,7 @@ above already produced, for a fixed set of call sites in <code>graph.py</code> /
 <code>runner.py</code> / <code>scans.py</code>. There is nothing here for an operator or analyst
 to configure.</p>
 <hr />
-<h2 id="20-appendix-migration-history-36-files-one-linear-chain">20. Appendix — Migration History (36 files, one linear chain)</h2>
+<h2 id="20-appendix-migration-history-39-files-one-linear-chain">20. Appendix — Migration History (39 files, one linear chain)</h2>
 <p><code>0001_initial_schema</code> → <code>0001b_widen_alembic_version_column</code> (widens
 <code>alembic_version.version_num</code> for this project's long revision slugs) →
 <code>0002_scan_findings_and_permissions</code> → <code>0003_phase2_review_candidates_and_login_config</code>
@@ -1598,7 +1759,8 @@ to configure.</p>
 <code>0030_ai_provider_config_secret_rotated_at</code> →
 <code>0031_drop_spark_specific_columns</code> → <code>0032_drop_ai_provider_model_tiers</code> →
 <code>0033_vgs_auto_seed_finding_memory</code> → <code>0034_scope_entry_purpose</code> →
-<code>0035_evidence_payload</code>.</p>
+<code>0035_evidence_payload</code> → <code>0036_chatbot_targets</code> →
+<code>0037_chatbot_agency_probes</code> → <code>0038_credential_extra_headers</code>.</p>
 <p>Two of these pairs are worth reading together, not in isolation: <code>0024</code>
 added columns for a since-removed, org-specific internal LLM gateway
 integration (never a general-purpose feature, and out of scope once that
@@ -1612,18 +1774,26 @@ proved to be complexity without enough benefit, not a mistake papered over
 <code>0033</code> tracks a persistent <code>auto_seeded_finding_ids</code> column on
 <code>VgsReportDraft</code> (§10) that records every <code>Finding.id</code> an auto-seed pass
 has ever offered a report draft, independent of whether the resulting
-vulnerability still exists in the draft. <code>0034</code> and <code>0035</code> are the newest:
-<code>scope_entries.purpose</code> (<code>"target"</code> vs. <code>"login_only"</code>, §5.5's IdP
-scope-leak fix) and <code>evidence.payload</code> (§9's highlighted-substring
-evidence), both additive and nullable/defaulted, so neither required a
-backfill.</p>
+vulnerability still exists in the draft. <code>0034</code> and <code>0035</code> are the newest before this round: <code>scope_entries.purpose</code>
+(<code>"target"</code> vs. <code>"login_only"</code>, §5.5's IdP scope-leak fix) and
+<code>evidence.payload</code> (§9's highlighted-substring evidence), both additive
+and nullable/defaulted, so neither required a backfill. <code>0036</code> and <code>0037</code>
+add the Chatbot/LLM Pentest capability's two tables (§4/§7):
+<code>chatbot_targets</code> and <code>chatbot_agency_probes</code>, both additive, no RBAC
+seed needed in <code>0037</code> since it's a sub-resource of <code>chatbot_target</code>
+(<code>0036</code> already seeds that). <code>0038</code> adds <code>credential_sets.extra_headers</code>
+— the header-shaped equivalent of <code>extra_cookies</code>, also additive and
+nullable.</p>
 <hr />
 <h2 id="21-appendix-rbac-matrix">21. Appendix — RBAC Matrix</h2>
-<p><strong>20 resources</strong>: <code>organization</code>, <code>project</code>, <code>version</code>, <code>target</code>,
+<p><strong>21 resources</strong>: <code>organization</code>, <code>project</code>, <code>version</code>, <code>target</code>,
 <code>credential</code>, <code>traffic</code>, <code>scan</code>, <code>finding</code>, <code>review_candidate</code>, <code>business_rule</code>,
 <code>ai_provider_config</code>, <code>oidc_provider_config</code>, <code>notification_config</code>,
 <code>ticketing_config</code>, <code>cmdb_config</code>, <code>vgs_config</code>, <code>user</code>, <code>org_branding</code>,
-<code>saml_config</code>, <code>vgs_vulnerability</code> — each with <code>create</code>/<code>read</code>/<code>update</code>/<code>delete</code>.</p>
+<code>saml_config</code>, <code>vgs_vulnerability</code>, <code>chatbot_target</code> — each with
+<code>create</code>/<code>read</code>/<code>update</code>/<code>delete</code>. <code>chatbot_agency_probe</code> rows are a
+sub-resource of <code>chatbot_target</code> (same pattern <code>VgsEvidenceStep</code> uses for
+<code>vgs_vulnerability</code>) — no separate resource.</p>
 <table>
 <thead>
 <tr>
@@ -1634,7 +1804,7 @@ backfill.</p>
 <tbody>
 <tr>
 <td><code>org_admin</code></td>
-<td>Full CRUD on all 20 resources</td>
+<td>Full CRUD on all 21 resources</td>
 </tr>
 <tr>
 <td><code>project_lead</code></td>
@@ -1663,26 +1833,26 @@ backfill.</p>
 <span class="w">  </span><span class="o">/</span><span class="n">vgs</span><span class="o">/:</span><span class="n">versionId</span><span class="w">            </span><span class="err">→</span><span class="w"> </span><span class="n">VgsWorkspacePage</span>
 <span class="w">  </span><span class="o">/</span><span class="n">account</span><span class="w">                   </span><span class="err">→</span><span class="w"> </span><span class="n">AccountPage</span>
 </code></pre></div>
-
 <ul>
 <li><strong>Account page sections</strong> (own file each): Branding, CMDB Configs,
   Notification Configs, SAML Configs, Ticketing Configs, Users, VGS
   Configs. (AI Provider Configs remains inline in <code>AccountPage.tsx</code>.)</li>
 <li><strong>Scan Run detail tabs</strong>: Agent Jobs, Diff, Findings, Reports, Review
   Candidates, Site Map, Ticket.</li>
-<li><strong>Version detail tabs</strong>: Burp, Business Rules, Credentials, Macro
-  Recording, Scan Runs, Scope, Targets, Traffic — plus dedicated
-  business-rule sub-forms (Credential Select, HTTP Method Select,
-  Price/Quantity Tampering, Race Condition, Resource Isolation, Workflow
-  Order) and VGS report sub-tabs (Evidence, Generate, Project Info,
-  Vulnerabilities).</li>
-<li><strong>API client</strong>: <code>src/api/client.ts</code> exposes 23 namespaced sub-objects
+<li><strong>Version detail tabs</strong>: Burp, Business Rules, Chatbot Targets,
+  Credentials, Macro Recording, Scan Runs, Scope, Targets, Traffic — plus
+  dedicated business-rule sub-forms (Credential Select, HTTP Method
+  Select, Price/Quantity Tampering, Race Condition, Resource Isolation,
+  Workflow Order), a nested Agency Probes section under each chatbot
+  target (§4/§7), and VGS report sub-tabs (Evidence, Generate, Project
+  Info, Vulnerabilities).</li>
+<li><strong>API client</strong>: <code>src/api/client.ts</code> exposes 28 namespaced sub-objects
   (auth, organizations, projects, users, versions, targets, credentials,
   businessRules, scanRuns, retestJobs, reviewCandidates, apiKeys,
   aiProviderConfigs, traffic, burp, notificationConfigs, ticketingConfigs,
   findingTickets, cmdbConfigs, vgsConfigs, samlConfigs, orgBranding,
-  attackChains, oidcProviderConfigs); <code>src/api/types.ts</code> defines 62
-  exported types.</li>
+  attackChains, oidcProviderConfigs, chatbotTargets, chatbotAgencyProbes,
+  among others); <code>src/api/types.ts</code> defines 67 exported types.</li>
 </ul>
 <hr />
 <h2 id="23-whats-next">23. What's Next</h2>
@@ -1701,6 +1871,14 @@ backfill.</p>
   vector for standalone RCE proof).</li>
 <li>Configurable human-in-the-loop approval checkpoints for the more
   invasive check categories, as originally specified.</li>
+<li>ASI02 Tool Misuse's genuinely distinct half (malicious arguments
+  reaching a real tool call, not just an unauthorized-purpose ask
+  already covered by LLM03) — deliberately deferred until there's a
+  concrete tool/function-manifest introspection mechanism to design
+  against (§7).</li>
+<li>Indirect prompt injection via RAG-corpus poisoning for the Chatbot
+  Pentest capability — deferred pending a safe, generic way to plant
+  content into an arbitrary target's retrieval corpus.</li>
 </ul>
 <hr />
 <h2 id="24-frequently-asked-questions">24. Frequently Asked Questions</h2>
@@ -1763,7 +1941,7 @@ what — or whether — anything was imported. This is what makes a
 client-rendered SPA's real API surface testable at all.</p>
 <p><strong>What's the architecture, and what's AI's role given deterministic
 scanning is already in place?</strong> One scan compiles and executes the
-31-node DAG in §5.1 — real parallel fan-out, not a sequential loop — with
+35-node DAG in §5.1 — real parallel fan-out, not a sequential loop — with
 <code>chain_analysis</code> reviewing the complete set of that run's Confirmed
 findings once everything else is done. The division of labor: a
 deterministic signal is evidence, not a verdict — it establishes <em>that</em>
@@ -1772,12 +1950,32 @@ context. AI's output is never trusted outright; it's gated by more
 determinism at every step (re-execution, adversarial validation, the same
 detection pipeline an analyst's own hand-typed business rule goes through).
 A finding only exists where both layers agree, twice.</p>
+<p><strong>Can Verdikt test a chatbot or an LLM-backed application, not just a web
+app/API?</strong> Yes — an analyst configures a <code>ChatbotTarget</code> (endpoint URL,
+HTTP method, a request body template with a <code>{message}</code> placeholder, and
+where to read the reply text out of the JSON response), optionally with
+one or more <code>ChatbotAgencyProbe</code> rows describing an action the bot should
+never agree to perform. <code>ChatbotInjectionAgent</code> (§7) then runs five
+checks against it covering the OWASP LLM Top 10 2026 and Agentic Top 10
+2026: direct prompt injection, system-prompt/hidden-context extraction,
+improper output handling (unescaped reflection back into the bot's own
+reply), excessive agency (talked into agreeing to a forbidden action),
+and unexpected code execution. This is a fully conversational check —
+Verdikt only ever sends the bot a message and judges the reply text, the
+same safety envelope as every other AI-judged check in this system.</p>
+<p><strong>Can I save a custom auth header on a credential, not just a bearer
+token or cookie?</strong> Yes — <code>CredentialSet.extra_headers</code> (§4) is a JSON map
+of static headers (e.g. <code>X-API-Key: &lt;value&gt;</code>) forced onto every request
+for that credential, the header-shaped equivalent of the pre-existing
+<code>extra_cookies</code>. It applies on top of any credential type — an
+<code>api_token</code> credential (which otherwise only ever produces a literal
+<code>Authorization: Bearer &lt;token&gt;</code>), a form login, or a recorded macro — so
+an imported Postman/API collection's custom auth header can be saved and
+reused for API scans alongside, not instead of, a normal login flow.</p>
 <hr />
 <p><em>This document reflects the system exactly as implemented, verified
 directly against the codebase. Architecture diagrams are provided
 separately as Mermaid (<code>.mmd</code>) source files, directly importable into
 Miro's Mermaid-import feature.</em></p>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<script>mermaid.initialize({ startOnLoad: true, theme: "neutral" });</script>
 </body>
 </html>
