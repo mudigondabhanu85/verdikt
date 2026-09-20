@@ -27,6 +27,54 @@ _LOGOUT_LINK_RE = re.compile(r"log[\s_-]?out|sign[\s_-]?out", re.IGNORECASE)
 # an endpoint for app.agents.websocket_security without needing to
 # actually execute the page's JS.
 _WEBSOCKET_URL_RE = re.compile(r"wss?://[^\s\"'<>\\]+")
+# The two standard browser AJAX call shapes — fetch(url, ...) and
+# XMLHttpRequest's .open(method, url) — good enough to surface an
+# endpoint that only exists as a JS string literal, never linked from
+# any <a href> or <form>, without needing to actually execute the
+# page's JS (same "good enough" bar as _WEBSOCKET_URL_RE above). Only
+# fires against script content this crawl actually fetched — see
+# _extract_script_srcs, which queues external <script src> files as
+# their own crawl targets specifically so their body reaches this.
+# Real gap this closes: DVWA's own "API" and "Authorisation Bypass"
+# pages call `/vulnerabilities/api/v2/user/` and
+# `get_user_data.php`/`change_user_details.php` purely from an external
+# .js file with no HTML reference anywhere — invisible to every
+# check that depends on discovered_endpoints until this existed.
+_JS_ENDPOINT_URL_RE = re.compile(
+    r"""fetch\(\s*['"]([^'"]+)['"]"""
+    r"""|\.open\(\s*['"](?:GET|POST|PUT|DELETE|PATCH)['"]\s*,\s*['"]([^'"]+)['"]""",
+    re.IGNORECASE,
+)
+# The same two call shapes, but via a variable holding the URL rather
+# than a string literal in the call itself — e.g.
+# `const url = '/api/v2/user/'; fetch(url, {...})`, DVWA's own "API"
+# page's real code. _JS_ENDPOINT_URL_RE alone misses this; resolving the
+# variable needs a second pass matching its assignment separately.
+_JS_URL_ASSIGNMENT_RE = re.compile(
+    r"""(?:const|let|var)\s+(\w+)\s*=\s*['"]([^'"]+)['"]""", re.IGNORECASE
+)
+_JS_ENDPOINT_URL_VARIABLE_RE = re.compile(
+    r"""fetch\(\s*(\w+)\b"""
+    r"""|\.open\(\s*['"](?:GET|POST|PUT|DELETE|PATCH)['"]\s*,\s*(\w+)\b""",
+    re.IGNORECASE,
+)
+# A quoted relative-URL-like string inside an onclick handler — e.g.
+# onclick="javascript:popUp('session-input.php')" or
+# onclick="window.open('/help/topic.html')". A plain <a href> crawl
+# structurally cannot see pages only reachable this way: DVWA's own
+# SQL Injection page at "High" difficulty (§14) replaces its normal
+# <input>/<form> entirely with exactly this pattern (a link that opens a
+# popup which POSTs into a session variable the main page's query later
+# uses) — not a filter or sanitizer, a genuine crawl-discovery gap that
+# left the popup's own form (and the second-order SQL injection behind
+# it) completely invisible to every check that depends on recon's own
+# forms/endpoints lists. Requires a recognizable web page extension so
+# this doesn't misfire on the many onclick handlers that reference
+# something other than a URL at all (a CSS class, an analytics event
+# name, a DOM id).
+_ONCLICK_URL_RE = re.compile(
+    r"""(['"])([\w.\-/]+\.(?:php|html?|aspx?|jsp)(?:\?[^'"]*)?)\1""", re.IGNORECASE
+)
 
 
 @dataclass
@@ -82,6 +130,18 @@ def _extract_links(base_url: str, soup: BeautifulSoup) -> tuple[list[str], list[
             logout_links.append(urljoin(base_url, href))
             continue
         links.append(urljoin(base_url, href))
+
+    # See _ONCLICK_URL_RE's docstring — any element (not just <a>) can
+    # trigger a popup/navigation via onclick with no real <a href> at
+    # all. Same logout-link carve-out as above applies here too.
+    for tag in soup.find_all(onclick=True):
+        for href in _ONCLICK_URL_RE.findall(tag["onclick"]):
+            href = href[1]  # (quote_char, url) — see the capture groups above
+            if _LOGOUT_LINK_RE.search(href):
+                logout_links.append(urljoin(base_url, href))
+                continue
+            links.append(urljoin(base_url, href))
+
     return links, logout_links
 
 
@@ -103,6 +163,36 @@ def extract_forms(base_url: str, soup: BeautifulSoup) -> list[FormInfo]:
 
 def _extract_websocket_urls(text: str) -> list[str]:
     return list(dict.fromkeys(_WEBSOCKET_URL_RE.findall(text)))
+
+
+def _extract_js_endpoint_urls(base_url: str, text: str) -> list[str]:
+    literals = [match.group(1) or match.group(2) for match in _JS_ENDPOINT_URL_RE.finditer(text)]
+
+    variable_values = dict(_JS_URL_ASSIGNMENT_RE.findall(text))
+    for match in _JS_ENDPOINT_URL_VARIABLE_RE.finditer(text):
+        var_name = match.group(1) or match.group(2)
+        if var_name in variable_values:
+            literals.append(variable_values[var_name])
+
+    urls = [
+        urljoin(base_url, url)
+        for url in literals
+        if url and not url.startswith(("data:", "javascript:", "about:", "#"))
+    ]
+    return list(dict.fromkeys(urls))
+
+
+def _extract_script_srcs(base_url: str, soup: BeautifulSoup) -> list[str]:
+    """External <script src> files — queued as their own crawl targets
+    (same frontier, same scope/depth/page budget as any other link) so
+    their body is actually fetched and reaches _extract_js_endpoint_urls/
+    _extract_websocket_urls, both of which only ever scan text this
+    crawl already has in hand."""
+    return [
+        urljoin(base_url, tag["src"].strip())
+        for tag in soup.find_all("script", src=True)
+        if tag["src"].strip()
+    ]
 
 
 def _extract_query_params(url: str) -> list[DiscoveredParameter]:
@@ -182,7 +272,16 @@ class ReconAgent:
         # much traffic was imported. Seeding them into the frontier
         # here means the crawl actually continues from them, same as
         # any page it found itself.
-        self._extra_seed_urls = extra_seed_urls or []
+        #
+        # Real, live-found bug: an AI-suggested candidate path (e.g.
+        # app.agents.recon_planner guessing "/logout.php" as a plausible
+        # unlinked page) bypasses _extract_links's own logout carve-out
+        # entirely, since that only filters <a href> links found *inside*
+        # an already-fetched page, never a seed handed in directly. This
+        # is the same class of hazard for any future extra_seed_urls
+        # caller too, so it's filtered here — the frontier's own choke
+        # point — rather than trusting every caller to remember it.
+        self._extra_seed_urls = [u for u in (extra_seed_urls or []) if not _LOGOUT_LINK_RE.search(u)]
         settings = get_settings()
         self.MAX_PAGES = settings.crawl_max_pages
         self.MAX_DEPTH = settings.crawl_max_depth
@@ -194,6 +293,7 @@ class ReconAgent:
         # detection costs zero extra requests instead of re-fetching.
         self.discovered_responses: dict[str, httpx.Response] = {}
         self.discovered_websocket_endpoints: list[str] = []
+        self.discovered_api_endpoints: list[str] = []
         # See _extract_links's docstring — captured separately from
         # discovered_endpoints precisely because a logout link is never
         # allowed into that list at all.
@@ -235,6 +335,9 @@ class ReconAgent:
                     for ws_url in _extract_websocket_urls(response.text):
                         if ws_url not in self.discovered_websocket_endpoints:
                             self.discovered_websocket_endpoints.append(ws_url)
+                    for api_url in _extract_js_endpoint_urls(url, response.text):
+                        if api_url not in self.discovered_api_endpoints:
+                            self.discovered_api_endpoints.append(api_url)
                 next_frontier.extend(self._follow_up_links(url, response))
 
             frontier = next_frontier
@@ -269,5 +372,5 @@ class ReconAgent:
             for logout_url in logout_links:
                 if logout_url not in self.discovered_logout_urls:
                     self.discovered_logout_urls.append(logout_url)
-            return links
+            return links + _extract_script_srcs(url, soup)
         return []

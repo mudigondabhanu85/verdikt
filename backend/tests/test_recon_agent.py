@@ -47,6 +47,34 @@ PAGES = {
     ),
     "http://site.test/logout.php": ("text/html", "<html><body>Logged out</body></html>"),
     "http://site.test/account": ("text/html", "<html><body>Account settings</body></html>"),
+    "http://site.test/sqli/": (
+        "text/html",
+        '<html><body>Click <a href="#" onclick="javascript:popUp(\'session-input.php\');'
+        'return false;">here to change your ID</a>.'
+        '<button onclick="trackEvent(\'not-a-url\')">Track</button>'
+        "</body></html>",
+    ),
+    "http://site.test/sqli/session-input.php": (
+        "text/html",
+        '<html><body><form method="POST" action="#"><input type="text" name="id">'
+        '<input type="submit" name="Submit" value="Submit"></form></body></html>',
+    ),
+    "http://site.test/api/": (
+        "text/html",
+        '<html><body><script src="app.js"></script></body></html>',
+    ),
+    "http://site.test/api/app.js": (
+        "application/javascript",
+        "function load() { fetch('/api/v2/user/').then(r => r.json()); }\n"
+        "var xhr = new XMLHttpRequest(); xhr.open('GET', 'get_user_data.php', true); xhr.send();",
+    ),
+    "http://site.test/inline-api/": (
+        "text/html",
+        "<html><body><script>"
+        "const url = '/api/v3/order/';\n"
+        "fetch(url, { method: 'GET' });"
+        "</script></body></html>",
+    ),
 }
 
 
@@ -114,6 +142,71 @@ async def test_recon_agent_never_follows_logout_links(db_adapter):
         await client.aclose()
 
 
+async def test_recon_agent_never_fetches_a_logout_shaped_extra_seed_url(db_adapter):
+    """Same hazard as test_recon_agent_never_follows_logout_links, but for
+    a URL handed in directly via extra_seed_urls (app.agents.recon_planner's
+    AI-suggested-path mechanism is the real caller) rather than discovered
+    via an <a href> mid-crawl. _extract_links's own carve-out only ever
+    protects links found *inside* an already-fetched page — a seed passed
+    straight in bypasses it entirely, so this must be filtered at
+    __init__ time instead. The handler raises if logout.php is ever
+    actually requested, not just asserting it's absent from the result.
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "logout" in str(request.url):
+            raise AssertionError(f"logout-shaped seed URL was fetched: {request.url}")
+        return httpx.Response(200, text="<html></html>", request=request)
+
+    async with session_scope(db_adapter) as session:
+        version_id = uuid.uuid4()
+        scope_entries = [ScopeEntry(host="site.test", port=80, in_scope=True)]
+        client = ScopedHttpClient(
+            version_id=version_id,
+            scope_entries=scope_entries,
+            db_session=session,
+            transport=httpx.MockTransport(handler),
+        )
+        target = Target(host="site.test", port=80, base_url="http://site.test/")
+
+        agent = ReconAgent(client, [target], extra_seed_urls=["http://site.test/logout.php"])
+        discovered = await agent.run()
+
+        assert "http://site.test/logout.php" not in discovered
+
+        await client.aclose()
+
+
+async def test_recon_agent_follows_onclick_popup_links(db_adapter):
+    """The real, live-found DVWA High gap this exists for (§14): SQL
+    Injection at that difficulty replaces its normal <form> entirely
+    with a link whose ONLY reference to the popup page lives in an
+    onclick attribute, never a real <a href> — a plain href-based crawl
+    is structurally blind to it, which meant the popup's own form (and
+    the second-order SQL injection behind it) was completely
+    undiscoverable no matter how the injection agent itself worked.
+    """
+    async with session_scope(db_adapter) as session:
+        version_id = uuid.uuid4()
+        scope_entries = [ScopeEntry(host="site.test", port=80, in_scope=True)]
+        client = ScopedHttpClient(
+            version_id=version_id,
+            scope_entries=scope_entries,
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+        target = Target(host="site.test", port=80, base_url="http://site.test/sqli/")
+
+        agent = ReconAgent(client, [target])
+        discovered = await agent.run()
+
+        assert "http://site.test/sqli/session-input.php" in discovered
+        forms = [f for f in agent.discovered_forms if f.action_url.startswith("http://site.test/sqli/session-input.php")]
+        assert len(forms) == 1
+        assert {f.name for f in forms[0].fields} == {"id", "Submit"}
+
+        await client.aclose()
+
+
 async def test_recon_agent_respects_max_pages_bound(db_adapter):
     async with session_scope(db_adapter) as session:
         version_id = uuid.uuid4()
@@ -167,5 +260,60 @@ async def test_recon_agent_discovers_query_params_and_forms(db_adapter):
         assert password_field.type == "password"
 
         assert agent.discovered_websocket_endpoints == ["wss://site.test/live-feed"]
+
+        await client.aclose()
+
+
+async def test_recon_agent_discovers_endpoints_referenced_only_from_external_js(db_adapter):
+    """A real gap this closes: an endpoint referenced only inside an
+    external <script src> file (fetch()/XMLHttpRequest.open() calls),
+    never linked from any <a href> or <form> — invisible to a plain
+    HTML crawl no matter how thorough, which left DVWA's own "API" and
+    "Authorisation Bypass" pages completely untestable (see
+    app.agents.recon's _JS_ENDPOINT_URL_RE docstring)."""
+    async with session_scope(db_adapter) as session:
+        version_id = uuid.uuid4()
+        scope_entries = [ScopeEntry(host="site.test", port=80, in_scope=True)]
+        client = ScopedHttpClient(
+            version_id=version_id,
+            scope_entries=scope_entries,
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+        target = Target(host="site.test", port=80, base_url="http://site.test/api/")
+
+        agent = ReconAgent(client, [target])
+        discovered = await agent.run()
+
+        assert "http://site.test/api/app.js" in discovered
+        assert set(agent.discovered_api_endpoints) == {
+            "http://site.test/api/v2/user/",
+            "http://site.test/api/get_user_data.php",
+        }
+
+        await client.aclose()
+
+
+async def test_recon_agent_resolves_fetch_url_held_in_a_variable(db_adapter):
+    """The other real, common shape besides a string literal passed
+    straight to fetch()/xhr.open() — DVWA's own "API" page's real code
+    does `const url = '/api/v2/user/'; fetch(url, {...})`, which
+    _JS_ENDPOINT_URL_RE alone can't see since the literal never appears
+    inside the fetch(...) call itself."""
+    async with session_scope(db_adapter) as session:
+        version_id = uuid.uuid4()
+        scope_entries = [ScopeEntry(host="site.test", port=80, in_scope=True)]
+        client = ScopedHttpClient(
+            version_id=version_id,
+            scope_entries=scope_entries,
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+        target = Target(host="site.test", port=80, base_url="http://site.test/inline-api/")
+
+        agent = ReconAgent(client, [target])
+        await agent.run()
+
+        assert agent.discovered_api_endpoints == ["http://site.test/api/v3/order/"]
 
         await client.aclose()

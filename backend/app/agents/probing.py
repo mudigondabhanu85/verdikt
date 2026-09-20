@@ -46,6 +46,17 @@ def build_request(target: ProbeTarget, value: str) -> tuple[str, str | None, str
     if target.method == "GET":
         parsed = urlsplit(target.url)
         params = parse_qs(parsed.query, keep_blank_values=True)
+        # Real, live-found bug against DVWA: a multi-field GET form (e.g.
+        # SQL Injection's "id" + "Submit") needs every companion field
+        # present for the target's own server-side logic to actually run
+        # (DVWA's low.php gates its query behind `isset($_GET['Submit'])`)
+        # — omitting other_fields here (unlike the POST branch below,
+        # which already includes them) silently degraded every such
+        # probe into fetching the untouched "enter a value" placeholder
+        # page instead of ever submitting the form, with no error and no
+        # visible symptom beyond a quietly-empty finding list.
+        for name, other_value in target.other_fields.items():
+            params[name] = [other_value]
         params[target.param_name] = [value]
         new_query = urlencode({k: v[0] for k, v in params.items()})
         return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, "")), None, None

@@ -23,7 +23,7 @@ from urllib.parse import urljoin
 import httpx
 
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient, ScopeViolationError
-from app.agents.recon import DiscoveredParameter, FormInfo, ReconAgent, _extract_query_params
+from app.agents.recon import DiscoveredParameter, FormInfo, ReconAgent, _extract_query_params, _LOGOUT_LINK_RE
 from app.ai.budget import BudgetExceededError, BudgetGuard, ProviderUnavailableError, budget_stop_error
 from app.ai.prompts.loader import render_prompt
 from app.ai.verdict import extract_json_objects
@@ -131,6 +131,17 @@ class ReconPlannerAgent:
             return []
 
         suggested_paths = _parse_suggested_paths(response.content)[:_MAX_SUGGESTIONS]
+        # Real, live-found bug against DVWA: the model naturally guesses
+        # "/logout.php" as a plausible unlinked path for any login-based
+        # app. Unlike a link discovered mid-crawl (app.agents.recon's
+        # _extract_links carve-out), an AI suggestion never passes
+        # through that filter — _verify below would fetch it directly
+        # with the shared authenticated session, silently logging out
+        # every other concurrently-running detection agent for the rest
+        # of the scan (a real DVWA session found to return a live 302
+        # right after, matching "< 400 = confirmed" and getting crawled
+        # from too). Filtered here, before a single request is sent.
+        suggested_paths = [p for p in suggested_paths if not _LOGOUT_LINK_RE.search(p)]
         if not suggested_paths:
             return []
 
