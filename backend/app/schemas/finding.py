@@ -9,6 +9,13 @@ class EvidenceOut(BaseModel):
     response_raw: str
     screenshot_refs: list[str]
     additional_notes: str | None
+    # The exact substring (attacker payload, marker, etc.) proving the
+    # finding within request_raw/response_raw — already highlighted in
+    # the downloadable HTML/PDF/DOCX reports (see
+    # app.reporting.html_report._highlight_payload) but, until now, never
+    # exposed to the frontend at all, so the interactive Findings tab had
+    # no way to highlight it even though the column is populated.
+    payload: str | None
 
     model_config = {"from_attributes": True}
 

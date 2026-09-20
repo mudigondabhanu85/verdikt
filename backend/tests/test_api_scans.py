@@ -172,6 +172,14 @@ async def test_screenshot_from_real_xss_browser_proof_appears_in_all_report_form
     assert len(xss_findings) == 1, findings
     assert xss_findings[0]["confirmation_status"] == "ai_confirmed"
     assert len(xss_findings[0]["evidence"]["screenshot_refs"]) == 1
+    # The API must actually expose Evidence.payload — the exact substring
+    # proving the finding — not just store it: without this, neither the
+    # Findings tab's own highlighting nor a developer reading the raw
+    # JSON can tell what payload was sent and where it landed, even
+    # though the deterministic detector always knew.
+    payload = xss_findings[0]["evidence"]["payload"]
+    assert payload
+    assert payload in xss_findings[0]["evidence"]["response_raw"]
 
     html = (await client.get(f"/scan-runs/{scan_run_id}/report.html", headers=admin["headers"])).text
     assert "Evidence — screenshot" in html

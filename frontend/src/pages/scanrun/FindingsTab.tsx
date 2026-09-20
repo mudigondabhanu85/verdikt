@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '../../api/client'
 import { AuthenticatedImage } from '../../components/AuthenticatedImage'
@@ -6,6 +6,33 @@ import { SeverityBadge, StatusBadge } from '../../components/Badges'
 import { TicketSection } from './TicketSection'
 import type { FindingOut, FindingRetestStatus } from '../../api/types'
 import { useAuth, canReview, canWrite } from '../../auth/AuthContext'
+
+// Same substring-highlight behavior as the downloadable HTML/PDF/DOCX
+// reports (app/reporting/html_report.py's highlight_payload Jinja
+// filter) — every literal occurrence of Evidence.payload inside the
+// raw request/response text gets wrapped for visual emphasis, so a
+// reader can see at a glance exactly what payload was sent and where it
+// landed in the response, without hunting through a wall of raw HTTP
+// text. Built as separate React children (never dangerouslySetInnerHTML)
+// so the surrounding — possibly attacker-controlled — text stays safely
+// auto-escaped by React exactly as it already was before this existed.
+function highlightPayload(text: string, payload: string | null): ReactNode {
+  if (!payload) return text
+  const parts = text.split(payload)
+  if (parts.length === 1) return text
+  const nodes: ReactNode[] = []
+  parts.forEach((part, i) => {
+    if (part) nodes.push(part)
+    if (i < parts.length - 1) {
+      nodes.push(
+        <mark key={i} className="rounded bg-yellow-200 px-0.5 text-gray-900">
+          {payload}
+        </mark>,
+      )
+    }
+  })
+  return nodes
+}
 
 // The direct answer to "I need to delete/false-positive a finding": mark
 // it false_positive_after_review/risk_accepted (both "analyst-locked" —
@@ -201,8 +228,17 @@ function FindingDetail({ scanRunId, finding }: { scanRunId: string; finding: Fin
       {finding.evidence && (
         <div>
           <h4 className="mb-1 font-medium text-gray-700">Evidence</h4>
-          <pre className="mb-2 overflow-x-auto rounded bg-white p-2 text-xs text-gray-700">{finding.evidence.request_raw}</pre>
-          <pre className="overflow-x-auto rounded bg-white p-2 text-xs text-gray-700">{finding.evidence.response_raw}</pre>
+          {finding.evidence.payload && (
+            <p className="mb-1 text-xs text-gray-500">
+              Payload: <code className="rounded bg-yellow-100 px-1 py-0.5 text-gray-900">{finding.evidence.payload}</code>
+            </p>
+          )}
+          <pre className="mb-2 overflow-x-auto rounded bg-white p-2 text-xs text-gray-700">
+            {highlightPayload(finding.evidence.request_raw, finding.evidence.payload)}
+          </pre>
+          <pre className="overflow-x-auto rounded bg-white p-2 text-xs text-gray-700">
+            {highlightPayload(finding.evidence.response_raw, finding.evidence.payload)}
+          </pre>
           {finding.evidence.screenshot_refs.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-2">
               {finding.evidence.screenshot_refs.map((ref) => (

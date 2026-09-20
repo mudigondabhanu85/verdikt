@@ -239,6 +239,12 @@ export interface EvidenceOut {
   response_raw: string
   screenshot_refs: string[]
   additional_notes: string | null
+  // The exact substring (payload, marker, etc.) proving the finding
+  // within request_raw/response_raw — highlight occurrences of this in
+  // the UI the same way the downloadable HTML/PDF/DOCX reports already
+  // do. Null for findings with no single distinguishing substring (most
+  // header/config-only checks).
+  payload: string | null
 }
 
 export type Severity = 'Critical' | 'High' | 'Medium' | 'Low'
