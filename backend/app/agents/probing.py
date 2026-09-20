@@ -35,7 +35,24 @@ def form_probe_targets(forms: list[FormInfo]) -> list[ProbeTarget]:
     for form in forms:
         testable = [f for f in form.fields if f.type not in ("hidden", "submit", "button")]
         for f in testable:
-            others = {o.name: BASELINE_VALUE for o in form.fields if o.name != f.name}
+            # Real, live-found bug against DVWA: giving every companion
+            # field the exact same literal BASELINE_VALUE means any form
+            # gated by an equality check between two of its own fields
+            # (a password-change form's "new" vs. "confirm", for
+            # instance) silently accepts the very first *baseline* fetch
+            # — sent before any actual attack payload is even tried — as
+            # a genuinine, matching submission. DVWA's own CSRF page is
+            # exactly this shape (password_new/password_conf, no
+            # current-password check at low security), and its real
+            # admin password got changed to "verdikt1" purely as a side
+            # effect of routine SQLi/XSS probing, not any deliberate
+            # password-change test. Suffixing each companion field's
+            # value with its own name keeps every value non-empty,
+            # traceably Verdikt-sourced, and — critically — never
+            # coincidentally equal to another field's value, so a
+            # same-form equality gate can no longer be satisfied by
+            # accident.
+            others = {o.name: f"{BASELINE_VALUE}_{o.name}" for o in form.fields if o.name != f.name}
             targets.append(
                 ProbeTarget(url=form.action_url, method=form.method, param_name=f.name, other_fields=others)
             )
