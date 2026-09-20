@@ -75,6 +75,17 @@ PAGES = {
         "fetch(url, { method: 'GET' });"
         "</script></body></html>",
     ),
+    "http://site.test/spa/": (
+        "text/html",
+        '<html><body><script src="main.js"></script></body></html>',
+    ),
+    "http://site.test/spa/main.js": (
+        "application/javascript",
+        # Real shape from a compiled Angular HttpClient call (Juice
+        # Shop's own bundle) — a backtick template literal, never a
+        # plain string literal, and never literally `fetch(`/`.open(`.
+        "search(e){return this.http.get(`${this.hostServer}/rest/products/search?q=${e}`)}",
+    ),
 }
 
 
@@ -315,5 +326,40 @@ async def test_recon_agent_resolves_fetch_url_held_in_a_variable(db_adapter):
         await agent.run()
 
         assert agent.discovered_api_endpoints == ["http://site.test/api/v3/order/"]
+
+        await client.aclose()
+
+
+async def test_recon_agent_resolves_endpoints_inside_a_template_literal(db_adapter):
+    """Real, live-found gap against a real Angular SPA (Juice Shop): a
+    modern framework's compiled HttpClient wrapper builds its request
+    URL from a backtick template literal (`${base}/path?q=${value}`),
+    never a plain '...'/"..." string literal — invisible to
+    _JS_ENDPOINT_URL_RE regardless of call shape, since neither the
+    quoting nor the call name (`this.http.get(...)`, not `fetch(`/
+    `.open(`) match. Stripping every ${...} interpolation back out
+    leaves the real static path (and, critically, a real query
+    parameter *name* even though its value was dynamic) — exactly what
+    injection.py/xss.py need to actually test the endpoint, not just
+    list it in the site map.
+    """
+    async with session_scope(db_adapter) as session:
+        version_id = uuid.uuid4()
+        scope_entries = [ScopeEntry(host="site.test", port=80, in_scope=True)]
+        client = ScopedHttpClient(
+            version_id=version_id,
+            scope_entries=scope_entries,
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+        target = Target(host="site.test", port=80, base_url="http://site.test/spa/")
+
+        agent = ReconAgent(client, [target])
+        await agent.run()
+
+        assert "http://site.test/rest/products/search?q=" in agent.discovered_api_endpoints
+        search_params = [p for p in agent.discovered_parameters if p.name == "q"]
+        assert len(search_params) == 1
+        assert search_params[0].url == "http://site.test/rest/products/search?q="
 
         await client.aclose()

@@ -58,6 +58,26 @@ _JS_ENDPOINT_URL_VARIABLE_RE = re.compile(
     r"""|\.open\(\s*['"](?:GET|POST|PUT|DELETE|PATCH)['"]\s*,\s*(\w+)\b""",
     re.IGNORECASE,
 )
+# Real, live-found gap against a real Angular SPA (Juice Shop): every
+# one of the above only matches a plain '...'/"..." string literal
+# argument — but a modern framework's own compiled HttpClient wrapper
+# builds its request URL from a template literal instead, e.g.
+# `search(e){return this.http.get(\`${this.hostServer}/rest/products/
+# search?q=${e}\`)...}` — invisible to _JS_ENDPOINT_URL_RE both because
+# it's backtick-quoted, not '"'/'"', and because the call is
+# `this.http.get(...)`, never literally `fetch(`/`.open(`. Rather than
+# also having to know every HTTP-client wrapper name a framework might
+# use, this matches on the *string shape* instead: any backtick
+# template literal, anywhere in the script, whose content — once every
+# ${...} interpolation (a base URL, a resource id, a query value) is
+# stripped back out — still leaves a plausible absolute path behind is
+# worth treating as a real endpoint. A stripped '${q}' left mid-path
+# (e.g. "/rest/basket/${id}/items") is harmless noise, not a crawl
+# target, since is_in_scope's own URL parsing just treats it as an
+# ordinary (if unresolvable) path segment.
+_TEMPLATE_LITERAL_RE = re.compile(r"`([^`]{1,300})`")
+_TEMPLATE_INTERPOLATION_RE = re.compile(r"\$\{[^{}]*\}")
+_TEMPLATE_LITERAL_PATH_RE = re.compile(r"^/[a-zA-Z0-9/_.\-]+(?:\?[a-zA-Z0-9_=&.\-]*)?$")
 # A quoted relative-URL-like string inside an onclick handler — e.g.
 # onclick="javascript:popUp('session-input.php')" or
 # onclick="window.open('/help/topic.html')". A plain <a href> crawl
@@ -165,8 +185,18 @@ def _extract_websocket_urls(text: str) -> list[str]:
     return list(dict.fromkeys(_WEBSOCKET_URL_RE.findall(text)))
 
 
+def _extract_template_literal_paths(text: str) -> list[str]:
+    paths = []
+    for literal in _TEMPLATE_LITERAL_RE.findall(text):
+        static = _TEMPLATE_INTERPOLATION_RE.sub("", literal)
+        if _TEMPLATE_LITERAL_PATH_RE.match(static):
+            paths.append(static)
+    return paths
+
+
 def _extract_js_endpoint_urls(base_url: str, text: str) -> list[str]:
     literals = [match.group(1) or match.group(2) for match in _JS_ENDPOINT_URL_RE.finditer(text)]
+    literals.extend(_extract_template_literal_paths(text))
 
     variable_values = dict(_JS_URL_ASSIGNMENT_RE.findall(text))
     for match in _JS_ENDPOINT_URL_VARIABLE_RE.finditer(text):
@@ -338,6 +368,15 @@ class ReconAgent:
                     for api_url in _extract_js_endpoint_urls(url, response.text):
                         if api_url not in self.discovered_api_endpoints:
                             self.discovered_api_endpoints.append(api_url)
+                        # A JS-only-discovered endpoint carrying a real
+                        # query string (?q=... — the literal name
+                        # survives even when the value was a runtime
+                        # variable) is exactly the same shape
+                        # discovered_parameters already holds for a
+                        # crawled URL's own query string — feeding it in
+                        # here is what actually makes injection.py/xss.py
+                        # test it, not just list it in the site map.
+                        self.discovered_parameters.extend(_extract_query_params(api_url))
                 next_frontier.extend(self._follow_up_links(url, response))
 
             frontier = next_frontier
