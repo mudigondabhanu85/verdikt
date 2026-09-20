@@ -14,6 +14,7 @@ from app.models.attack_chain import AttackChain
 from app.models.finding import Finding
 from app.reporting.grouping import group_findings
 from app.reporting.html_report import BrandingInfo
+from app.reporting.payload_highlight import find_highlight_match
 from app.schemas.scan import ScanRunDetail
 
 SEVERITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
@@ -43,24 +44,27 @@ def _mono_run(paragraph, text: str, *, highlighted: bool = False):
 
 def _mono_paragraph(document: Document, text: str, *, payload: str | None = None) -> None:
     """Same monospace evidence paragraph as before, split into multiple
-    runs around every occurrence of `payload` (the exact substring that
-    proves the finding — see Evidence.payload) so that substring alone
-    gets a highlight run, the DOCX-native equivalent of the HTML
-    report's <mark> tag. Falls back to one plain run, unchanged from
-    before this existed, when there's no payload or it isn't present in
-    this particular text.
+    runs around every occurrence of the matched highlight candidate (see
+    app.reporting.payload_highlight — the exact substring that proves
+    the finding may be the literal Evidence.payload, its form-encoded
+    form, or an embedded marker token) so that substring alone gets a
+    highlight run, the DOCX-native equivalent of the HTML report's
+    <mark> tag. Falls back to one plain run, unchanged from before this
+    existed, when there's no payload or no candidate is present in this
+    particular text.
     """
     text = (text or "")[:_MAX_EVIDENCE_CHARS]
     paragraph = document.add_paragraph()
-    if not payload or payload not in text:
+    match = find_highlight_match(text, payload)
+    if match is None:
         _mono_run(paragraph, text)
         return
-    parts = text.split(payload)
+    parts = text.split(match)
     for i, part in enumerate(parts):
         if part:
             _mono_run(paragraph, part)
         if i < len(parts) - 1:
-            _mono_run(paragraph, payload, highlighted=True)
+            _mono_run(paragraph, match, highlighted=True)
 
 
 def render_docx_report(

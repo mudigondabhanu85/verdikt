@@ -9,6 +9,7 @@ from markupsafe import Markup, escape
 from app.models.attack_chain import AttackChain
 from app.models.finding import Finding
 from app.reporting.grouping import group_findings
+from app.reporting.payload_highlight import find_highlight_match
 from app.schemas.scan import ScanRunDetail
 
 
@@ -41,23 +42,24 @@ _env = Environment(
 
 
 def _highlight_payload(text: str | None, payload: str | None) -> Markup:
-    """Wraps every literal occurrence of `payload` inside `text` in
+    """Wraps every literal occurrence of the first matching highlight
+    candidate (see app.reporting.payload_highlight) inside `text` in
     <mark>, so the exact substring that proves a finding stands out
     instead of getting lost in a wall of raw request/response text —
     the actual point of Evidence.payload existing at all. Escapes both
-    `text` and `payload` first (this content can be attacker-controlled
-    — a reflected-XSS payload captured as evidence, for instance) and
-    only *then* inserts <mark> around the now-safely-escaped payload's
-    occurrences, so this can never reopen the exact HTML-injection hole
-    the surrounding autoescape=True exists to close.
+    `text` and the matched candidate first (this content can be
+    attacker-controlled — a reflected-XSS payload captured as evidence,
+    for instance) and only *then* inserts <mark> around the now-safely-
+    escaped occurrences, so this can never reopen the exact
+    HTML-injection hole the surrounding autoescape=True exists to close.
     """
-    escaped_text = str(escape(text or ""))
-    if not payload:
+    text = text or ""
+    match = find_highlight_match(text, payload)
+    escaped_text = str(escape(text))
+    if match is None:
         return Markup(escaped_text)
-    escaped_payload = str(escape(payload))
-    if not escaped_payload or escaped_payload not in escaped_text:
-        return Markup(escaped_text)
-    return Markup(escaped_text.replace(escaped_payload, f"<mark>{escaped_payload}</mark>"))
+    escaped_match = str(escape(match))
+    return Markup(escaped_text.replace(escaped_match, f"<mark>{escaped_match}</mark>"))
 
 
 _env.filters["highlight_payload"] = _highlight_payload

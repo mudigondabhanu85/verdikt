@@ -305,6 +305,38 @@ def test_html_report_with_no_payload_renders_raw_evidence_unhighlighted():
     assert "&lt;script&gt;" in html  # still escaped, just not wrapped
 
 
+def _command_injection_finding() -> Finding:
+    """A command-injection-shaped finding: the full payload (with its
+    "; echo " prefix) is what got *sent*, form-encoded in the request;
+    only the bare marker is what actually comes back in the response
+    (a shell echoes its output, not the command that produced it). A
+    literal full-payload match finds nothing in either direction."""
+    finding = _finding_with_evidence()
+    finding.check_id = "command-injection"
+    finding.evidence.request_raw = (
+        "POST /vulnerabilities/exec/ HTTP/1.1\r\nHost: target.test\r\n"
+        "Content-Type: application/x-www-form-urlencoded\r\n\r\n"
+        "Submit=verdikt1&ip=%3B+echo+VERDIKT16912b40"
+    )
+    finding.evidence.response_raw = "HTTP/1.1 200 OK\r\n\r\n<pre>VERDIKT16912b40\n</pre>"
+    finding.evidence.payload = "; echo VERDIKT16912b40"
+    return finding
+
+
+def test_html_report_highlights_form_encoded_payload_in_the_request():
+    finding = _command_injection_finding()
+    html = render_html_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
+
+    assert "<mark>%3B+echo+VERDIKT16912b40</mark>" in html
+
+
+def test_html_report_highlights_embedded_marker_in_the_response():
+    finding = _command_injection_finding()
+    html = render_html_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
+
+    assert "<mark>VERDIKT16912b40</mark>" in html
+
+
 def test_html_report_without_screenshots_omits_screenshot_section():
     finding = _finding_with_evidence()
     html = render_html_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
@@ -350,6 +382,23 @@ def test_docx_report_highlights_the_evidence_payload():
     assert any(run.text == "<script>" for run in highlighted_runs), [r.text for r in highlighted_runs]
 
 
+def test_docx_report_highlights_form_encoded_payload_and_embedded_marker():
+    finding = _command_injection_finding()
+    docx_bytes = render_docx_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
+
+    document = Document(io.BytesIO(docx_bytes))
+    from docx.enum.text import WD_COLOR_INDEX
+
+    highlighted_texts = [
+        run.text
+        for paragraph in document.paragraphs
+        for run in paragraph.runs
+        if run.font.highlight_color == WD_COLOR_INDEX.YELLOW
+    ]
+    assert "%3B+echo+VERDIKT16912b40" in highlighted_texts, highlighted_texts
+    assert "VERDIKT16912b40" in highlighted_texts, highlighted_texts
+
+
 def test_pdf_report_highlights_the_evidence_payload():
     finding = _finding_with_evidence()
     finding.evidence.payload = "<script>"
@@ -363,6 +412,15 @@ def test_pdf_report_highlights_the_evidence_payload():
     # highlight color itself made it into the extracted text — pypdf
     # doesn't expose per-run background color).
     assert "<script>" in text
+
+
+def test_pdf_report_matches_form_encoded_payload_and_embedded_marker():
+    finding = _command_injection_finding()
+    pdf_bytes = render_pdf_report(scan_run=_detail(), findings=[finding], executive_summary="summary")
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = "\n".join(page.extract_text() for page in reader.pages)
+    assert "VERDIKT16912b40" in text
 
 
 def test_docx_report_with_no_branding_has_no_extra_images():

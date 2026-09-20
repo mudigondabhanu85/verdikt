@@ -9,29 +9,62 @@ import { useAuth, canReview, canWrite } from '../../auth/AuthContext'
 
 // Same substring-highlight behavior as the downloadable HTML/PDF/DOCX
 // reports (app/reporting/html_report.py's highlight_payload Jinja
-// filter) — every literal occurrence of Evidence.payload inside the
-// raw request/response text gets wrapped for visual emphasis, so a
+// filter — keep these two in sync) — every literal occurrence of the
+// first matching highlight candidate (see highlightCandidates) inside
+// the raw request/response text gets wrapped for visual emphasis, so a
 // reader can see at a glance exactly what payload was sent and where it
 // landed in the response, without hunting through a wall of raw HTTP
 // text. Built as separate React children (never dangerouslySetInnerHTML)
 // so the surrounding — possibly attacker-controlled — text stays safely
 // auto-escaped by React exactly as it already was before this existed.
+
+// x-www-form-urlencoded encodes a space as "+", not "%20" —
+// encodeURIComponent alone (which produces "%20") never matches a real
+// form-encoded request body/query string built by Python's own
+// urlencode() (e.g. DVWA's command-injection field arriving as
+// "%3B+echo+VERDIKT...").
+function quotePlus(s: string): string {
+  return encodeURIComponent(s).replace(/%20/g, '+')
+}
+
+// Every marker-based check in this codebase embeds a recognizable
+// "VERDIKT<hex>" / "verdikt_<...>" token inside its full payload (e.g.
+// command-injection's "; echo VERDIKT7228dae9") — but what actually
+// proves the finding in the *response* is often only that marker (a
+// shell echoes its output, not the command that produced it), so a
+// literal full-payload match finds nothing there even though the
+// finding is completely real.
+const MARKER_RE = /VERDIKT[0-9a-f]{6,}|verdikt_[A-Za-z0-9]{6,}|verdikt[0-9]{4,}/
+
+function highlightCandidates(payload: string): string[] {
+  const candidates = [payload]
+  const encoded = quotePlus(payload)
+  if (!candidates.includes(encoded)) candidates.push(encoded)
+  const markerMatch = payload.match(MARKER_RE)
+  if (markerMatch && !candidates.includes(markerMatch[0])) candidates.push(markerMatch[0])
+  return candidates
+}
+
 function highlightPayload(text: string, payload: string | null): ReactNode {
   if (!payload) return text
-  const parts = text.split(payload)
-  if (parts.length === 1) return text
-  const nodes: ReactNode[] = []
-  parts.forEach((part, i) => {
-    if (part) nodes.push(part)
-    if (i < parts.length - 1) {
-      nodes.push(
-        <mark key={i} className="rounded bg-yellow-200 px-0.5 text-gray-900">
-          {payload}
-        </mark>,
-      )
-    }
-  })
-  return nodes
+  for (const candidate of highlightCandidates(payload)) {
+    if (!candidate) continue
+    const parts = text.split(candidate)
+    if (parts.length === 1) continue
+    const nodes: ReactNode[] = []
+    parts.forEach((part, i) => {
+      if (part) nodes.push(part)
+      if (i < parts.length - 1) {
+        nodes.push(
+          <mark key={i} className="rounded bg-yellow-200 px-0.5 text-gray-900">
+            {candidate}
+          </mark>,
+        )
+      }
+    })
+    return nodes
+  }
+  return text
 }
 
 // The direct answer to "I need to delete/false-positive a finding": mark

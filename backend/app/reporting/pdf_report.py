@@ -30,6 +30,7 @@ from app.models.attack_chain import AttackChain
 from app.models.finding import Finding
 from app.reporting.grouping import group_findings
 from app.reporting.html_report import BrandingInfo
+from app.reporting.payload_highlight import find_highlight_match
 from app.schemas.scan import ScanRunDetail
 
 _MAX_IMAGE_WIDTH = 5 * inch
@@ -71,23 +72,27 @@ def _escape_pre(text: str | None) -> str:
 
 
 def _escape_pre_highlighted(text: str | None, payload: str | None) -> str:
-    """Same as _escape_pre, but wraps every occurrence of `payload` (the
-    exact substring that proves the finding — see Evidence.payload) in
-    a `<span backColor="...">`, ReportLab's Paragraph markup for an
-    inline background-color run — the PDF-native equivalent of the HTML
-    report's <mark> tag and the DOCX report's highlighted run. Both
-    `text` and `payload` are escaped with the same rules before the
-    substring search, so this can never match across an HTML-escaped
-    boundary (e.g. a payload containing a literal "<" would otherwise
+    """Same as _escape_pre, but wraps every occurrence of the matched
+    highlight candidate (see app.reporting.payload_highlight — the
+    exact substring that proves the finding may be the literal
+    Evidence.payload, its form-encoded form, or an embedded marker
+    token) in a `<span backColor="...">`, ReportLab's Paragraph markup
+    for an inline background-color run — the PDF-native equivalent of
+    the HTML report's <mark> tag and the DOCX report's highlighted run.
+    Matching happens against the truncated-but-not-yet-escaped text (the
+    same text _escape_pre would otherwise escape directly), and both it
+    and the matched candidate are escaped with the same rules before the
+    substring replace, so this can never match across an HTML-escaped
+    boundary (e.g. a candidate containing a literal "<" would otherwise
     never line up against the already-escaped "&lt;" in `text`).
     """
-    escaped = _escape_pre(text)
-    if not payload:
+    truncated = (text or "")[:_MAX_EVIDENCE_CHARS]
+    match = find_highlight_match(truncated, payload)
+    escaped = _escape(truncated).replace("\n", "<br/>")
+    if match is None:
         return escaped
-    escaped_payload = _escape(payload)
-    if not escaped_payload or escaped_payload not in escaped:
-        return escaped
-    return escaped.replace(escaped_payload, f'<span backColor="#fde047">{escaped_payload}</span>')
+    escaped_match = _escape(match)
+    return escaped.replace(escaped_match, f'<span backColor="#fde047">{escaped_match}</span>')
 
 
 def _image_flowable(png_bytes: bytes) -> Image | None:
