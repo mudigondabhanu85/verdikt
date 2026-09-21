@@ -49,8 +49,8 @@ zero-configuration model tiering, not per-agent routing an analyst sets up.
 support modules), 32 API route modules, 36 persisted data models, 10
 external integrations, 22 YAML check catalogs (47 statically defined check
 IDs, plus a further dozen dynamically-generated ones), 39 Alembic
-migrations, 21 RBAC resources, and a backend test suite of **126 files /
-721 collected tests** — all figures confirmed by direct inspection and by
+migrations, 21 RBAC resources, and a backend test suite of **124 files /
+756 collected tests** — all figures confirmed by direct inspection and by
 running the test collector, not estimated. Full reference tables for every
 one of these are in the appendices (§13–§24).
 
@@ -626,7 +626,15 @@ By category:
   survives into an export without the standard leading-quote/tab/CR
   mitigation — a real finding, not a guess: the agent best-effort probes
   for an actual export endpoint and is honest in the write-up when it
-  can't find one)
+  can't find one). Every one of these probes runs against all four
+  injection-point shapes a real target exposes — a query-string
+  parameter, a `<form>` field, a JSON request body field (a
+  client-rendered SPA's own API calls, discovered from imported
+  traffic), and a numeric REST path segment (`/rest/products/{id}`,
+  reusing the same id-detection `app.agents.idor` already uses for
+  IDOR) — closing a real gap where a SPA's real vulnerable surface
+  (Juice Shop's own login/product endpoints) was invisible to
+  query/form-only probing.
 - **Broken access control** — IDOR, vertical/horizontal privilege
   escalation
 - **Session & auth failures** — JWT alg-none/alg-confusion/weak-secret,
@@ -1014,11 +1022,26 @@ demand so the download is always in sync with the checked-in extension) is
 the practical equivalent: download, `chrome://extensions` → Developer
 mode → Load unpacked, record, export, upload.
 
+A saved macro can be re-verified on demand, independent of a full scan,
+via **Replay** (`POST /credentials/{id}/macros/{macro_id}/replay`, one
+button per saved macro in the Credentials tab's macro-management list):
+headlessly replays that exact recording against the real target and
+reports a genuine pass/fail verdict. This is also where the real audit
+signal for "did the application actually accept this login" lives —
+`MacroPlayer.replay()` doesn't trust "some cookie came back" alone (many
+apps set a session/CSRF cookie on the login page itself, before
+credentials are even checked); it also reports whether a *visible*
+password field is still present on the page the macro ended on and the
+final navigation's HTTP status. `SessionManager._login_via_macro` treats
+a still-visible password field as a failed login regardless of cookies —
+the same stronger check applies to every real scan's own macro-based
+login, not just the interactive Replay button.
+
 ---
 
 ## 14. Testing & Quality Discipline
 
-- **126 test files, 721 collected tests** — confirmed by running
+- **124 test files, 756 collected tests** — confirmed by running
   `pytest --collect-only`, not estimated.
 - Real fixtures over mocks wherever practically possible: real local HTTP
   servers standing in for a target application, a real headless browser
@@ -1101,7 +1124,7 @@ does not exist in the current model set** — confirmed removed (§18).
 | `chatbot_targets.py` | `POST /versions/{id}/chatbot-targets`, `GET /versions/{id}/chatbot-targets`, `DELETE /versions/{id}/chatbot-targets/{target_id}` |
 | `chatbot_agency_probes.py` | `POST /versions/{id}/chatbot-targets/{target_id}/agency-probes`, `GET /versions/{id}/chatbot-targets/{target_id}/agency-probes`, `DELETE /versions/{id}/chatbot-targets/{target_id}/agency-probes/{probe_id}` |
 | `cmdb_configs.py` | `POST /cmdb-configs`, `GET /cmdb-configs`, `DELETE /cmdb-configs/{id}`, `POST /cmdb-configs/{id}/lookup` |
-| `credentials.py` | `POST /credentials` (accepts `extra_cookies`/`extra_headers`), `GET /credentials`, `PATCH /credentials/{id}`, `DELETE /credentials/{id}`, `POST /credentials/{id}/test-login`, `POST /credentials/{id}/record-macro/start`, `POST /credentials/{id}/record-macro/{recording_id}/finish`, `POST /credentials/{id}/record-macro/{recording_id}/cancel`, `GET /credentials/{id}/macros`, `DELETE /credentials/{id}/macros/{macro_id}` |
+| `credentials.py` | `POST /credentials` (accepts `extra_cookies`/`extra_headers`), `GET /credentials`, `PATCH /credentials/{id}`, `DELETE /credentials/{id}`, `POST /credentials/{id}/test-login`, `POST /credentials/{id}/record-macro/start`, `POST /credentials/{id}/record-macro/{recording_id}/finish`, `POST /credentials/{id}/record-macro/{recording_id}/cancel`, `GET /credentials/{id}/macros`, `DELETE /credentials/{id}/macros/{macro_id}`, `POST /credentials/{id}/macros/{macro_id}/replay` |
 | `dashboard.py` | `GET /organizations/me/dashboard` |
 | `finding_tickets.py` | `POST /findings/{id}/tickets`, `GET /findings/{id}/tickets` |
 | `findings.py` | `PATCH /findings/{id}`, `DELETE /findings/{id}` |

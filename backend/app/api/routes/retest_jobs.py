@@ -73,7 +73,6 @@ async def retest_finding(
             job.result = "error"
             job.error = str(exc)
         else:
-            await client.aclose()
             if outcome is None:
                 job.status = "failed"
                 job.result = "error"
@@ -85,6 +84,12 @@ async def retest_finding(
                 job.response_raw = outcome.response_raw
                 if finding.retest_status not in _ANALYST_LOCKED_STATUSES:
                     finding.retest_status = "open" if outcome.still_vulnerable else "fixed"
+        finally:
+            # Real, live-found bug: this was only closed in the success
+            # path — a handler exception left the underlying httpx
+            # connection pool leaked on every failed retest, not just
+            # the happy path.
+            await client.aclose()
         job.completed_at = datetime.now(timezone.utc)
 
     await write_audit_log(
