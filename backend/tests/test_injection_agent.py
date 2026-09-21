@@ -1,3 +1,4 @@
+import json
 import re
 import uuid
 from urllib.parse import parse_qs, urlsplit
@@ -7,7 +8,7 @@ from sqlalchemy import select
 
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
 from app.agents.injection import InjectionAgent
-from app.agents.recon import DiscoveredParameter, FormField, FormInfo
+from app.agents.recon import DiscoveredJsonBody, DiscoveredParameter, FormField, FormInfo
 from app.ai.budget import BudgetGuard
 from app.models.finding import Finding
 from app.models.project import ScopeEntry
@@ -130,6 +131,34 @@ def _handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text=f"PING {host}\n{match.group(1)}\n")
         return httpx.Response(200, text=f"PING {host}: unreachable")
 
+    if parsed.path == "/rest/user/login-status-only" and request.method == "POST":
+        # Isolates the status-code-diff fix from the JSON-body wiring
+        # test above: unlike /rest/user/login, this endpoint's
+        # vulnerable logic manifests *only* as a status-code flip
+        # (401 vs 200), with no SQL error string anywhere — the classic
+        # Juice Shop login-bypass shape (`' OR '1'='1'-- `), which used
+        # to be silently skipped by _probe_sqli_boolean's old
+        # status-code-must-match gate.
+        payload = json.loads(request.content.decode())
+        email = payload.get("email", "")
+        if "' OR '1'='1' -- " in email:
+            return httpx.Response(200, json={"authentication": {"token": "forged-token"}})
+        return httpx.Response(401, json={"error": "Invalid email or password"})
+
+    if parsed.path == "/rest/user/login" and request.method == "POST":
+        # Real shape a client-rendered SPA's login endpoint actually
+        # takes (Juice Shop's own /rest/user/login) — a JSON body, never
+        # a query string or a server-rendered <form>. A classic
+        # login-bypass SQLi: the email field breaks out of a naive
+        # `WHERE email = '{email}'` query.
+        payload = json.loads(request.content.decode())
+        email = payload.get("email", "")
+        if "'" in email:
+            return httpx.Response(200, text="Error: You have an error in your SQL syntax near '''")
+        if email == "admin@juice-sh.op' --":
+            return httpx.Response(200, json={"authentication": {"token": "forged-admin-token"}})
+        return httpx.Response(401, json={"error": "Invalid email or password"})
+
     return httpx.Response(404)
 
 
@@ -188,6 +217,38 @@ async def test_injection_agent_confirms_real_vulnerabilities(db_adapter):
 
         result = await session.execute(select(Finding))
         assert len(result.scalars().all()) == len(findings)
+
+        await client.aclose()
+
+
+async def test_json_body_sqli_is_confirmed(db_adapter):
+    """Real, live-found gap against a real Angular SPA (Juice Shop): its
+    actual vulnerable surface — login, product search, basket, profile
+    updates — is overwhelmingly a JSON request body, never a query
+    string or a server-rendered <form>, and injection.py structurally
+    could not see any of it until json_body_probe_targets existed. This
+    is the exact real-world shape: a login endpoint's email field breaks
+    out of a naive SQL query, discoverable only from imported traffic
+    (see app.agents.traffic_seed's own JSON-body extraction).
+    """
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "looks vulnerable"}'
+        )
+        agent, client, _scan_run = await _make_agent(session, provider)
+
+        json_bodies = [
+            DiscoveredJsonBody(
+                url="http://site.test/rest/user/login", method="POST", fields=["email", "password"]
+            )
+        ]
+
+        findings = await agent.run([], [], json_bodies=json_bodies)
+
+        check_ids = {f.check_id for f in findings}
+        assert "sqli-error" in check_ids
+        sqli_finding = next(f for f in findings if f.check_id == "sqli-error")
+        assert sqli_finding.confirmation_status == "ai_confirmed"
 
         await client.aclose()
 
@@ -271,6 +332,36 @@ async def test_sqli_boolean_detected_behind_a_like_wrapped_search_parameter(db_a
             )
         ]
         findings = await agent.run(parameters, [])
+
+        check_ids = {f.check_id for f in findings}
+        assert "sqli-boolean" in check_ids
+
+        await client.aclose()
+
+
+async def test_sqli_boolean_detects_a_status_code_flip_not_just_a_length_diff(db_adapter):
+    """Real, live-found gap against a real target (OWASP Juice Shop's
+    own login endpoint — the classic "' OR '1'='1'-- " auth-bypass
+    challenge, confirmed live): a true condition returning 200 OK with
+    a real session token while an otherwise-identical false condition
+    returns 401 Unauthorized used to be silently skipped by
+    _probe_sqli_boolean's `if true_resp.status_code != false_resp.
+    status_code: continue` — treating one of the most classic SQLi
+    signals there is as a reason to give up on that payload pair,
+    rather than as the signal itself.
+    """
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "status flips between true/false conditions"}'
+        )
+        agent, client, _scan_run = await _make_agent(session, provider)
+
+        json_bodies = [
+            DiscoveredJsonBody(
+                url="http://site.test/rest/user/login-status-only", method="POST", fields=["email", "password"]
+            )
+        ]
+        findings = await agent.run([], [], json_bodies=json_bodies)
 
         check_ids = {f.check_id for f in findings}
         assert "sqli-boolean" in check_ids

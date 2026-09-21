@@ -114,14 +114,40 @@ class FormInfo:
 class DiscoveredParameter:
     """One (submission target, parameter) pair the Injection/XSS agents can
     probe — either a query-string key already observed on a crawled URL,
-    or a non-hidden <form> field. HTML-only surface (see Phase 2 plan's
-    NoSQLi scope note for why JSON API bodies aren't covered).
+    or a non-hidden <form> field. HTML-only surface — see
+    DiscoveredJsonBody for the JSON-API-body surface a client-rendered
+    SPA's real endpoints actually use.
     """
 
     url: str
     method: str
     name: str
     sample_value: str = ""
+
+
+@dataclass
+class DiscoveredJsonBody:
+    """One JSON-request-body endpoint the Injection/XSS agents can probe
+    — every top-level key gets its own ProbeTarget (see
+    app.agents.probing.json_body_probe_targets), with every *other* key
+    held at a distinct per-field baseline value (same discipline as
+    form_probe_targets — see its own docstring for the real,
+    live-found bug that made per-field-distinct values necessary).
+
+    A modern SPA's actual vulnerable surface (Juice Shop's product
+    search, login, basket, profile-update endpoints — none of which are
+    a server-rendered <form>) is overwhelmingly this shape, not a query
+    string or a form field. Recon's own HTML/JS-text crawl has no way to
+    observe a real JSON body a page's JS constructs and sends at
+    runtime — the only real source for this today is imported traffic
+    (HAR/Burp/Postman/manual, see app.agents.traffic_seed), which
+    already captures the real request bodies a genuine browsing session
+    sent.
+    """
+
+    url: str
+    method: str  # POST/PUT/PATCH — never GET, which has no body
+    fields: list[str] = field(default_factory=list)
 
 
 def _looks_html(response: httpx.Response) -> bool:

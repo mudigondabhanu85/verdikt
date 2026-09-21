@@ -7,7 +7,7 @@ import httpx
 from sqlalchemy import select
 
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
-from app.agents.recon import DiscoveredParameter
+from app.agents.recon import DiscoveredJsonBody, DiscoveredParameter
 from app.agents.xss import XSSAgent
 from app.ai.budget import BudgetGuard
 from app.models.finding import Finding
@@ -59,6 +59,18 @@ def _handler(request: httpx.Request) -> httpx.Response:
             headers={"content-type": "text/html"},
             text=f'<input value="{html.escape(term, quote=False)}">',
         )
+
+    if parsed.path == "/api/feedback" and request.method == "POST":
+        # Real shape a client-rendered SPA's own API actually takes
+        # (Juice Shop's feedback/comment endpoints) — a JSON body, never
+        # a query string or a server-rendered <form>. Reflects the
+        # comment field back unescaped in its own JSON response, which
+        # a real app would then render into the DOM client-side.
+        import json as _json
+
+        payload = _json.loads(request.content.decode())
+        comment = payload.get("comment", "")
+        return httpx.Response(200, headers={"content-type": "text/html"}, text=f"<p>Thanks: {comment}</p>")
 
     return httpx.Response(404)
 
@@ -148,6 +160,34 @@ async def test_xss_agent_queues_review_candidate_not_finding(db_adapter):
         # Must not have created a Finding — browser proof is required first (§2 step 2).
         stored = await session.execute(select(ReviewCandidate))
         assert len(stored.scalars().all()) == 1
+
+        await client.aclose()
+
+
+async def test_json_body_reflected_xss_is_queued_as_a_candidate(db_adapter):
+    """Real, live-found gap against a real Angular SPA (Juice Shop): its
+    actual vulnerable surface — feedback/comment submission, product
+    search, profile updates — is overwhelmingly a JSON request body,
+    never a query string or a server-rendered <form>, and xss.py
+    structurally could not see any of it until json_body_probe_targets
+    existed. Discoverable only from imported traffic (see
+    app.agents.traffic_seed's own JSON-body extraction).
+    """
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "unescaped reflection in HTML body"}'
+        )
+        agent, client = await _make_agent(session, provider)
+
+        json_bodies = [
+            DiscoveredJsonBody(url="http://site.test/api/feedback", method="POST", fields=["comment", "rating"])
+        ]
+        candidates = await agent.run([], [], json_bodies=json_bodies)
+
+        assert len(candidates) == 1
+        candidate = candidates[0]
+        assert candidate.check_type == "xss-reflected"
+        assert candidate.affected_endpoint.startswith("http://site.test/api/feedback")
 
         await client.aclose()
 

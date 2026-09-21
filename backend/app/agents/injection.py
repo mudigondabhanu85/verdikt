@@ -16,9 +16,10 @@ from app.agents.probing import (
     ProbeTarget,
     fetch_with_value,
     form_probe_targets,
+    json_body_probe_targets,
     query_probe_targets,
 )
-from app.agents.recon import DiscoveredParameter, FormInfo
+from app.agents.recon import DiscoveredJsonBody, DiscoveredParameter, FormInfo
 from app.ai.budget import BudgetExceededError, BudgetGuard, ProviderUnavailableError
 from app.ai.prompt_truncation import truncate_pair_for_prompt
 from app.ai.prompts.loader import render_prompt
@@ -327,8 +328,34 @@ async def _probe_sqli_boolean(
     for true_payload, false_payload in _SQLI_BOOLEAN_PAYLOAD_PAIRS:
         true_resp = await fetch_with_value(client, target, true_payload, session)
         false_resp = await fetch_with_value(client, target, false_payload, session)
+        # Real, live-found gap against a real target (Juice Shop's own
+        # login endpoint — the classic "'1'='1'-- " auth-bypass
+        # challenge): a status-code *change* between the true and false
+        # condition (401 Unauthorized vs. 200 OK with a real session
+        # token, here) is one of the most classic SQLi signals there
+        # is — arguably stronger than a body-length diff at a shared
+        # status code — but this used to `continue` straight past it to
+        # the next payload pair instead of treating it as a signal,
+        # silently missing exactly this pattern. The two payloads differ
+        # by one character ('1'='1' vs '1'='2'), so a status flip tied
+        # to that minimal change is compelling evidence of real
+        # boolean-logic sensitivity, not encoding/character noise (which
+        # would affect both payloads equally).
         if true_resp.status_code != false_resp.status_code:
-            continue
+            return InjectionCandidate(
+                payload_type="sqli-boolean",
+                target=target,
+                payload=true_payload,
+                deterministic_signal=(
+                    f"A true condition returned HTTP {true_resp.status_code} while an "
+                    f"otherwise-identical false condition (differing only in whether the "
+                    f"injected comparison is true or false) returned HTTP "
+                    f"{false_resp.status_code}."
+                ),
+                baseline_response=false_resp,
+                probe_response=true_resp,
+                probe_fn=_probe_sqli_boolean,
+            )
         len_true, len_false = len(true_resp.text), len(false_resp.text)
         if abs(len_true - len_false) > max(20, 0.05 * max(len_true, len_false, 1)):
             return InjectionCandidate(
@@ -621,6 +648,7 @@ class InjectionAgent:
         forms: list[FormInfo],
         sessions: dict[uuid.UUID, AuthenticatedSession] | None = None,
         tech_stack_fingerprint: dict[str, Any] | None = None,
+        json_bodies: list[DiscoveredJsonBody] | None = None,
     ) -> list[Finding]:
         # A real, significant bug found live against DVWA: these probes
         # never carried any session at all before this fix, silently
@@ -632,7 +660,11 @@ class InjectionAgent:
         # credential sets for no real gain here) is enough for probes
         # to actually reach authenticated surface at all.
         self._auth_session = pick_best_session(sessions)
-        targets = query_probe_targets(parameters) + form_probe_targets(forms)
+        targets = (
+            query_probe_targets(parameters)
+            + form_probe_targets(forms)
+            + json_body_probe_targets(json_bodies or [])
+        )
         findings: list[Finding] = []
 
         probe_fns = list(_PROBE_FNS)

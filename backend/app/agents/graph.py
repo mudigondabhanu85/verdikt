@@ -30,8 +30,13 @@ from app.agents.injection import InjectionAgent
 from app.agents.login import SessionManager, pick_best_session
 from app.agents.oauth import OAuthAgent
 from app.agents.prototype_pollution import PrototypePollutionAgent
-from app.agents.recon import DiscoveredParameter, FormInfo, ReconAgent
-from app.agents.scope import filter_forms_out_login_only, filter_out_login_only, filter_parameters_out_login_only
+from app.agents.recon import DiscoveredJsonBody, DiscoveredParameter, FormInfo, ReconAgent
+from app.agents.scope import (
+    filter_forms_out_login_only,
+    filter_json_bodies_out_login_only,
+    filter_out_login_only,
+    filter_parameters_out_login_only,
+)
 from app.agents.recon_planner import run_planner_rounds
 from app.agents.request_smuggling import RequestSmugglingAgent
 from app.agents.session_invalidation import SessionInvalidationAgent
@@ -69,6 +74,12 @@ class ScanState(TypedDict, total=False):
     # string literal, never any <a href>/<form> — see
     # app.agents.recon._JS_ENDPOINT_URL_RE.
     discovered_api_endpoints: list[str]
+    # JSON-request-body endpoints found only in imported traffic (see
+    # app.agents.traffic_seed) — a client-rendered SPA's real vulnerable
+    # surface, invisible to any HTML/JS-text crawl. Only ever produced
+    # once, by recon_node's own traffic-seed call; authenticated_recon_
+    # node/recon_planner_node carry it forward unchanged.
+    discovered_json_bodies: list[DiscoveredJsonBody]
     # Logout links (see app.agents.recon._extract_links) — captured
     # separately from discovered_endpoints because a logout link is
     # deliberately never allowed into that list at all.
@@ -185,10 +196,24 @@ def build_graph(
         # (not just unioned in afterward) and passed in as extra crawl
         # seeds — the crawler actually explores links reachable *from*
         # a traffic-imported URL now, not just the URL itself.
-        async with client.session_lock:
-            seeded_endpoints, seeded_parameters, seeded_websocket_endpoints = (
-                await seed_from_imported_traffic(session, version_id)
-            )
+        # Real, live-found reliability gap: this call used to sit outside
+        # any try/except in this node — an exception here (a real one
+        # happened: a SELECT DISTINCT that couldn't run against a JSON
+        # column, see app.agents.traffic_seed's own fix) propagated
+        # straight out of recon_node uncaught, leaving both this AgentJob
+        # and the whole ScanRun permanently stuck at "running" with no
+        # error recorded anywhere — a zombie scan, discoverable only by
+        # noticing it never finishes. Wrapped the same way every other
+        # node's own agent.run() call already is, so a future bug here
+        # fails the job loudly instead of hanging it forever.
+        try:
+            async with client.session_lock:
+                seeded_endpoints, seeded_parameters, seeded_websocket_endpoints, seeded_json_bodies = (
+                    await seed_from_imported_traffic(session, version_id)
+                )
+        except Exception as exc:
+            await _finish_job(job, status="failed", error=str(exc))
+            raise
         agent = ReconAgent(client, targets, extra_seed_urls=seeded_endpoints)
         try:
             endpoints = await agent.run()
@@ -244,6 +269,7 @@ def build_graph(
             ],
             "parameters": [{"url": p.url, "name": p.name} for p in all_parameters],
             "websocket_endpoints": all_websocket_endpoints,
+            "json_bodies": [{"url": b.url, "method": b.method, "fields": b.fields} for b in seeded_json_bodies],
         }
 
         await _finish_job(
@@ -253,6 +279,7 @@ def build_graph(
                 "endpoints_discovered": len(endpoints),
                 "endpoints_seeded_from_traffic": len(seeded_endpoints),
                 "websocket_endpoints_seeded_from_traffic": len(seeded_websocket_endpoints),
+                "json_bodies_seeded_from_traffic": len(seeded_json_bodies),
                 "tech_stack_fingerprint": fingerprint,
                 "site_map": site_map,
             },
@@ -267,6 +294,7 @@ def build_graph(
         fuzzable_endpoints = filter_out_login_only(all_endpoints, scope_entries)
         fuzzable_forms = filter_forms_out_login_only(agent.discovered_forms, scope_entries)
         fuzzable_parameters = filter_parameters_out_login_only(all_parameters, scope_entries)
+        fuzzable_json_bodies = filter_json_bodies_out_login_only(seeded_json_bodies, scope_entries)
         return {
             "discovered_endpoints": fuzzable_endpoints,
             "discovered_parameters": fuzzable_parameters,
@@ -276,6 +304,7 @@ def build_graph(
             "discovered_websocket_endpoints": all_websocket_endpoints,
             "discovered_logout_urls": agent.discovered_logout_urls,
             "discovered_api_endpoints": agent.discovered_api_endpoints,
+            "discovered_json_bodies": fuzzable_json_bodies,
             "tech_stack_fingerprint": fingerprint,
         }
 
@@ -728,6 +757,10 @@ def build_graph(
             "discovered_websocket_endpoints": merged_websocket_endpoints,
             "discovered_logout_urls": merged_logout_urls,
             "discovered_api_endpoints": merged_api_endpoints,
+            # Only ever produced once, by recon_node's own traffic-seed
+            # call — carried forward unchanged, same as every other node
+            # downstream of it.
+            "discovered_json_bodies": state.get("discovered_json_bodies", []),
         }
 
     async def recon_planner_node(state: ScanState) -> dict:
@@ -818,6 +851,7 @@ def build_graph(
                 state.get("discovered_forms", []),
                 state.get("sessions", {}),
                 tech_stack_fingerprint=state.get("tech_stack_fingerprint"),
+                json_bodies=state.get("discovered_json_bodies", []),
             )
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
@@ -847,6 +881,7 @@ def build_graph(
                 state.get("discovered_forms", []),
                 state.get("sessions", {}),
                 tech_stack_fingerprint=state.get("tech_stack_fingerprint"),
+                json_bodies=state.get("discovered_json_bodies", []),
             )
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))

@@ -59,3 +59,10 @@ def filter_parameters_out_login_only(parameters: list, scope_entries: list[Scope
     own url.
     """
     return [p for p in parameters if not _is_login_only_host(urlsplit(p.url).hostname or "", scope_entries)]
+
+
+def filter_json_bodies_out_login_only(bodies: list, scope_entries: list[ScopeEntry]) -> list:
+    """Same filter as filter_out_login_only, keyed by each
+    DiscoveredJsonBody's own url.
+    """
+    return [b for b in bodies if not _is_login_only_host(urlsplit(b.url).hostname or "", scope_entries)]

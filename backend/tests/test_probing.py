@@ -1,7 +1,14 @@
+import json
 from urllib.parse import parse_qs, urlsplit
 
-from app.agents.probing import BASELINE_VALUE, ProbeTarget, build_request, form_probe_targets
-from app.agents.recon import FormField, FormInfo
+from app.agents.probing import (
+    BASELINE_VALUE,
+    ProbeTarget,
+    build_request,
+    form_probe_targets,
+    json_body_probe_targets,
+)
+from app.agents.recon import DiscoveredJsonBody, FormField, FormInfo
 
 
 def test_get_request_includes_other_fields_alongside_the_tested_one():
@@ -85,3 +92,51 @@ def test_form_probe_targets_carries_submit_button_as_an_other_field():
     assert len(targets) == 1
     assert targets[0].param_name == "id"
     assert targets[0].other_fields == {"Submit": "verdikt1_Submit"}
+
+
+def test_json_body_request_encodes_as_json_not_form():
+    target = ProbeTarget(
+        url="http://spa.test/rest/user/login",
+        method="POST",
+        param_name="email",
+        other_fields={"password": "verdikt1_password"},
+        content_type="application/json",
+    )
+    url, body, content_type = build_request(target, "' OR '1'='1")
+
+    assert url == "http://spa.test/rest/user/login"
+    assert content_type == "application/json"
+    parsed = json.loads(body)
+    assert parsed == {"email": "' OR '1'='1", "password": "verdikt1_password"}
+
+
+def test_json_body_probe_targets_never_gives_two_fields_the_same_value():
+    """Same accidental-match hazard as form_probe_targets (see its own
+    docstring for the real DVWA password-change bug this pattern
+    already caused once) — a JSON body field like
+    "password"/"passwordRepeat" must never share a baseline value with
+    another field on the same body."""
+    body = DiscoveredJsonBody(
+        url="http://spa.test/rest/user/change-password",
+        method="POST",
+        fields=["current", "password", "passwordRepeat"],
+    )
+    targets = json_body_probe_targets([body])
+
+    assert len(targets) == 3
+    for target in targets:
+        assert target.content_type == "application/json"
+        values = list(target.other_fields.values())
+        assert len(values) == len(set(values)), target.other_fields
+        assert BASELINE_VALUE not in values
+
+
+def test_json_body_probe_targets_one_target_per_field():
+    body = DiscoveredJsonBody(
+        url="http://spa.test/rest/user/login", method="POST", fields=["email", "password"]
+    )
+    targets = json_body_probe_targets([body])
+
+    assert {t.param_name for t in targets} == {"email", "password"}
+    email_target = next(t for t in targets if t.param_name == "email")
+    assert email_target.other_fields == {"password": f"{BASELINE_VALUE}_password"}
