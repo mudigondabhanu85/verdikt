@@ -15,6 +15,7 @@ import type {
   DashboardOut,
   FindingTicketOut,
   LoginMacroOut,
+  MacroReplayTestResult,
   RecordingStartedOut,
   NotificationConfigOut,
   FindingOut,
@@ -357,6 +358,11 @@ export const api = {
       request<void>(`/versions/${versionId}/credentials/${credentialId}/macros/${macroId}`, {
         method: 'DELETE',
       }),
+    replayMacro: (versionId: string, credentialId: string, macroId: string) =>
+      request<MacroReplayTestResult>(
+        `/versions/${versionId}/credentials/${credentialId}/macros/${macroId}/replay`,
+        { method: 'POST' },
+      ),
     testLogin: (versionId: string, credentialId: string) =>
       request<TestLoginResult>(`/versions/${versionId}/credentials/${credentialId}/test-login`, {
         method: 'POST',

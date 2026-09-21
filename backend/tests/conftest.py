@@ -139,10 +139,25 @@ class _LoginFixtureHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"<html><body>Welcome!</body></html>")
         else:
+            # Real, common shape a failed login takes: still 401, but the
+            # page re-renders the SAME login form (password field and
+            # all) and a CSRF-style cookie gets set regardless of whether
+            # the credentials were actually accepted — exactly the case
+            # MacroReplayResult.still_shows_password_field exists to
+            # catch, since "some cookie came back" alone would otherwise
+            # be read as a successful login.
             self.send_response(401)
             self.send_header("Content-Type", "text/html")
+            self.send_header("Set-Cookie", "csrftoken=unrelated-to-auth; Path=/")
             self.end_headers()
-            self.wfile.write(b"<html><body>Invalid credentials</body></html>")
+            self.wfile.write(
+                b"<html><body>Invalid credentials"
+                b'<form method="POST" action="/login">'
+                b'<input type="text" name="username" id="username">'
+                b'<input type="password" name="password" id="password">'
+                b'<button type="submit" id="submit-btn">Log in</button>'
+                b"</form></body></html>"
+            )
 
     def log_message(self, format, *args):  # noqa: A002
         pass

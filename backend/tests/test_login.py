@@ -359,6 +359,47 @@ async def test_macro_replay_fallback_used_when_no_config_or_form(db_adapter, fix
         await client.aclose()
 
 
+async def test_macro_replay_with_wrong_credentials_yields_no_session(db_adapter, fixture_login_server):
+    """Real bug this closes: the fixture's failed-login response still
+    sets a stray cookie and still shows the login form — before
+    still_shows_password_field existed, "some cookie came back" alone
+    was read as a successful login, silently handing every later agent
+    a session that was never actually authenticated. See
+    MacroReplayResult's docstring in app.agents.macro.
+    """
+    host, port = fixture_login_server
+    start_url = f"http://{host}:{port}/"
+
+    recorder = MacroRecorder()
+    steps = await recorder.record(start_url, headless=True, drive=_drive_fixture_login)
+
+    credential = _credential_set(username="wrong_user", secret="wrong_pass")
+
+    async with session_scope(db_adapter) as session:
+        session.add(
+            LoginMacro(
+                version_id=credential.version_id,
+                credential_set_id=credential.id,
+                steps=[s.to_dict() for s in steps],
+            )
+        )
+        await session.commit()
+
+        client = ScopedHttpClient(
+            version_id=uuid.uuid4(),
+            scope_entries=[ScopeEntry(host="site.test", port=443, in_scope=True)],
+            db_session=session,
+            transport=httpx.MockTransport(_handler),
+        )
+
+        manager = SessionManager(client, db_session=session)
+        auth_session = await manager.login(credential, forms=[])
+
+        assert auth_session is None
+
+        await client.aclose()
+
+
 async def test_macro_replay_fallback_not_tried_without_db_session(db_adapter, fixture_login_server):
     host, port = fixture_login_server
     start_url = f"http://{host}:{port}/"

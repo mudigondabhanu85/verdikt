@@ -62,7 +62,7 @@ async def test_extension_exported_macro_replays_identically_to_in_app_recorded_m
 
     player = MacroPlayer()
     credential_set_id = uuid.uuid4()
-    session = await player.replay(
+    result = await player.replay(
         extension_steps,
         credential_set_id=credential_set_id,
         username="expected_user",
@@ -70,9 +70,9 @@ async def test_extension_exported_macro_replays_identically_to_in_app_recorded_m
         headless=True,
     )
 
-    assert session is not None
-    assert session.credential_set_id == credential_set_id
-    assert session.cookies.get("session") == "abc123-real-session"
+    assert result.session is not None
+    assert result.session.credential_set_id == credential_set_id
+    assert result.session.cookies.get("session") == "abc123-real-session"
 
 
 async def test_upload_endpoint_creates_login_macro_row(db_adapter):

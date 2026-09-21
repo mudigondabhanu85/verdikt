@@ -261,6 +261,28 @@ class MacroRecorder:
             await handle.playwright.stop()
 
 
+@dataclass
+class MacroReplayResult:
+    """Richer than a bare AuthenticatedSession | None — "some cookies came
+    back" is a weak signal on its own (plenty of apps set a session/CSRF
+    cookie on the login page itself, before any credentials are even
+    checked), which is exactly the gap behind "how do we know the
+    application actually accepted the login": still_shows_password_field
+    is the real corroborating signal — a login form still visible on the
+    page the macro ended on almost always means the recorded steps didn't
+    actually authenticate, no matter how many cookies got set along the
+    way. Used both by the interactive replay-test route (an analyst
+    checking a recorded macro directly) and by SessionManager._login_via_macro
+    (every real scan's own macro-based login attempt).
+    """
+
+    session: AuthenticatedSession | None
+    cookie_count: int
+    final_url: str
+    final_status: int | None
+    still_shows_password_field: bool
+
+
 class MacroPlayer:
     """Headless replay of a recorded macro, substituting a CredentialSet's
     decrypted username/secret into the username/password-role fill steps.
@@ -277,7 +299,7 @@ class MacroPlayer:
         username: str,
         password: str,
         headless: bool = True,
-    ) -> AuthenticatedSession | None:
+    ) -> MacroReplayResult:
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=headless, args=_CHROMIUM_DOCKER_ARGS)
             # See MacroRecorder.start's identical rationale — replay hits
@@ -285,6 +307,21 @@ class MacroPlayer:
             # every scan's login step, not a real end-user's browser.
             context = await browser.new_context(ignore_https_errors=True)
             page = await context.new_page()
+
+            # Tracks the status of the last real page navigation (the
+            # initial goto, plus any full-page navigation a later click
+            # triggers) — a click-driven SPA login that never navigates
+            # simply leaves this at the initial page load's status,
+            # which is an honest reflection of what this mechanism can
+            # actually observe (§4's documented classic-form-login scope).
+            last_status: dict[str, int | None] = {"status": None}
+
+            def _on_response(response) -> None:
+                request = response.request
+                if request.is_navigation_request() and request.frame == page.main_frame:
+                    last_status["status"] = response.status
+
+            page.on("response", _on_response)
 
             for step in steps:
                 if step.action == "goto" and step.url:
@@ -304,10 +341,25 @@ class MacroPlayer:
                         pass
 
             cookies = await context.cookies()
+            final_url = page.url
+            # Visible, specifically — some real post-login dashboards
+            # legitimately have an unrelated, hidden password input
+            # somewhere in the DOM (a reauth-to-confirm modal, a
+            # password-change widget not currently open); only a
+            # password field the page is actually presenting to the
+            # user is a real "still on the login page" signal.
+            password_fields = await page.query_selector_all("input[type=password]")
+            still_shows_password_field = any([await field.is_visible() for field in password_fields])
             await browser.close()
 
-        if not cookies:
-            return None
-
         cookie_dict = {c["name"]: c["value"] for c in cookies}
-        return AuthenticatedSession(credential_set_id=credential_set_id, cookies=cookie_dict)
+        session = (
+            AuthenticatedSession(credential_set_id=credential_set_id, cookies=cookie_dict) if cookie_dict else None
+        )
+        return MacroReplayResult(
+            session=session,
+            cookie_count=len(cookie_dict),
+            final_url=final_url,
+            final_status=last_status["status"],
+            still_shows_password_field=still_shows_password_field,
+        )

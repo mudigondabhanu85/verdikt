@@ -40,7 +40,7 @@ async def test_record_then_replay_produces_working_session(fixture_login_server)
 
     player = MacroPlayer()
     credential_set_id = uuid.uuid4()
-    session = await player.replay(
+    result = await player.replay(
         steps,
         credential_set_id=credential_set_id,
         username="expected_user",
@@ -48,12 +48,24 @@ async def test_record_then_replay_produces_working_session(fixture_login_server)
         headless=True,
     )
 
-    assert session is not None
-    assert session.credential_set_id == credential_set_id
-    assert session.cookies.get("session") == "abc123-real-session"
+    assert result.session is not None
+    assert result.session.credential_set_id == credential_set_id
+    assert result.session.cookies.get("session") == "abc123-real-session"
+    assert result.cookie_count == 1
+    assert result.final_status == 200
+    assert result.still_shows_password_field is False
 
 
-async def test_replay_with_wrong_credentials_yields_no_session(fixture_login_server):
+async def test_replay_still_showing_password_field_is_flagged_even_with_cookies(fixture_login_server):
+    """Real, common shape a failed login takes: the page that comes back
+    still sets some cookie (a CSRF token, a fresh anonymous session —
+    unrelated to whether the credentials were accepted) and still shows
+    the same login form. "Some cookies came back" alone would have read
+    this as a successful login; still_shows_password_field is the
+    corroborating signal that catches it — see MacroReplayResult's
+    docstring and the real bug this closes in
+    SessionManager._login_via_macro.
+    """
     host, port = fixture_login_server
     base_url = f"http://{host}:{port}/"
 
@@ -61,7 +73,7 @@ async def test_replay_with_wrong_credentials_yields_no_session(fixture_login_ser
     steps = await recorder.record(base_url, headless=True, drive=_drive_login)
 
     player = MacroPlayer()
-    session = await player.replay(
+    result = await player.replay(
         steps,
         credential_set_id=uuid.uuid4(),
         username="wrong_user",
@@ -69,7 +81,8 @@ async def test_replay_with_wrong_credentials_yields_no_session(fixture_login_ser
         headless=True,
     )
 
-    assert session is None
+    assert result.cookie_count == 1  # the stray csrftoken cookie
+    assert result.still_shows_password_field is True
 
 
 async def test_macro_step_round_trips_through_dict():

@@ -391,6 +391,16 @@ export interface RecordingStartedOut {
   recording_id: string
 }
 
+export interface MacroReplayTestResult {
+  ok: boolean
+  session_established: boolean
+  cookie_count: number
+  final_url: string
+  final_status: number | null
+  still_shows_password_field: boolean
+  message: string
+}
+
 export interface BurpScanCreated {
   scan_run_id: string
   agent_job_id: string

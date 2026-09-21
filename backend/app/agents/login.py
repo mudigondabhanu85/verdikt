@@ -266,13 +266,23 @@ class SessionManager:
 
         steps = [MacroStep.from_dict(raw) for raw in macro.steps]
         player = MacroPlayer()
-        session = await player.replay(
+        result = await player.replay(
             steps,
             credential_set_id=credential_set.id,
             username=username,
             password=secret,
             headless=True,
         )
+        # A login form still visible on the page the macro ended on
+        # almost always means the recorded steps didn't actually
+        # authenticate — the previous "any cookies at all" check treated
+        # this as a successful login (many apps set a session/CSRF
+        # cookie on the login page itself, before credentials are even
+        # checked), silently handing every later agent a session that
+        # was never really logged in. See MacroReplayResult's docstring.
+        if result.still_shows_password_field:
+            return None
+        session = result.session
         if session is not None and credential_set.extra_cookies:
             # extra_cookies wins on key collision — see _session_from_response.
             session.cookies = {**session.cookies, **credential_set.extra_cookies}

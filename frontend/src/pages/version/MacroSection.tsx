@@ -1,6 +1,7 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError, downloadBrowserExtension, VNC_BASE_URL } from '../../api/client'
+import type { MacroReplayTestResult } from '../../api/types'
 
 // "choose": which recording path (shown right after clicking Record
 // macro). "record": the existing in-app VNC flow. "extension": the
@@ -79,6 +80,8 @@ export function MacroSection({ versionId, credentialId }: { versionId: string; c
   })
 
   const [manageOpen, setManageOpen] = useState(false)
+  const [replayResults, setReplayResults] = useState<Record<string, MacroReplayTestResult>>({})
+  const [replayingId, setReplayingId] = useState<string | null>(null)
 
   const deleteMutation = useMutation({
     mutationFn: (macroId: string) => api.credentials.deleteMacro(versionId, credentialId, macroId),
@@ -87,6 +90,24 @@ export function MacroSection({ versionId, credentialId }: { versionId: string; c
       setError(null)
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : 'Could not delete the macro'),
+  })
+
+  // "Replay" answers the two questions this section keeps getting asked
+  // together: does this recorded macro still actually work, and how do
+  // we know the target really accepted the login (not just "a cookie
+  // came back" — see MacroReplayResult's docstring in
+  // backend/app/agents/macro.py for why that alone isn't trustworthy).
+  // Runs the exact same headless replay every real scan's login step
+  // uses, on demand, against this one specific saved macro.
+  const replayMutation = useMutation({
+    mutationFn: (macroId: string) => api.credentials.replayMacro(versionId, credentialId, macroId),
+    onMutate: (macroId) => setReplayingId(macroId),
+    onSuccess: (res, macroId) => {
+      setReplayResults((prev) => ({ ...prev, [macroId]: res }))
+      setError(null)
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : 'Replay failed'),
+    onSettled: () => setReplayingId(null),
   })
 
   function handleSubmit(e: FormEvent) {
@@ -150,20 +171,39 @@ export function MacroSection({ versionId, credentialId }: { versionId: string; c
 
       {manageOpen && macros && macros.length > 0 && (
         <ul className="mt-2 divide-y divide-gray-200 rounded border border-gray-200 bg-gray-50">
-          {macros.map((macro) => (
-            <li key={macro.id} className="flex items-center justify-between px-2 py-1">
-              <span className="text-gray-500">
-                {macro.step_count} steps — recorded {new Date(macro.created_at).toLocaleString()}
-              </span>
-              <button
-                onClick={() => deleteMutation.mutate(macro.id)}
-                disabled={deleteMutation.isPending}
-                className="text-red-600 hover:underline disabled:opacity-50"
-              >
-                Delete
-              </button>
-            </li>
-          ))}
+          {macros.map((macro) => {
+            const result = replayResults[macro.id]
+            return (
+              <li key={macro.id} className="px-2 py-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">
+                    {macro.step_count} steps — recorded {new Date(macro.created_at).toLocaleString()}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => replayMutation.mutate(macro.id)}
+                      disabled={replayingId === macro.id}
+                      className="text-purple-700 hover:underline disabled:opacity-50"
+                    >
+                      {replayingId === macro.id ? 'Replaying…' : 'Replay'}
+                    </button>
+                    <button
+                      onClick={() => deleteMutation.mutate(macro.id)}
+                      disabled={deleteMutation.isPending}
+                      className="text-red-600 hover:underline disabled:opacity-50"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+                {result && (
+                  <p className={`mt-1 ${result.ok ? 'text-green-700' : 'text-red-600'}`}>
+                    {result.ok ? '✅' : '❌'} {result.message}
+                  </p>
+                )}
+              </li>
+            )
+          })}
         </ul>
       )}
 

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient, ScopeViolationError
 from app.agents.login import SessionManager
-from app.agents.macro import MacroRecorder, RecordingHandle
+from app.agents.macro import MacroPlayer, MacroRecorder, MacroStep, RecordingHandle
 from app.api.deps import get_version_or_404, write_audit_log
 from app.auth.rbac import require_permission
 from app.db.session import get_db_session
@@ -24,7 +24,7 @@ from app.schemas.credential import (
     CredentialSetUpdate,
     TestLoginResult,
 )
-from app.schemas.login_macro import LoginMacroOut, RecordingStartedOut, RecordMacroRequest
+from app.schemas.login_macro import LoginMacroOut, MacroReplayTestResult, RecordingStartedOut, RecordMacroRequest
 from app.vault.credential_vault import decrypt_credential, encrypt_credential, mask_reference
 
 router = APIRouter(prefix="/versions/{version_id}/credentials", tags=["credentials"])
@@ -516,6 +516,74 @@ async def _get_macro_or_404(
     if macro is None or macro.version_id != version_id or macro.credential_set_id != credential_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Login macro not found")
     return macro
+
+
+@router.post("/{credential_id}/macros/{macro_id}/replay", response_model=MacroReplayTestResult)
+async def replay_login_macro(
+    version_id: uuid.UUID,
+    credential_id: uuid.UUID,
+    macro_id: uuid.UUID,
+    user: User = Depends(require_permission("credential", "read")),
+    session: AsyncSession = Depends(get_db_session),
+) -> MacroReplayTestResult:
+    """The macro-specific counterpart to test_login above, and the direct
+    answer to "how do I know this recorded macro actually still works":
+    replays this exact macro (not necessarily the credential's latest —
+    a credential can have several saved recordings) headlessly against
+    the real target and reports a real verdict, the same
+    don't-just-trust-a-session discipline test_login already applies —
+    still_shows_password_field is what catches a macro that "succeeds"
+    (some cookie comes back) without actually having logged in, e.g.
+    after the target's login page changed and a recorded selector now
+    hits the wrong element.
+    """
+    await get_version_or_404(session, version_id, user.org_id)
+    credential = await _get_credential_or_404(session, version_id, credential_id)
+    macro = await _get_macro_or_404(session, version_id, credential_id, macro_id)
+
+    username, secret = decrypt_credential(credential.encrypted_secret)
+    steps = [MacroStep.from_dict(raw) for raw in macro.steps]
+    player = MacroPlayer()
+    try:
+        result = await player.replay(
+            steps, credential_set_id=credential.id, username=username, password=secret, headless=True
+        )
+    except Exception as exc:  # noqa: BLE001 — surface as a result, not a 500
+        return MacroReplayTestResult(
+            ok=False,
+            session_established=False,
+            cookie_count=0,
+            final_url="",
+            final_status=None,
+            still_shows_password_field=False,
+            message=f"Replay raised an error: {exc}",
+        )
+
+    ok = result.session is not None and not result.still_shows_password_field
+    if ok:
+        status_suffix = f" (HTTP {result.final_status})" if result.final_status else ""
+        message = (
+            f"Replay succeeded — landed on {result.final_url}{status_suffix} with "
+            f"{result.cookie_count} cookie(s) set, no login form visible."
+        )
+    elif result.still_shows_password_field:
+        message = (
+            f"Replay finished, but the final page ({result.final_url}) still shows a password field — "
+            "this almost always means the recorded steps didn't actually log in (a wrong selector, a "
+            "changed login page, or a step that needs re-recording)."
+        )
+    else:
+        message = f"Replay finished, but no session cookies were captured at all (final page: {result.final_url})."
+
+    return MacroReplayTestResult(
+        ok=ok,
+        session_established=result.session is not None,
+        cookie_count=result.cookie_count,
+        final_url=result.final_url,
+        final_status=result.final_status,
+        still_shows_password_field=result.still_shows_password_field,
+        message=message,
+    )
 
 
 @router.delete("/{credential_id}/macros/{macro_id}", status_code=204)

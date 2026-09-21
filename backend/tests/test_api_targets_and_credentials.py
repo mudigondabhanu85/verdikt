@@ -321,6 +321,149 @@ async def test_delete_login_macro_removes_it(client, monkeypatch):
     assert again.status_code == 404
 
 
+async def test_replay_macro_reports_success(client, monkeypatch):
+    """The actual Playwright replay mechanism is covered live in
+    test_macro_recorder.py against a real fixture login page — this
+    proves the route itself (RBAC, 404s, response mapping) via the same
+    canned-result substitution pattern the other macro route tests use.
+    """
+    from app.agents.http_client import AuthenticatedSession
+    from app.agents.macro import MacroReplayResult
+
+    canned_steps = [MacroStep(action="goto", url="https://site.test/login")]
+
+    async def _fake_start(self, start_url, *, headless=False):
+        return _fake_recording_handle(start_url)
+
+    async def _fake_finish(self, handle):
+        return canned_steps
+
+    async def _fake_replay(self, steps, *, credential_set_id, username, password, headless=True):
+        assert username == "alice"
+        assert password == "hunter2-super-secret"
+        return MacroReplayResult(
+            session=AuthenticatedSession(credential_set_id=credential_set_id, cookies={"session": "abc", "csrf": "x"}),
+            cookie_count=2,
+            final_url="https://site.test/dashboard",
+            final_status=200,
+            still_shows_password_field=False,
+        )
+
+    monkeypatch.setattr("app.api.routes.credentials.MacroRecorder.start", _fake_start)
+    monkeypatch.setattr("app.api.routes.credentials.MacroRecorder.finish", _fake_finish)
+    monkeypatch.setattr("app.api.routes.credentials.MacroPlayer.replay", _fake_replay)
+
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+
+    credential = await client.post(
+        f"/versions/{version_id}/credentials",
+        json={"label": "Admin", "username": "alice", "secret": "hunter2-super-secret"},
+        headers=admin["headers"],
+    )
+    credential_id = credential.json()["id"]
+
+    started = await client.post(
+        f"/versions/{version_id}/credentials/{credential_id}/record-macro/start",
+        json={"start_url": "https://site.test/login"},
+        headers=admin["headers"],
+    )
+    recording_id = started.json()["recording_id"]
+    finished = await client.post(
+        f"/versions/{version_id}/credentials/{credential_id}/record-macro/{recording_id}/finish",
+        headers=admin["headers"],
+    )
+    macro_id = finished.json()["id"]
+
+    replayed = await client.post(
+        f"/versions/{version_id}/credentials/{credential_id}/macros/{macro_id}/replay",
+        headers=admin["headers"],
+    )
+    assert replayed.status_code == 200, replayed.text
+    body = replayed.json()
+    assert body["ok"] is True
+    assert body["session_established"] is True
+    assert body["still_shows_password_field"] is False
+    assert body["final_url"] == "https://site.test/dashboard"
+    assert body["final_status"] == 200
+    assert body["cookie_count"] == 2
+
+
+async def test_replay_macro_flags_a_login_form_still_showing(client, monkeypatch):
+    canned_steps = [MacroStep(action="goto", url="https://site.test/login")]
+
+    async def _fake_start(self, start_url, *, headless=False):
+        return _fake_recording_handle(start_url)
+
+    async def _fake_finish(self, handle):
+        return canned_steps
+
+    async def _fake_replay(self, steps, *, credential_set_id, username, password, headless=True):
+        from app.agents.macro import MacroReplayResult
+
+        return MacroReplayResult(
+            session=None,
+            cookie_count=1,
+            final_url="https://site.test/login",
+            final_status=401,
+            still_shows_password_field=True,
+        )
+
+    monkeypatch.setattr("app.api.routes.credentials.MacroRecorder.start", _fake_start)
+    monkeypatch.setattr("app.api.routes.credentials.MacroRecorder.finish", _fake_finish)
+    monkeypatch.setattr("app.api.routes.credentials.MacroPlayer.replay", _fake_replay)
+
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+
+    credential = await client.post(
+        f"/versions/{version_id}/credentials",
+        json={"label": "Admin", "username": "alice", "secret": "wrong-secret"},
+        headers=admin["headers"],
+    )
+    credential_id = credential.json()["id"]
+
+    started = await client.post(
+        f"/versions/{version_id}/credentials/{credential_id}/record-macro/start",
+        json={"start_url": "https://site.test/login"},
+        headers=admin["headers"],
+    )
+    recording_id = started.json()["recording_id"]
+    finished = await client.post(
+        f"/versions/{version_id}/credentials/{credential_id}/record-macro/{recording_id}/finish",
+        headers=admin["headers"],
+    )
+    macro_id = finished.json()["id"]
+
+    replayed = await client.post(
+        f"/versions/{version_id}/credentials/{credential_id}/macros/{macro_id}/replay",
+        headers=admin["headers"],
+    )
+    assert replayed.status_code == 200, replayed.text
+    body = replayed.json()
+    assert body["ok"] is False
+    assert "password field" in body["message"]
+
+
+async def test_replay_macro_404_for_unknown_macro(client):
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+
+    credential = await client.post(
+        f"/versions/{version_id}/credentials",
+        json={"label": "Admin", "username": "alice", "secret": "hunter2-super-secret"},
+        headers=admin["headers"],
+    )
+    credential_id = credential.json()["id"]
+
+    resp = await client.post(
+        f"/versions/{version_id}/credentials/{credential_id}/macros/"
+        "00000000-0000-0000-0000-000000000000/replay",
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 404
+
+
 async def test_record_macro_start_404_for_unknown_credential(client, monkeypatch):
     async def _fake_start(self, start_url, *, headless=False):
         raise AssertionError("should not be called for a 404 credential")
