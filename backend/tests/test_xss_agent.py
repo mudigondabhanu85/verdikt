@@ -1,7 +1,8 @@
+import re
 import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import httpx
 from sqlalchemy import select
@@ -71,6 +72,20 @@ def _handler(request: httpx.Request) -> httpx.Response:
         payload = _json.loads(request.content.decode())
         comment = payload.get("comment", "")
         return httpx.Response(200, headers={"content-type": "text/html"}, text=f"<p>Thanks: {comment}</p>")
+
+    product_match = re.match(r"^/rest/products/([^/]+)/details$", parsed.path)
+    if product_match:
+        # Real shape a client-rendered SPA's object-lookup endpoints
+        # actually take (Juice Shop's own /rest/products/{id}) — a
+        # REST-style path segment, never a query string, form field, or
+        # JSON body key. Echoes an invalid id back unescaped in its own
+        # "not found" response, same as a real app's error page often
+        # does. Percent-decoded the same way any real router decodes a
+        # path segment before using it.
+        product_id = unquote(product_match.group(1))
+        return httpx.Response(
+            200, headers={"content-type": "text/html"}, text=f"<p>Product {product_id} not found</p>"
+        )
 
     return httpx.Response(404)
 
@@ -188,6 +203,33 @@ async def test_json_body_reflected_xss_is_queued_as_a_candidate(db_adapter):
         candidate = candidates[0]
         assert candidate.check_type == "xss-reflected"
         assert candidate.affected_endpoint.startswith("http://site.test/api/feedback")
+
+        await client.aclose()
+
+
+async def test_path_segment_reflected_xss_is_queued_as_a_candidate(db_adapter):
+    """Real, live-found gap against a real Angular SPA (Juice Shop):
+    its actual object-lookup endpoints (product details, basket items,
+    user profiles) are REST-style path segments — /rest/products/{id} —
+    never a query string, a <form> field, or a JSON body key. None of
+    the other probe-target builders can see this shape at all; only
+    path_segment_probe_targets, fed from discovered_endpoints (crawled
+    + JS-discovered API URLs), can.
+    """
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "unescaped reflection in HTML body"}'
+        )
+        agent, client = await _make_agent(session, provider)
+
+        candidates = await agent.run(
+            [], [], discovered_endpoints=["http://site.test/rest/products/3/details"]
+        )
+
+        assert len(candidates) == 1
+        candidate = candidates[0]
+        assert candidate.check_type == "xss-reflected"
+        assert candidate.affected_endpoint.startswith("http://site.test/rest/products/3/details")
 
         await client.aclose()
 

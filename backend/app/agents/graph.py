@@ -852,6 +852,9 @@ def build_graph(
                 state.get("sessions", {}),
                 tech_stack_fingerprint=state.get("tech_stack_fingerprint"),
                 json_bodies=state.get("discovered_json_bodies", []),
+                discovered_endpoints=list(
+                    dict.fromkeys(state.get("discovered_endpoints", []) + state.get("discovered_api_endpoints", []))
+                ),
             )
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))
@@ -882,6 +885,9 @@ def build_graph(
                 state.get("sessions", {}),
                 tech_stack_fingerprint=state.get("tech_stack_fingerprint"),
                 json_bodies=state.get("discovered_json_bodies", []),
+                discovered_endpoints=list(
+                    dict.fromkeys(state.get("discovered_endpoints", []) + state.get("discovered_api_endpoints", []))
+                ),
             )
         except Exception as exc:
             await _finish_job(job, status="failed", error=str(exc))

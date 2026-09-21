@@ -7,6 +7,7 @@ from app.agents.probing import (
     build_request,
     form_probe_targets,
     json_body_probe_targets,
+    path_segment_probe_targets,
 )
 from app.agents.recon import DiscoveredJsonBody, FormField, FormInfo
 
@@ -140,3 +141,49 @@ def test_json_body_probe_targets_one_target_per_field():
     assert {t.param_name for t in targets} == {"email", "password"}
     email_target = next(t for t in targets if t.param_name == "email")
     assert email_target.other_fields == {"password": f"{BASELINE_VALUE}_password"}
+
+
+def test_path_segment_probe_targets_finds_the_rightmost_numeric_segment():
+    """A client-rendered SPA's real object-lookup endpoints (Juice
+    Shop's /rest/products/{id}/reviews) are REST-style path segments —
+    invisible to every other probe-target builder, which only ever look
+    at query strings, form fields, or JSON body keys."""
+    targets = path_segment_probe_targets(["http://spa.test/rest/products/3/reviews"])
+
+    assert len(targets) == 1
+    assert targets[0].path_segment_index == 3
+    assert targets[0].param_name == "products_id (path segment)"
+
+
+def test_path_segment_probe_targets_skips_endpoints_with_no_numeric_segment():
+    targets = path_segment_probe_targets(["http://spa.test/rest/user/login"])
+
+    assert targets == []
+
+
+def test_path_segment_probe_targets_dedupes_repeated_endpoints():
+    urls = ["http://spa.test/rest/basket/6"] * 3
+    targets = path_segment_probe_targets(urls)
+
+    assert len(targets) == 1
+
+
+def test_path_segment_request_percent_encodes_the_payload_into_the_path():
+    """Unlike a query string or JSON body, a path segment is a raw
+    string swap (app.agents.idor.substitute_path_segment) — an
+    un-encoded XSS/SQLi payload containing '<', '"', or a space would
+    produce an invalid URL instead of the same request a real browser
+    sends. This must come out percent-encoded, the same way any real
+    HTTP client encodes a path segment before it goes on the wire."""
+    target = ProbeTarget(
+        url="http://spa.test/rest/products/3/reviews",
+        method="GET",
+        param_name="products_id (path segment)",
+        path_segment_index=3,
+    )
+    url, body, content_type = build_request(target, "<script>alert(1)</script>")
+
+    assert body is None
+    assert content_type is None
+    assert "<script>" not in url
+    assert urlsplit(url).path == "/rest/products/%3Cscript%3Ealert%281%29%3C%2Fscript%3E/reviews"

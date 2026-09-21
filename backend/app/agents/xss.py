@@ -13,6 +13,7 @@ from app.agents.probing import (
     fetch_with_value,
     form_probe_targets,
     json_body_probe_targets,
+    path_segment_probe_targets,
     query_probe_targets,
 )
 from app.agents.recon import DiscoveredJsonBody, DiscoveredParameter, FormInfo
@@ -201,6 +202,7 @@ class XSSAgent:
         sessions: dict[uuid.UUID, AuthenticatedSession] | None = None,
         tech_stack_fingerprint: dict[str, Any] | None = None,
         json_bodies: list[DiscoveredJsonBody] | None = None,
+        discovered_endpoints: list[str] | None = None,
     ) -> list[ReviewCandidate]:
         # See app.agents.injection.InjectionAgent.run's identical fix —
         # a real, significant bug found live against DVWA: these probes
@@ -212,6 +214,7 @@ class XSSAgent:
             query_probe_targets(parameters)
             + form_probe_targets(forms)
             + json_body_probe_targets(json_bodies or [])
+            + path_segment_probe_targets(discovered_endpoints or [])
         )
         candidates: list[ReviewCandidate] = []
 

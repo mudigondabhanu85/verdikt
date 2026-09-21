@@ -1,7 +1,7 @@
 import json
 import re
 import uuid
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import httpx
 from sqlalchemy import select
@@ -145,6 +145,18 @@ def _handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"authentication": {"token": "forged-token"}})
         return httpx.Response(401, json={"error": "Invalid email or password"})
 
+    product_match = re.match(r"^/rest/products/([^/]+)/reviews$", parsed.path)
+    if product_match and request.method == "GET":
+        # Real shape a client-rendered SPA's object-lookup endpoints
+        # actually take (Juice Shop's own /rest/products/{id}/reviews) —
+        # a REST-style path segment, never a query string, form field,
+        # or JSON body key. Percent-decoded the same way any real
+        # router/framework decodes a path segment before using it.
+        product_id = unquote(product_match.group(1))
+        if "'" in product_id:
+            return httpx.Response(200, text="Error: You have an error in your SQL syntax near '''")
+        return httpx.Response(200, text=f"Reviews for product {product_id}")
+
     if parsed.path == "/rest/user/login" and request.method == "POST":
         # Real shape a client-rendered SPA's login endpoint actually
         # takes (Juice Shop's own /rest/user/login) — a JSON body, never
@@ -249,6 +261,34 @@ async def test_json_body_sqli_is_confirmed(db_adapter):
         assert "sqli-error" in check_ids
         sqli_finding = next(f for f in findings if f.check_id == "sqli-error")
         assert sqli_finding.confirmation_status == "ai_confirmed"
+
+        await client.aclose()
+
+
+async def test_path_segment_sqli_is_confirmed(db_adapter):
+    """Real, live-found gap against a real Angular SPA (Juice Shop):
+    its actual object-lookup endpoints (product reviews, basket items,
+    user profiles) are REST-style path segments — /rest/products/{id}/
+    reviews — never a query string, a <form> field, or a JSON body key.
+    None of the other probe-target builders can see this shape at all;
+    only path_segment_probe_targets, fed from discovered_endpoints
+    (crawled + JS-discovered API URLs), can.
+    """
+    async with session_scope(db_adapter) as session:
+        provider = ScriptedAIProviderAdapter.from_responses(
+            '{"vulnerable": true, "confidence": "high", "reasoning": "looks vulnerable"}'
+        )
+        agent, client, _scan_run = await _make_agent(session, provider)
+
+        findings = await agent.run(
+            [], [], discovered_endpoints=["http://site.test/rest/products/3/reviews"]
+        )
+
+        check_ids = {f.check_id for f in findings}
+        assert "sqli-error" in check_ids
+        sqli_finding = next(f for f in findings if f.check_id == "sqli-error")
+        assert sqli_finding.confirmation_status == "ai_confirmed"
+        assert sqli_finding.affected_endpoints == ["http://site.test/rest/products/3/reviews"]
 
         await client.aclose()
 

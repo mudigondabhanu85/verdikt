@@ -17,6 +17,7 @@ from app.agents.probing import (
     fetch_with_value,
     form_probe_targets,
     json_body_probe_targets,
+    path_segment_probe_targets,
     query_probe_targets,
 )
 from app.agents.recon import DiscoveredJsonBody, DiscoveredParameter, FormInfo
@@ -649,6 +650,7 @@ class InjectionAgent:
         sessions: dict[uuid.UUID, AuthenticatedSession] | None = None,
         tech_stack_fingerprint: dict[str, Any] | None = None,
         json_bodies: list[DiscoveredJsonBody] | None = None,
+        discovered_endpoints: list[str] | None = None,
     ) -> list[Finding]:
         # A real, significant bug found live against DVWA: these probes
         # never carried any session at all before this fix, silently
@@ -664,6 +666,7 @@ class InjectionAgent:
             query_probe_targets(parameters)
             + form_probe_targets(forms)
             + json_body_probe_targets(json_bodies or [])
+            + path_segment_probe_targets(discovered_endpoints or [])
         )
         findings: list[Finding] = []
 

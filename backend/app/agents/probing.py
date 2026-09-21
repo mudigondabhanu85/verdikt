@@ -1,16 +1,17 @@
 """Shared parameter-probing plumbing used by both the Injection and XSS
 agents: turning discovered query params / form fields / JSON request
-bodies into a uniform ProbeTarget, and substituting one parameter's
-value to fetch a response.
+bodies / REST-style path segments into a uniform ProbeTarget, and
+substituting one parameter's value to fetch a response.
 """
 
 import json
 from dataclasses import dataclass, field
-from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
 from app.agents.http_client import AuthenticatedSession, ScopedHttpClient
+from app.agents.idor import find_numeric_id_segment, substitute_path_segment
 from app.agents.recon import DiscoveredJsonBody, DiscoveredParameter, FormInfo
 
 BASELINE_VALUE = "verdikt1"
@@ -27,6 +28,11 @@ class ProbeTarget:
     # "application/json" (a SPA's real API body shape — see
     # json_body_probe_targets). Meaningless for GET, which has no body.
     content_type: str = "application/x-www-form-urlencoded"
+    # Set only by path_segment_probe_targets — when present, the
+    # injection point is a position in target.url's own path (e.g. the
+    # "3" in /rest/products/3/reviews), not a query/body field at all.
+    # Takes priority over every other field in build_request below.
+    path_segment_index: int | None = None
 
 
 def query_probe_targets(parameters: list[DiscoveredParameter]) -> list[ProbeTarget]:
@@ -91,7 +97,58 @@ def json_body_probe_targets(bodies: list[DiscoveredJsonBody]) -> list[ProbeTarge
     return targets
 
 
+def _path_segment_label(url: str, index: int) -> str:
+    segments = urlsplit(url).path.split("/")
+    # The segment right before the id usually names the resource it
+    # identifies (".../products/3" -> "products") — a much more useful
+    # label in a Finding's "parameter 'X'" phrasing than a bare index.
+    if index > 0 and segments[index - 1]:
+        return f"{segments[index - 1]}_id (path segment)"
+    return f"path segment {index}"
+
+
+def path_segment_probe_targets(endpoints: list[str]) -> list[ProbeTarget]:
+    """A client-rendered SPA's real object-lookup endpoints are
+    overwhelmingly REST-style path segments (Juice Shop's
+    /rest/products/{id}, /rest/basket/{id}) — never a query string, a
+    <form> field, or a JSON body key, so none of the probe-target
+    builders above can see this shape at all. Reuses the exact same
+    numeric-id detection app.agents.access_control/business_logic
+    already rely on for IDOR testing (app.agents.idor.
+    find_numeric_id_segment) — same detection, a different question
+    (can this segment be broken with an injection payload, vs. can it
+    be swapped for another user's id).
+    """
+    targets = []
+    seen: set[tuple[str, int]] = set()
+    for url in endpoints:
+        found = find_numeric_id_segment(url)
+        if found is None:
+            continue
+        index, _ = found
+        if (url, index) in seen:
+            continue
+        seen.add((url, index))
+        targets.append(
+            ProbeTarget(url=url, method="GET", param_name=_path_segment_label(url, index), path_segment_index=index)
+        )
+    return targets
+
+
 def build_request(target: ProbeTarget, value: str) -> tuple[str, str | None, str | None]:
+    if target.path_segment_index is not None:
+        # Percent-encode the payload before it goes into the path itself
+        # — unlike a query string (built via urlencode above) or a JSON
+        # body, substitute_path_segment does a raw string swap, and an
+        # un-encoded payload (a literal '<', '"', or space from an
+        # XSS/SQLi payload) would produce an invalid URL rather than the
+        # same request a real client sends. A real browser/HTTP client
+        # always percent-encodes a path segment before it goes on the
+        # wire, and every real router/framework decodes it straight
+        # back — this changes nothing about what the target application
+        # actually receives.
+        encoded = quote(value, safe="")
+        return substitute_path_segment(target.url, target.path_segment_index, encoded), None, None
     if target.method == "GET":
         parsed = urlsplit(target.url)
         params = parse_qs(parsed.query, keep_blank_values=True)
