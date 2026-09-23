@@ -294,8 +294,11 @@ export function MacroSection({ versionId, credentialId }: { versionId: string; c
             the final destination; following an Okta/SSO redirect and back is fine). Your mouse wheel over the box
             below scrolls the <em>remote</em> page, not this one — scroll this page from outside the box. Need to
             paste a password/token in rather than type it? Click the ☰ icon in the top-left corner of the box below
-            to open noVNC's own clipboard panel — paste your text there and it's typed into the remote page for you
-            (copying text back out of the remote session works the same way, in reverse). When you're done, click{' '}
+            to open noVNC's own clipboard panel and put your text there — that puts it on the remote session's own
+            clipboard. Then click the field inside the box you want it in, and{' '}
+            <strong>right-click and choose "Paste"</strong> (not Ctrl+V — that keyboard shortcut doesn't reliably
+            reach the remote browser through the VNC connection and can type a stray "v" instead). Copying text
+            back out of the remote session works the same way, in reverse. When you're done, click{' '}
             <strong>"Finish recording"</strong> below (not anything inside the box) to save it.
           </p>
           <iframe
