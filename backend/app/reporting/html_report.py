@@ -7,6 +7,7 @@ from jinja2 import Environment, FileSystemLoader
 from markupsafe import Markup, escape
 
 from app.models.attack_chain import AttackChain
+from app.models.autonomous_pentest import PentestCommand
 from app.models.finding import Finding
 from app.reporting.grouping import group_findings
 from app.reporting.payload_highlight import find_highlight_match
@@ -73,12 +74,22 @@ def render_html_report(
     screenshots_by_finding_id: dict[uuid.UUID, list[bytes]] | None = None,
     attack_chains: list[AttackChain] | None = None,
     branding: BrandingInfo | None = None,
+    pentest_commands: list[PentestCommand] | None = None,
 ) -> str:
     """HTML report (§8): "how to read this report" section, an
     LLM-generated executive summary (app.reporting.executive_summary),
     plain-language + technical dual-audience findings, and any captured
     browser-proof screenshots (app.reporting.screenshots) embedded inline
     as base64 data URIs — keeps the report a single self-contained file.
+
+    `pentest_commands` is only ever non-empty for a `mode="autonomous_ai"`
+    scan run (app.agents.autonomous_pentest) — the command-by-command
+    transcript that produced whatever findings appear above, included so
+    the report itself carries the same chain-of-custody evidence the
+    live Pentest Transcript tab shows, not just the findings it concluded
+    with. Omitted from the template entirely when empty/None, exactly
+    like attack_chains above — a `mode="deterministic"` run's report is
+    unchanged by this parameter existing.
     """
     finding_groups = group_findings(findings)
     screenshots_by_finding_id = screenshots_by_finding_id or {}
@@ -108,4 +119,5 @@ def render_html_report(
         screenshots_by_finding_id=screenshots_b64,
         attack_chains=attack_chains or [],
         branding=branding_ctx,
+        pentest_commands=pentest_commands or [],
     )

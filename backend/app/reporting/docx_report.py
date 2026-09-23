@@ -11,6 +11,7 @@ from docx.enum.text import WD_COLOR_INDEX
 from docx.shared import Inches, Pt, RGBColor
 
 from app.models.attack_chain import AttackChain
+from app.models.autonomous_pentest import PentestCommand
 from app.models.finding import Finding
 from app.reporting.grouping import group_findings
 from app.reporting.html_report import BrandingInfo
@@ -75,9 +76,11 @@ def render_docx_report(
     screenshots_by_finding_id: dict[uuid.UUID, list[bytes]] | None = None,
     attack_chains: list[AttackChain] | None = None,
     branding: BrandingInfo | None = None,
+    pentest_commands: list[PentestCommand] | None = None,
 ) -> bytes:
     screenshots_by_finding_id = screenshots_by_finding_id or {}
     attack_chains = attack_chains or []
+    pentest_commands = pentest_commands or []
     groups = group_findings(findings)
     document = Document()
 
@@ -130,6 +133,28 @@ def render_docx_report(
                 document.add_heading("Steps to reproduce (end-to-end)", level=4)
                 for step in chain.steps_to_reproduce:
                     document.add_paragraph(step, style="List Number")
+
+    if pentest_commands:
+        document.add_heading("Pentest Transcript", level=2)
+        document.add_paragraph(
+            "This scan run used Verdikt's AI-driven autonomous pentest mode: rather than a "
+            "fixed set of deterministic checks, an AI agent decided turn by turn what to "
+            "investigate and ran real commands inside an isolated, network-restricted sandbox. "
+            "Every command it ran is recorded below, in order, alongside the reasoning it gave "
+            "for running it."
+        )
+        for cmd in pentest_commands:
+            exit_label = f"exit {cmd.exit_code}" if cmd.exit_code is not None else "no exit code"
+            heading = document.add_paragraph()
+            heading.add_run(f"#{cmd.sequence_number} [{cmd.tool_name}] {exit_label}").bold = True
+            _mono_paragraph(document, cmd.command)
+            if cmd.model_rationale:
+                rationale = document.add_paragraph()
+                rationale.add_run(cmd.model_rationale).italic = True
+            if cmd.stdout:
+                _mono_paragraph(document, cmd.stdout)
+            if cmd.stderr:
+                _mono_paragraph(document, cmd.stderr)
 
     document.add_heading("Findings", level=2)
     if not groups:

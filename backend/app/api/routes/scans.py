@@ -20,6 +20,7 @@ from app.auth.rbac import require_permission
 from app.db.session import get_db_session
 from app.models.ai_provider_config import AIProviderConfig
 from app.models.attack_chain import AttackChain
+from app.models.autonomous_pentest import PentestCommand
 from app.models.finding import Evidence, Finding
 from app.models.org_branding import OrgBranding
 from app.models.organization import User
@@ -40,6 +41,7 @@ from app.reporting.vgs_docx_report import (
     render_vgs_docx_report,
 )
 from app.schemas.attack_chain import AttackChainOut
+from app.schemas.autonomous_pentest import PentestCommandOut
 from app.schemas.finding import FindingOut
 from app.schemas.scan import AgentJobOut, ScanRunCreate, ScanRunDetail, ScanRunDiffOut, ScanRunOut
 from app.storage.local_disk import get_object_storage
@@ -324,6 +326,27 @@ async def _list_attack_chains(session: AsyncSession, scan_run_id: uuid.UUID) -> 
     return chains
 
 
+async def _list_pentest_commands(session: AsyncSession, scan_run_id: uuid.UUID) -> list[PentestCommand]:
+    """Same query as app.api.routes.autonomous_pentest.list_pentest_commands
+    — reused here (not imported directly, to keep that route's own
+    permission-gated response_model separate from this report-building
+    helper) so every export format's Pentest Transcript section is built
+    from the exact same data the live transcript tab shows. Naturally
+    empty for a mode="deterministic" run — no ScopeEntry-style filtering
+    needed, since only an autonomous_ai session's AgentJob ever has
+    PentestCommand rows at all."""
+    return list(
+        (
+            await session.execute(
+                select(PentestCommand)
+                .join(AgentJob, PentestCommand.agent_job_id == AgentJob.id)
+                .where(AgentJob.scan_run_id == scan_run_id)
+                .order_by(PentestCommand.sequence_number)
+            )
+        ).scalars()
+    )
+
+
 @router.get("/scan-runs/{scan_run_id}/findings", response_model=list[FindingOut])
 async def list_findings(
     scan_run_id: uuid.UUID,
@@ -372,11 +395,13 @@ async def get_report_json(
     findings = await _list_findings(session, scan_run_id)
     executive_summary = await _get_or_generate_executive_summary(session, scan_run, detail, findings)
     attack_chains = await _list_attack_chains(session, scan_run_id)
+    pentest_commands = await _list_pentest_commands(session, scan_run_id)
     return {
         "scan_run": detail.model_dump(mode="json"),
         "executive_summary": executive_summary,
         "findings": [FindingOut.model_validate(f).model_dump(mode="json") for f in findings],
         "attack_chains": [AttackChainOut.model_validate(c).model_dump(mode="json") for c in attack_chains],
+        "pentest_commands": [PentestCommandOut.model_validate(c).model_dump(mode="json") for c in pentest_commands],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -393,12 +418,14 @@ async def get_report_html(
     executive_summary = await _get_or_generate_executive_summary(session, scan_run, detail, findings)
     screenshots = await load_screenshots_by_finding(findings)
     attack_chains = await _list_attack_chains(session, scan_run_id)
+    pentest_commands = await _list_pentest_commands(session, scan_run_id)
     return render_html_report(
         scan_run=detail,
         findings=findings,
         executive_summary=executive_summary,
         screenshots_by_finding_id=screenshots,
         attack_chains=attack_chains,
+        pentest_commands=pentest_commands,
     )
 
 
@@ -414,12 +441,14 @@ async def get_report_pdf(
     executive_summary = await _get_or_generate_executive_summary(session, scan_run, detail, findings)
     screenshots = await load_screenshots_by_finding(findings)
     attack_chains = await _list_attack_chains(session, scan_run_id)
+    pentest_commands = await _list_pentest_commands(session, scan_run_id)
     pdf_bytes = render_pdf_report(
         scan_run=detail,
         findings=findings,
         executive_summary=executive_summary,
         screenshots_by_finding_id=screenshots,
         attack_chains=attack_chains,
+        pentest_commands=pentest_commands,
     )
     return Response(
         content=pdf_bytes,
@@ -440,12 +469,14 @@ async def get_report_docx(
     executive_summary = await _get_or_generate_executive_summary(session, scan_run, detail, findings)
     screenshots = await load_screenshots_by_finding(findings)
     attack_chains = await _list_attack_chains(session, scan_run_id)
+    pentest_commands = await _list_pentest_commands(session, scan_run_id)
     docx_bytes = render_docx_report(
         scan_run=detail,
         findings=findings,
         executive_summary=executive_summary,
         screenshots_by_finding_id=screenshots,
         attack_chains=attack_chains,
+        pentest_commands=pentest_commands,
     )
     return Response(
         content=docx_bytes,

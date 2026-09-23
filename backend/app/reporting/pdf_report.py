@@ -27,6 +27,7 @@ from reportlab.platypus import (
 )
 
 from app.models.attack_chain import AttackChain
+from app.models.autonomous_pentest import PentestCommand
 from app.models.finding import Finding
 from app.reporting.grouping import group_findings
 from app.reporting.html_report import BrandingInfo
@@ -115,9 +116,11 @@ def render_pdf_report(
     screenshots_by_finding_id: dict[uuid.UUID, list[bytes]] | None = None,
     attack_chains: list[AttackChain] | None = None,
     branding: BrandingInfo | None = None,
+    pentest_commands: list[PentestCommand] | None = None,
 ) -> bytes:
     screenshots_by_finding_id = screenshots_by_finding_id or {}
     attack_chains = attack_chains or []
+    pentest_commands = pentest_commands or []
     groups = group_findings(findings)
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=LETTER, title="Verdikt Security Assessment Report")
@@ -193,6 +196,33 @@ def render_pdf_report(
                         bulletType="1",
                     )
                 )
+        story.append(Spacer(1, 12))
+
+    if pentest_commands:
+        story.append(Paragraph("Pentest Transcript", _h2))
+        story.append(
+            Paragraph(
+                "This scan run used Verdikt's AI-driven autonomous pentest mode: rather than a "
+                "fixed set of deterministic checks, an AI agent decided turn by turn what to "
+                "investigate and ran real commands inside an isolated, network-restricted "
+                "sandbox. Every command it ran is recorded below, in order, alongside the "
+                "reasoning it gave for running it.",
+                _body,
+            )
+        )
+        for cmd in pentest_commands:
+            exit_label = f"exit {cmd.exit_code}" if cmd.exit_code is not None else "no exit code"
+            story.append(
+                Paragraph(f"<b>#{cmd.sequence_number}</b> [{_escape(cmd.tool_name)}] {exit_label}", _body)
+            )
+            story.append(Paragraph(_escape_pre(cmd.command), _mono))
+            if cmd.model_rationale:
+                story.append(Paragraph(f"<i>{_escape(cmd.model_rationale)}</i>", _body))
+            if cmd.stdout:
+                story.append(Paragraph(_escape_pre(cmd.stdout), _mono))
+            if cmd.stderr:
+                story.append(Paragraph(_escape_pre(cmd.stderr), _mono))
+            story.append(Spacer(1, 8))
         story.append(Spacer(1, 12))
 
     story.append(Paragraph("Findings", _h2))

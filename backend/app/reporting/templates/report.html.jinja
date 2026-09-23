@@ -32,6 +32,16 @@
   mark { background: #fde047; color: #1c1917; padding: 0 .15rem; border-radius: 2px; }
   a { color: {{ branding.primary_color_hex if branding and branding.primary_color_hex else '#1d4ed8' }}; }
   .report-logo { max-height: 64px; margin-bottom: 1rem; display: block; }
+  .command { border-top: 1px solid #eee; padding: .75rem 0; }
+  .command .command-head { display: flex; align-items: baseline; gap: .5rem; font-size: .85rem; color: #555; }
+  .command .command-head .seq { font-weight: 600; color: #1a1a1a; }
+  .command .command-head .tool { background: #eef2ff; color: #3730a3; border-radius: 4px; padding: 0 .4rem; font-size: .75rem; }
+  .command .command-head .exit-ok { color: #15803d; }
+  .command .command-head .exit-err { color: #b91c1c; }
+  .command code.cmd { display: block; font-size: .8rem; background: #f5f5f5; padding: .5rem .75rem; border-radius: 6px; margin-top: .35rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+  .command .rationale { font-style: italic; color: #444; font-size: .85rem; margin-top: .35rem; }
+  .command details { margin-top: .35rem; }
+  .command summary { cursor: pointer; font-size: .8rem; color: #555; }
 </style>
 </head>
 <body>
@@ -98,6 +108,39 @@
   {% if c.steps_to_reproduce %}
   <div class="section-label">Steps to reproduce (end-to-end)</div>
   <ol>{% for step in c.steps_to_reproduce %}<li>{{ step }}</li>{% endfor %}</ol>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+{% if pentest_commands %}
+<h2>Pentest Transcript</h2>
+<p>
+  This scan run used Verdikt's AI-driven autonomous pentest mode: rather than a fixed set of
+  deterministic checks, an AI agent decided turn by turn what to investigate and ran real
+  commands (shell access, real network requests) inside an isolated, network-restricted sandbox.
+  Every command it ran is recorded below, in order, alongside the reasoning it gave for running
+  it — the same chain-of-custody evidence behind any finding this report concludes with.
+</p>
+{% for cmd in pentest_commands %}
+<div class="command">
+  <div class="command-head">
+    <span class="seq">#{{ cmd.sequence_number }}</span>
+    <span class="tool">{{ cmd.tool_name }}</span>
+    {% if cmd.exit_code is not none %}
+    <span class="{{ 'exit-ok' if cmd.exit_code == 0 else 'exit-err' }}">exit {{ cmd.exit_code }}</span>
+    {% endif %}
+  </div>
+  <code class="cmd">{{ cmd.command }}</code>
+  {% if cmd.model_rationale %}
+  <div class="rationale">{{ cmd.model_rationale }}</div>
+  {% endif %}
+  {% if cmd.stdout or cmd.stderr %}
+  <details>
+    <summary>Show output</summary>
+    {% if cmd.stdout %}<pre>{{ cmd.stdout }}</pre>{% endif %}
+    {% if cmd.stderr %}<pre>{{ cmd.stderr }}</pre>{% endif %}
+  </details>
   {% endif %}
 </div>
 {% endfor %}

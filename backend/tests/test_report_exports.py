@@ -1,10 +1,12 @@
 import io
 import uuid
+from datetime import datetime, timezone
 
 from docx import Document
 from PIL import Image as PILImage
 from pypdf import PdfReader
 
+from app.models.autonomous_pentest import PentestCommand
 from app.models.finding import Evidence, Finding
 from app.reporting.docx_report import render_docx_report
 from app.reporting.html_report import BrandingInfo, render_html_report
@@ -61,6 +63,24 @@ def _finding_with_evidence() -> Finding:
 
 
 _NO_VISUAL_POC_TEXT = "No visual proof-of-concept for this finding"
+
+
+def _pentest_command(**overrides) -> PentestCommand:
+    defaults = dict(
+        agent_job_id=uuid.uuid4(),
+        sequence_number=1,
+        tool_name="shell_exec",
+        command="curl -X POST http://target.test/rest/user/login -d '{\"email\":\"a\"}'",
+        stdout="HTTP/1.1 200 OK",
+        stderr=None,
+        exit_code=0,
+        scope_decision="unknown",
+        started_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
+        model_rationale="Testing the login endpoint for SQL injection.",
+    )
+    defaults.update(overrides)
+    return PentestCommand(**defaults)
 
 
 def _blind_finding() -> Finding:
@@ -531,3 +551,85 @@ def test_pdf_report_embeds_branding_logo_and_company_name():
     assert "Acme Corp" in text
     images_found = sum(len(page.images) for page in reader.pages)
     assert images_found >= 1
+
+
+def test_html_report_omits_the_transcript_section_for_a_deterministic_run():
+    html = render_html_report(scan_run=_detail(), findings=[], executive_summary="summary")
+    assert "Pentest Transcript" not in html
+
+
+def test_html_report_includes_the_transcript_section_for_an_autonomous_run():
+    cmd = _pentest_command(
+        sequence_number=3,
+        tool_name="shell_exec",
+        command="sqlmap -u http://target.test/rest/user/login --batch --dbs",
+        model_rationale="Testing for SQL injection with sqlmap.",
+    )
+    html = render_html_report(
+        scan_run=_detail(mode="autonomous_ai"),
+        findings=[],
+        executive_summary="summary",
+        pentest_commands=[cmd],
+    )
+    assert "Pentest Transcript" in html
+    assert "#3" in html
+    assert "sqlmap -u http://target.test/rest/user/login --batch --dbs" in html
+    assert "Testing for SQL injection with sqlmap." in html
+    assert "HTTP/1.1 200 OK" in html
+
+
+def test_html_report_escapes_attacker_controlled_transcript_content():
+    """The exact same reasoning as _highlight_payload's own docstring —
+    a command's stdout can be attacker-influenced content (the target's
+    own response body), and this report must never re-render that
+    unescaped into an HTML document someone opens in a browser."""
+    cmd = _pentest_command(stdout="<script>alert(1)</script>")
+    html = render_html_report(
+        scan_run=_detail(mode="autonomous_ai"), findings=[], executive_summary="summary", pentest_commands=[cmd]
+    )
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_pdf_report_includes_the_transcript_section():
+    cmd = _pentest_command(command="curl -s http://target.test/rest/user/login")
+    pdf_bytes = render_pdf_report(
+        scan_run=_detail(mode="autonomous_ai"),
+        findings=[],
+        executive_summary="summary",
+        pentest_commands=[cmd],
+    )
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = "\n".join(page.extract_text() for page in reader.pages)
+    assert "Pentest Transcript" in text
+    assert "curl -s http://target.test/rest/user/login" in text
+    assert "Testing the login endpoint for SQL injection." in text
+
+
+def test_pdf_report_omits_the_transcript_section_for_a_deterministic_run():
+    pdf_bytes = render_pdf_report(scan_run=_detail(), findings=[], executive_summary="summary")
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = "\n".join(page.extract_text() for page in reader.pages)
+    assert "Pentest Transcript" not in text
+
+
+def test_docx_report_includes_the_transcript_section():
+    cmd = _pentest_command(command="nmap -sV target.test")
+    docx_bytes = render_docx_report(
+        scan_run=_detail(mode="autonomous_ai"),
+        findings=[],
+        executive_summary="summary",
+        pentest_commands=[cmd],
+    )
+    document = Document(io.BytesIO(docx_bytes))
+    full_text = "\n".join(p.text for p in document.paragraphs)
+    assert "Pentest Transcript" in full_text
+    assert "nmap -sV target.test" in full_text
+    assert "Testing the login endpoint for SQL injection." in full_text
+
+
+def test_docx_report_omits_the_transcript_section_for_a_deterministic_run():
+    docx_bytes = render_docx_report(scan_run=_detail(), findings=[], executive_summary="summary")
+    document = Document(io.BytesIO(docx_bytes))
+    full_text = "\n".join(p.text for p in document.paragraphs)
+    assert "Pentest Transcript" not in full_text
