@@ -6,6 +6,7 @@ from app.models.ai_provider_config import AIProviderConfig
 from app.models.api_key import ApiKey
 from app.models.attack_chain import AttackChain, AttackChainEvidence
 from app.models.audit import AuditLogEntry
+from app.models.autonomous_pentest import PentestCommand
 from app.models.business_rule import BusinessRule
 from app.models.chatbot_agency_probe import ChatbotAgencyProbe
 from app.models.chatbot_target import ChatbotTarget
@@ -39,6 +40,7 @@ __all__ = [
     "AttackChain",
     "AttackChainEvidence",
     "AuditLogEntry",
+    "PentestCommand",
     "BusinessRule",
     "ChatbotAgencyProbe",
     "ChatbotTarget",

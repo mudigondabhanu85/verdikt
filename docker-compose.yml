@@ -41,6 +41,12 @@ services:
       # runs with backend/ as its cwd (true for local dev, not true
       # inside this container, which only ever bind-mounts ./backend).
       BROWSER_EXTENSION_SOURCE_DIR: /browser-extension
+      # The AI-driven autonomous pentest mode's sandbox sidecar — see
+      # the sandbox-runner service above and app.agents.sandbox_client.
+      # Reachable by service name over the internal compose network;
+      # unset in any deployment that only wants the deterministic
+      # agents (see app.config.Settings.sandbox_runner_base_url).
+      SANDBOX_RUNNER_BASE_URL: http://sandbox-runner:8090
     ports:
       # Host-side port only — container still listens on 8000 internally
       # (see the healthcheck/command below and frontend's
@@ -90,6 +96,50 @@ services:
       sh -c "sh scripts/start-display.sh &&
              uv run alembic upgrade head &&
              uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --loop asyncio"
+
+  # Holds the Docker socket so the much larger `backend` container never
+  # has to — see sandbox-runner/app/main.py's module docstring for the
+  # full reasoning (Docker-socket access is effectively host-root
+  # equivalent, and `backend` both has a large dependency surface and
+  # directly parses untrusted target HTTP responses). Orchestrates one
+  # ephemeral, network-isolated container per AI-driven autonomous
+  # pentest session — see app.agents.sandbox_client on the backend side.
+  sandbox-runner:
+    build: ./sandbox-runner
+    environment:
+      # Overridden per-request per session, but the SDK needs some
+      # default socket path at client construction time.
+      DOCKER_HOST: unix:///var/run/docker.sock
+    volumes:
+      # The one genuinely sensitive line in this whole file — grants
+      # this container the ability to create/exec/destroy *any*
+      # container on the host, which is why it's isolated in its own
+      # small, auditable service instead of living in `backend`. Never
+      # add this mount anywhere else.
+      - /var/run/docker.sock:/var/run/docker.sock
+    # No host port published (internal Docker network only) — same
+    # posture as `db`'s reachability model. The main backend reaches
+    # this at http://sandbox-runner:8090 (see app.config.Settings.
+    # sandbox_runner_base_url).
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Not a running service — this entry exists purely so `docker compose
+  # build` produces the verdikt-pentest-tools:latest image sandbox-runner
+  # spins up per session (via the Docker SDK, by image name, not via
+  # this compose entry). The `tools` profile keeps it out of a normal
+  # `docker compose up`, which would otherwise start it, hit `sleep
+  # infinity`... and then just sit there as an unused idle container.
+  pentest-tools:
+    build:
+      context: ./pentest-tools
+      tags:
+        - "verdikt-pentest-tools:latest"
+    profiles: ["tools"]
+    command: ["sleep", "infinity"]
 
   frontend:
     build: ./frontend

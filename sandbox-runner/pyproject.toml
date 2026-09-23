@@ -1,0 +1,25 @@
+[project]
+name = "verdikt-sandbox-runner"
+version = "0.1.0"
+description = "Verdikt — sandbox orchestration sidecar for the AI-driven autonomous pentest mode. Holds the Docker socket so the much larger main backend never has to; see docker-compose.yml and its own module docstrings for why this is a separate service."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.2",
+    "docker>=7.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.3",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

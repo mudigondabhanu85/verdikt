@@ -11,6 +11,16 @@ SCAN_RUN_STATUSES = ("pending", "running", "completed", "failed", "cancelled")
 # "skipped" (§10.5): the §2 budget guardrail stopped this agent before it
 # ran, not a failure — see app/ai/budget.py.
 AGENT_JOB_STATUSES = ("pending", "running", "completed", "failed", "skipped")
+# "deterministic" (default): the existing 57-agent LangGraph pipeline
+# (app.agents.graph/runner.execute_scan_run). "autonomous_ai": a
+# hand-written multi-turn tool-use loop against a real, network-isolated
+# sandbox container (app.agents.autonomous_pentest.runner) — deliberately
+# NOT run through build_graph()/LangGraph at all, since its open-ended,
+# variable-length turn count doesn't fit a StateGraph's join semantics
+# any better than runner.py's own _run_chain_analysis does (see that
+# function's docstring for the identical reasoning, applied here to a
+# much larger step instead of one small one).
+SCAN_RUN_MODES = ("deterministic", "autonomous_ai")
 
 
 class ScanRun(Base):
@@ -18,6 +28,7 @@ class ScanRun(Base):
 
     version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("versions.id"))
     status: Mapped[str] = mapped_column(String(16), default="pending")
+    mode: Mapped[str] = mapped_column(String(20), default="deterministic")
     requested_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

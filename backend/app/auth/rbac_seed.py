@@ -26,6 +26,7 @@ RESOURCES = (
     "saml_config",
     "vgs_vulnerability",
     "chatbot_target",
+    "autonomous_pentest",
 )
 ACTIONS = ("create", "read", "update", "delete")
 
@@ -40,7 +41,11 @@ def baseline_grants() -> list[tuple[str, str, str]]:
             grants.append(("org_admin", resource, action))
 
     # project_lead: full CRUD on engagement resources; read-only on the org itself.
+    # Also read-only (not create) on autonomous_pentest — see the comment
+    # by that resource's own grant below for why it's deliberately
+    # excluded from this blanket-CRUD list.
     grants.append(("project_lead", "organization", "read"))
+    grants.append(("project_lead", "autonomous_pentest", "read"))
     for resource in (
         "project",
         "version",
@@ -197,3 +202,22 @@ def chatbot_target_resource_grants() -> list[tuple[str, str, str]]:
     migration adding this resource, same reasoning as
     scan_resource_grants() above."""
     return _grants_for_resource("chatbot_target")
+
+
+def autonomous_pentest_resource_grants() -> list[tuple[str, str, str]]:
+    """Just the "autonomous_pentest" resource rows — used by the
+    incremental migration adding this resource. Deliberately narrower
+    than every other resource's grant shape: org_admin gets the usual
+    full CRUD via the blanket loop above, but create/update/delete are
+    NOT extended to project_lead or analyst the way scan/business_rule/
+    chatbot_target's create already is — this resource runs live
+    exploitation tooling (sqlmap/nmap/etc.) with real side effects
+    against a real target, not a read-mostly crawl, so it starts
+    narrower than ordinary scan:create and can be widened later purely
+    as a data change (a RolePermission insert) if an org wants that,
+    same philosophy this table already documents elsewhere. analyst and
+    viewer still get read (via their own blanket "read everywhere"
+    loops), and project_lead gets an explicit read-only grant above —
+    visibility into what an autonomous session did is never restricted,
+    only the ability to start one."""
+    return _grants_for_resource("autonomous_pentest")

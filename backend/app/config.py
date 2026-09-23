@@ -77,6 +77,18 @@ class Settings(BaseSettings):
     # local Juice Shop instance but not for an internet-hosted target.
     ssrf_callback_host: str | None = None
 
+    # Base URL of the sandbox-runner service (see app.agents.sandbox_client
+    # and app.agents.autonomous_pentest.runner) — the separate sidecar
+    # that holds the Docker socket and spins up one ephemeral, network-
+    # isolated container per autonomous pentest session, so the docket
+    # socket never has to be mounted into this (much larger, untrusted-
+    # response-parsing) backend container. None means the autonomous
+    # pentest mode is unavailable in this deployment (fails loudly with a
+    # clear error when a session is requested, rather than silently
+    # doing nothing) — most deployments running only the deterministic
+    # agents never need this service at all.
+    sandbox_runner_base_url: str | None = None
+
     # Crawl bounds (app.agents.recon.ReconAgent) — deliberately
     # configurable rather than hardcoded, since 300 pages at depth 6 is a
     # substantial jump from this project's original 40/2 and can run
