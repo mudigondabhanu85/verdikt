@@ -47,6 +47,45 @@ class FindingProposal(BaseModel):
     technical_description: str
     remediation: str
     evidence: str
+    # request_raw/response_raw: the exact command/request and the exact
+    # raw output/response that prove this finding — required (not
+    # optional) for the same reason app.models.finding.Evidence's own
+    # columns are NOT NULL: a Finding with no re-checkable raw evidence
+    # attached isn't meaningfully different from an unverified claim,
+    # and this project's whole "never guess a Finding into existence"
+    # discipline exists to keep that from ever reaching a report. A
+    # proposal missing either of these simply fails to parse — the same
+    # fail-safe behavior as a missing title/severity — rather than
+    # producing a Finding with an empty Evidence row.
+    request_raw: str
+    response_raw: str
+    # The literal substring that proves it (an injected payload, a
+    # forged header value, the exact marker that came back unescaped) —
+    # optional, since not every finding class has one crisp substring to
+    # point at. Mirrors Evidence.payload exactly: every report surface
+    # (HTML/PDF/DOCX) and the Findings tab already highlight this
+    # specific substring wherever request_raw/response_raw is shown, so
+    # populating it here is what makes AI-pentest findings get the same
+    # highlighting deterministic findings already have — no new
+    # highlighting code needed anywhere.
+    payload: str | None = None
+    # Only meaningful for a reflected/DOM XSS reachable via a plain GET
+    # request: poc_url is the page's URL WITHOUT any payload in it
+    # (e.g. "http://target/search.jsp"), poc_param is the name of the
+    # query parameter that's unescaped/injectable (e.g. "query"). When
+    # both are present, app.agents.autonomous_pentest.runner builds a
+    # ProbeTarget from them and reuses app.agents.xss_browser_proof's
+    # existing, already-proven mechanism — the exact same one the
+    # deterministic XSS agent uses — to load it in a real headless
+    # browser with a controlled proof payload and capture a real
+    # screenshot. Deliberately NOT a pre-built URL with the model's own
+    # payload already embedded: the browser-proof mechanism supplies its
+    # own known-reliable execution payloads and only needs to know WHERE
+    # to inject them, matching why it can auto-confirm findings the
+    # model's own curl-based reflection check alone couldn't prove a
+    # real browser would execute.
+    poc_url: str | None = None
+    poc_param: str | None = None
 
 
 def extract_json_objects(raw_content: str) -> list[dict]:

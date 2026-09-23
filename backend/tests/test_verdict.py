@@ -1,4 +1,4 @@
-from app.ai.verdict import parse_verdict
+from app.ai.verdict import parse_finding_proposal, parse_verdict
 
 
 def test_parses_bare_json():
@@ -74,3 +74,64 @@ def test_returns_none_for_unparseable_content():
 
 def test_returns_none_for_json_missing_required_fields():
     assert parse_verdict('{"vulnerable": true}') is None
+
+
+_FULL_FINDING_PROPOSAL_FIELDS = {
+    "title": "SQL injection in login form",
+    "severity": "Critical",
+    "cwe_id": "CWE-89",
+    "owasp_2025_category": "A05 Injection",
+    "affected_endpoint": "http://target/doLogin",
+    "plain_language_summary": "x",
+    "technical_description": "x",
+    "remediation": "x",
+    "evidence": "x",
+    "request_raw": "curl -X POST http://target/doLogin -d \"uid=admin' OR '1'='1\"",
+    "response_raw": "HTTP/1.1 200 OK\nHello Admin User",
+}
+
+
+def test_parses_a_full_finding_proposal():
+    import json
+
+    proposal = parse_finding_proposal(json.dumps(_FULL_FINDING_PROPOSAL_FIELDS))
+    assert proposal is not None
+    assert proposal.title == "SQL injection in login form"
+    assert proposal.request_raw.startswith("curl")
+    assert proposal.payload is None
+    assert proposal.poc_url is None
+
+
+def test_finding_proposal_missing_request_raw_is_rejected():
+    """request_raw/response_raw are required (not optional) — the same
+    "never guess a Finding into existence" discipline as every other
+    required field here: a proposal with no re-checkable raw evidence
+    attached must fail to parse entirely, not produce a Finding with an
+    empty Evidence row."""
+    import json
+
+    fields = dict(_FULL_FINDING_PROPOSAL_FIELDS)
+    del fields["request_raw"]
+    assert parse_finding_proposal(json.dumps(fields)) is None
+
+
+def test_finding_proposal_missing_response_raw_is_rejected():
+    import json
+
+    fields = dict(_FULL_FINDING_PROPOSAL_FIELDS)
+    del fields["response_raw"]
+    assert parse_finding_proposal(json.dumps(fields)) is None
+
+
+def test_finding_proposal_accepts_optional_payload_and_poc_fields():
+    import json
+
+    fields = dict(_FULL_FINDING_PROPOSAL_FIELDS)
+    fields["payload"] = "admin' OR '1'='1"
+    fields["poc_url"] = "http://target/search.jsp"
+    fields["poc_param"] = "query"
+    proposal = parse_finding_proposal(json.dumps(fields))
+    assert proposal is not None
+    assert proposal.payload == "admin' OR '1'='1"
+    assert proposal.poc_url == "http://target/search.jsp"
+    assert proposal.poc_param == "query"
