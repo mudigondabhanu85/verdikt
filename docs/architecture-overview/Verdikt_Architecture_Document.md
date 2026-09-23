@@ -691,13 +691,25 @@ in one independent run and nothing in another — inherent to an
 LLM-driven investigation, which is not exhaustive the way the
 deterministic graph is.
 
-**The identified fix, not yet built**: pre-authenticate the sandbox using
-the existing, already-proven `SessionManager`/Playwright login mechanism
-(§5, the same one the deterministic checks use via `CredentialSet`)
-*before* the model's own turn budget starts, handing it a ready-made
-cookie jar instead of asking it to re-derive a fragile login sequence
-from scratch every session. This is the single highest-leverage remaining
-gap in this mode's reliability — see §23.
+**The fix — implemented and validated (2026-09-23)**: the sandbox is now
+pre-authenticated using the existing, already-proven `SessionManager`
+form-login mechanism (§5, the same one the deterministic checks use via
+`CredentialSet`) *before* the model's own turn budget starts, handing it
+a ready-made cookie jar instead of asking it to re-derive a fragile login
+sequence from scratch every session (`AutonomousPentestSessionCreate.
+credential_id`, auto-selected when a Version has exactly one
+`CredentialSet`). A follow-up 18-session re-sweep — the 9 DVWA categories
+most likely to carry Critical/High findings, each run twice independently
+— found the target vulnerability in all 18 sessions, every one recording
+`preauthenticated: true`, versus 8/24 (33%) before the fix. The one
+session that initially came back empty (a second CSRF run) turned out not
+to be a reliability gap at all: the first run's own successful exploit
+had genuinely changed DVWA's live admin password as an intended side
+effect of proving the CSRF finding, so the second run's pre-auth was
+correctly trying a password that was no longer current — re-running with
+the credential updated found the same Critical finding again in 6 turns.
+See the standalone AI Pentest Mode document's §5.4 for the full
+per-category table and validated prompt text.
 
 #### 5.6.7 Consent, scope, and audit
 
@@ -1687,12 +1699,6 @@ Natural next steps, informed directly by the delta in §18:
 - Indirect prompt injection via RAG-corpus poisoning for the Chatbot
   Pentest capability — deferred pending a safe, generic way to plant
   content into an arbitrary target's retrieval corpus.
-- **Sandbox pre-authentication for the AI-driven pentest mode (§5.6.6)** —
-  the single highest-leverage reliability improvement identified so far:
-  pre-authenticate a session using the existing `CredentialSet`/
-  `SessionManager` mechanism before the model's own turn budget starts,
-  removing the dominant cause of a category coming back empty (losing the
-  login sequence itself, not failing to find the vulnerability).
 - A one-click "comprehensive scan" mode that automatically fans out into
   one focused autonomous-pentest session per vulnerability category and
   aggregates the results — productizing the manual 24-session sweep

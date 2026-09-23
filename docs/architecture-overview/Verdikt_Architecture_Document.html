@@ -68,15 +68,6 @@ li { margin: 0.3rem 0; }
 <h1 id="verdikt">Verdikt</h1>
 <h2 id="ai-multi-agent-web-application-api-security-testing-platform">AI Multi-Agent Web Application &amp; API Security Testing Platform</h2>
 <p><strong>Architecture &amp; Product Overview — Full Technical Reference</strong></p>
-<p class="doc-tagline"><em>Every fact in this document, including the reference appendices, was verified
-directly against the codebase at the time of writing (not reconstructed from
-memory or prior documentation). Section 18 documents where the current build
-diverges from the original design specification — honestly, both where the
-build fell short and where it went further.</em></p>
-<hr />
-<h1 id="verdikt">Verdikt</h1>
-<h2 id="ai-multi-agent-web-application-api-security-testing-platform">AI Multi-Agent Web Application &amp; API Security Testing Platform</h2>
-<p><strong>Architecture &amp; Product Overview — Full Technical Reference</strong></p>
 <p><em>Every fact in this document, including the reference appendices, was verified
 directly against the codebase at the time of writing (not reconstructed from
 memory or prior documentation). Section 18 documents where the current build
@@ -803,13 +794,25 @@ succeeded, the same category/level combination found a real vulnerability
 in one independent run and nothing in another — inherent to an
 LLM-driven investigation, which is not exhaustive the way the
 deterministic graph is.</p>
-<p><strong>The identified fix, not yet built</strong>: pre-authenticate the sandbox using
-the existing, already-proven <code>SessionManager</code>/Playwright login mechanism
-(§5, the same one the deterministic checks use via <code>CredentialSet</code>)
-<em>before</em> the model's own turn budget starts, handing it a ready-made
-cookie jar instead of asking it to re-derive a fragile login sequence
-from scratch every session. This is the single highest-leverage remaining
-gap in this mode's reliability — see §23.</p>
+<p><strong>The fix — implemented and validated (2026-09-23)</strong>: the sandbox is now
+pre-authenticated using the existing, already-proven <code>SessionManager</code>
+form-login mechanism (§5, the same one the deterministic checks use via
+<code>CredentialSet</code>) <em>before</em> the model's own turn budget starts, handing it
+a ready-made cookie jar instead of asking it to re-derive a fragile login
+sequence from scratch every session (<code>AutonomousPentestSessionCreate.
+credential_id</code>, auto-selected when a Version has exactly one
+<code>CredentialSet</code>). A follow-up 18-session re-sweep — the 9 DVWA categories
+most likely to carry Critical/High findings, each run twice independently
+— found the target vulnerability in all 18 sessions, every one recording
+<code>preauthenticated: true</code>, versus 8/24 (33%) before the fix. The one
+session that initially came back empty (a second CSRF run) turned out not
+to be a reliability gap at all: the first run's own successful exploit
+had genuinely changed DVWA's live admin password as an intended side
+effect of proving the CSRF finding, so the second run's pre-auth was
+correctly trying a password that was no longer current — re-running with
+the credential updated found the same Critical finding again in 6 turns.
+See the standalone AI Pentest Mode document's §5.4 for the full
+per-category table and validated prompt text.</p>
 <h4 id="567-consent-scope-and-audit">5.6.7 Consent, scope, and audit</h4>
 <p><code>POST /versions/{id}/autonomous-pentest-sessions</code> requires a
 <code>confirmation_text</code> field matching a server-provided phrase that names
@@ -2100,7 +2103,7 @@ against a real target (§5.6.7), and it starts more restricted than
 (<code>RolePermission</code> insert) if that turns out to be too narrow in practice.</p>
 <hr />
 <h2 id="22-appendix-frontend-route-page-map">22. Appendix — Frontend Route &amp; Page Map</h2>
-<pre><code>/login, /register, /accept-invite, /oidc-callback   (public)
+<pre class="codehilite"><code>/login, /register, /accept-invite, /oidc-callback   (public)
 Protected (behind Layout):
   /                          → ProjectsPage
   /dashboard                 → DashboardPage
@@ -2164,12 +2167,6 @@ Protected (behind Layout):
 <li>Indirect prompt injection via RAG-corpus poisoning for the Chatbot
   Pentest capability — deferred pending a safe, generic way to plant
   content into an arbitrary target's retrieval corpus.</li>
-<li><strong>Sandbox pre-authentication for the AI-driven pentest mode (§5.6.6)</strong> —
-  the single highest-leverage reliability improvement identified so far:
-  pre-authenticate a session using the existing <code>CredentialSet</code>/
-  <code>SessionManager</code> mechanism before the model's own turn budget starts,
-  removing the dominant cause of a category coming back empty (losing the
-  login sequence itself, not failing to find the vulnerability).</li>
 <li>A one-click "comprehensive scan" mode that automatically fans out into
   one focused autonomous-pentest session per vulnerability category and
   aggregates the results — productizing the manual 24-session sweep
@@ -2272,10 +2269,6 @@ for that credential, the header-shaped equivalent of the pre-existing
 an imported Postman/API collection's custom auth header can be saved and
 reused for API scans alongside, not instead of, a normal login flow.</p>
 <hr />
-<p><em>This document reflects the system exactly as implemented, verified
-directly against the codebase. Architecture diagrams are provided
-separately as Mermaid (<code>.mmd</code>) source files, directly importable into
-Miro's Mermaid-import feature.</em></p><hr />
 <p><em>This document reflects the system exactly as implemented, verified
 directly against the codebase. Architecture diagrams are provided
 separately as Mermaid (<code>.mmd</code>) source files, directly importable into
