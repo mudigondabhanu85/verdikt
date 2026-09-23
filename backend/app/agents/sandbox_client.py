@@ -79,15 +79,24 @@ def derive_allow_list(scope_entries: list[ScopeEntry]) -> list[AllowListEntry]:
 
 
 class SandboxClient:
-    def __init__(self, *, base_url: str | None = None, timeout: float = 30.0) -> None:
-        self._base_url = base_url if base_url is not None else get_settings().sandbox_runner_base_url
+    def __init__(
+        self, *, base_url: str | None = None, api_key: str | None = None, timeout: float = 30.0
+    ) -> None:
+        settings = get_settings()
+        self._base_url = base_url if base_url is not None else settings.sandbox_runner_base_url
         if not self._base_url:
             raise SandboxRunnerUnavailableError(
                 "sandbox_runner_base_url is not configured in this deployment — the autonomous "
                 "pentest mode is unavailable. Set Settings.sandbox_runner_base_url (e.g. "
                 "http://sandbox-runner:8090) to enable it."
             )
-        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout)
+        # See Settings.sandbox_runner_api_key's own docstring — omitted
+        # entirely (not sent as an empty string) when unset, matching
+        # sandbox-runner's own auth.py, which only enforces the check
+        # when it has a key of its own to check against.
+        api_key = api_key if api_key is not None else settings.sandbox_runner_api_key
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout, headers=headers)
 
     async def create_session(
         self, *, scan_run_id: uuid.UUID, allow_list: list[AllowListEntry], image: str, ttl_seconds: int = 3600
@@ -118,6 +127,22 @@ class SandboxClient:
             timeout=timeout_seconds + 15,
         )
         response.raise_for_status()
+        return response.json()
+
+    async def list_sessions(self) -> list[dict]:
+        """Every session sandbox-runner currently has tracked in memory
+        — used only by app.agents.autonomous_pentest.reaper to find
+        sessions whose parent ScanRun has already reached a terminal
+        state (the backend crashed/raced past its own teardown) or that
+        no longer correspond to anything in this backend's database at
+        all. Raises SandboxRunnerUnavailableError like every other call
+        here — the reaper's own caller decides whether that's fatal to
+        one sweep or not."""
+        try:
+            response = await self._client.get("/sessions")
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise SandboxRunnerUnavailableError(f"could not reach sandbox-runner to list sessions: {exc}") from exc
         return response.json()
 
     async def destroy_session(self, session_id: str) -> None:

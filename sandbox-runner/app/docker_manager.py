@@ -8,8 +8,16 @@ Pentest Mode plan for the full reasoning).
 Session state is in-memory only (a process-local dict), not persisted —
 same "process restart naturally drops in-flight state" tradeoff the main
 backend's app.agents.task_registry already accepts for scan cancellation.
-A reaper for sessions orphaned by a sandbox-runner crash/restart is
-explicitly Phase 3 work, not this module's job.
+A sandbox-runner restart still loses track of any container it created
+before restarting (this module has no way to rediscover which running
+containers are "its own" sessions vs. anything else on the host) — the
+main backend's own reaper (app.agents.autonomous_pentest.reaper) is the
+outer safety net for that case, reconciling against ScanRun state instead.
+What THIS module's own reap_expired() below covers is the narrower,
+much more common case: a session nobody ever explicitly destroyed (a
+crashed backend mid-session, a network blip during teardown) but that
+sandbox-runner itself is still alive and tracking — enforced by TTL,
+independent of whether the backend ever calls back at all.
 """
 
 import time
@@ -26,8 +34,10 @@ from app.network_policy import apply_ruleset
 @dataclass
 class Session:
     session_id: str
+    scan_run_id: str
     container: Container
     network: Network
+    ttl_seconds: int
     created_at: float = field(default_factory=time.time)
 
 
@@ -37,7 +47,13 @@ class SessionManager:
         self._sessions: dict[str, Session] = {}
 
     def create_session(
-        self, *, scan_run_id: str, allow_list: list[dict], image: str, deny_ips: list[str]
+        self,
+        *,
+        scan_run_id: str,
+        allow_list: list[dict],
+        image: str,
+        deny_ips: list[str],
+        ttl_seconds: int = 3600,
     ) -> str:
         session_id = str(uuid.uuid4())
         network_name = f"pentest-session-{session_id}"
@@ -80,7 +96,13 @@ class SessionManager:
             network.remove()
             raise
 
-        self._sessions[session_id] = Session(session_id=session_id, container=container, network=network)
+        self._sessions[session_id] = Session(
+            session_id=session_id,
+            scan_run_id=scan_run_id,
+            container=container,
+            network=network,
+            ttl_seconds=ttl_seconds,
+        )
         return session_id
 
     def exec_command(self, session_id: str, command: str, timeout_seconds: int) -> dict:
@@ -122,3 +144,31 @@ class SessionManager:
         if session is None:
             return {"session_id": session_id, "status": "not_found", "created_at": None}
         return {"session_id": session_id, "status": "running", "created_at": str(session.created_at)}
+
+    def list_sessions(self) -> list[dict]:
+        """Every session this process currently knows about — the basis
+        for both the main backend's own reaper (which cross-references
+        scan_run_id against ScanRun state) and this module's own
+        TTL-based self-reaping below."""
+        return [
+            {
+                "session_id": s.session_id,
+                "scan_run_id": s.scan_run_id,
+                "created_at": s.created_at,
+                "ttl_seconds": s.ttl_seconds,
+            }
+            for s in self._sessions.values()
+        ]
+
+    def reap_expired(self) -> list[str]:
+        """Destroys every session whose ttl_seconds has elapsed since
+        creation, regardless of whether its parent ScanRun is still
+        "running" — a session left alive well past what its own creator
+        asked for is a resource leak either way, independent of whatever
+        state the main backend's database says. Returns the destroyed
+        session_ids so the caller can log what happened."""
+        now = time.time()
+        expired = [s.session_id for s in self._sessions.values() if now - s.created_at > s.ttl_seconds]
+        for session_id in expired:
+            self.destroy_session(session_id)
+        return expired

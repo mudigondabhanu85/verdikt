@@ -29,3 +29,15 @@ def cancel(scan_run_id: uuid.UUID) -> bool:
         return False
     task.cancel()
     return True
+
+
+def is_registered(scan_run_id: uuid.UUID) -> bool:
+    """True if this process currently has a live (not yet done) task for
+    this scan_run_id. Used by app.agents.autonomous_pentest.reaper to
+    tell "still genuinely running in this process" apart from "the DB
+    row says running, but the process that would have finished it is
+    gone" — the latter being exactly what a backend crash/restart mid-
+    session leaves behind, since this whole registry is process-local by
+    design (see this module's own docstring)."""
+    task = _running_tasks.get(scan_run_id)
+    return task is not None and not task.done()

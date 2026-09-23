@@ -55,3 +55,15 @@ class SessionStatus(BaseModel):
     session_id: str
     status: str  # "running" | "not_found"
     created_at: str | None = None
+
+
+class SessionInfo(BaseModel):
+    """One row of GET /sessions — the listing the main backend's reaper
+    (app.agents.autonomous_pentest.reaper) polls to reconcile against
+    ScanRun state, and this service's own TTL-based self-reap loop uses
+    internally via SessionManager.list_sessions."""
+
+    session_id: str
+    scan_run_id: str
+    created_at: float
+    ttl_seconds: int

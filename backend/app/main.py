@@ -42,6 +42,7 @@ from app.api.routes import (
     vgs_configs,
     vgs_vulnerabilities,
 )
+from app.agents.autonomous_pentest.reaper import run_reaper_sweep
 from app.config import get_settings
 
 # Without this, the root logger defaults to WARNING with no handler
@@ -74,7 +75,31 @@ async def lifespan(_app: FastAPI):
     asyncio.get_running_loop().set_default_executor(
         concurrent.futures.ThreadPoolExecutor(max_workers=256)
     )
-    yield
+
+    reaper_task = asyncio.create_task(_autonomous_pentest_reaper_loop())
+    try:
+        yield
+    finally:
+        reaper_task.cancel()
+
+
+async def _autonomous_pentest_reaper_loop() -> None:
+    # See app.agents.autonomous_pentest.reaper's own module docstring
+    # for what this reconciles and why a process-local task registry
+    # (app.agents.task_registry) can never self-heal from a backend
+    # crash/restart without something like this running on a timer.
+    # Runs unconditionally, not just when sandbox_runner_base_url is
+    # configured — the DB-only half of each sweep (reap_stale_scan_runs)
+    # is still worth doing in a deployment that used to run this mode
+    # and no longer does, and the sandbox-runner half already no-ops
+    # cleanly when it isn't configured.
+    interval = get_settings().autonomous_pentest_reaper_interval_seconds
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await run_reaper_sweep()
+        except Exception:  # noqa: BLE001 — one bad sweep must never kill the loop or the app
+            logger.exception("autonomous pentest reaper sweep failed")
 
 
 app = FastAPI(title="Verdikt API", version="0.1.0", lifespan=lifespan)

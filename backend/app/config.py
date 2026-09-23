@@ -88,6 +88,18 @@ class Settings(BaseSettings):
     # doing nothing) — most deployments running only the deterministic
     # agents never need this service at all.
     sandbox_runner_base_url: str | None = None
+
+    # Shared secret sent as `Authorization: Bearer <key>` on every call
+    # to sandbox-runner — that service holds the Docker socket (see its
+    # own main.py docstring), so an unauthenticated internal API surface
+    # in front of it is a real privilege-escalation path for anything
+    # else that can reach the compose network, not just a theoretical
+    # concern. None means no header is sent, which only works against a
+    # sandbox-runner that itself has no SANDBOX_RUNNER_API_KEY configured
+    # (local dev without Docker, most likely) — see sandbox-runner/app/
+    # auth.py for the matching check on that side.
+    sandbox_runner_api_key: str | None = None
+
     # Hard bounds on the Phase 2 autonomous pentest loop
     # (app.agents.autonomous_pentest.runner) — same "safe by default,
     # configurable per deployment" discipline as crawl_max_pages/
@@ -97,8 +109,33 @@ class Settings(BaseSettings):
     # can take even if every individual call is cheap (a model stuck in
     # an unproductive loop, re-running the same probe repeatedly, would
     # otherwise never hit the cost cap while still never finishing).
-    autonomous_pentest_max_turns: int = 20
+    # Raised from an original 20 to 30 after live verification showed a
+    # real session burn nearly its entire budget on one wrong assumption
+    # (probing a `username` field when the target actually expected
+    # `email`) and only self-correct on its very last turn — 20 was
+    # tight enough that one bad early guess could consume the whole
+    # engagement.
+    autonomous_pentest_max_turns: int = 30
     autonomous_pentest_max_duration_seconds: int = 600
+
+    # How often (seconds) the backend-side reaper
+    # (app.agents.autonomous_pentest.reaper) sweeps for autonomous-pentest
+    # ScanRuns stuck "running" with no live in-process task — the
+    # signature of a backend crash/restart mid-session, which
+    # app.agents.task_registry's own in-memory-only design can never
+    # self-heal from (see that module's docstring). Also reaps this
+    # backend's memory of sandbox-runner sessions whose ScanRun already
+    # reached a terminal state, best-effort — sandbox-runner enforces its
+    # own per-session TTL independently (see sandbox-runner/app/
+    # docker_manager.py), so this is a second, cooperating safety net,
+    # not the only one.
+    autonomous_pentest_reaper_interval_seconds: int = 300
+    # A stuck "running" ScanRun is only reaped once it's this much older
+    # than autonomous_pentest_max_duration_seconds — generous slack so a
+    # session that's merely slow (e.g. sandbox-runner briefly unreachable
+    # mid-teardown) is never mistaken for an orphan while it's still
+    # legitimately finishing up.
+    autonomous_pentest_reaper_grace_seconds: int = 300
 
     # Crawl bounds (app.agents.recon.ReconAgent) — deliberately
     # configurable rather than hardcoded, since 300 pages at depth 6 is a

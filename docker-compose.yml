@@ -47,6 +47,16 @@ services:
       # unset in any deployment that only wants the deterministic
       # agents (see app.config.Settings.sandbox_runner_base_url).
       SANDBOX_RUNNER_BASE_URL: http://sandbox-runner:8090
+      # Shared secret sent as `Authorization: Bearer <this>` on every
+      # call to sandbox-runner — that service holds the Docker socket,
+      # so leaving its internal API unauthenticated would mean "reachable
+      # on the compose network" is the entire access control (see
+      # sandbox-runner/app/auth.py and app.config.Settings.
+      # sandbox_runner_api_key). Must match the sandbox-runner service's
+      # own SANDBOX_RUNNER_API_KEY below exactly. Dev-only value, same
+      # convention as JWT_SECRET/VAULT_MASTER_KEY above — change for any
+      # non-local deployment.
+      SANDBOX_RUNNER_API_KEY: dev-only-change-me-sandbox-runner-shared-secret
     ports:
       # Host-side port only — container still listens on 8000 internally
       # (see the healthcheck/command below and frontend's
@@ -110,6 +120,11 @@ services:
       # Overridden per-request per session, but the SDK needs some
       # default socket path at client construction time.
       DOCKER_HOST: unix:///var/run/docker.sock
+      # Must match `backend`'s own SANDBOX_RUNNER_API_KEY above exactly
+      # — see sandbox-runner/app/auth.py. Unset here would mean every
+      # endpoint in this service (which holds the Docker socket) accepts
+      # requests from anything that can reach it on the compose network.
+      SANDBOX_RUNNER_API_KEY: dev-only-change-me-sandbox-runner-shared-secret
     volumes:
       # The one genuinely sensitive line in this whole file — grants
       # this container the ability to create/exec/destroy *any*

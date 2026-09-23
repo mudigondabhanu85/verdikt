@@ -20,18 +20,57 @@ the internal Docker Compose network (see docker-compose.yml), same
 posture as the `db` service.
 """
 
+import asyncio
 import logging
+import os
 import socket
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
+from app.auth import require_api_key
 from app.docker_manager import SessionManager
-from app.models import CreateSessionRequest, CreateSessionResponse, ExecRequest, ExecResponse, SessionStatus
+from app.models import (
+    CreateSessionRequest,
+    CreateSessionResponse,
+    ExecRequest,
+    ExecResponse,
+    SessionInfo,
+    SessionStatus,
+)
 
 logger = logging.getLogger("sandbox_runner")
 
-app = FastAPI(title="Verdikt sandbox-runner")
 _sessions = SessionManager()
+# How often the self-reap loop below sweeps for TTL-expired sessions —
+# independent of, and a fair bit tighter than, the main backend's own
+# reaper interval (app.config.Settings.autonomous_pentest_reaper_interval_seconds),
+# since this loop's only job is enforcing what each session's own creator
+# already asked for (ttl_seconds), not reconciling against ScanRun state.
+_REAP_INTERVAL_SECONDS = int(os.environ.get("SANDBOX_RUNNER_REAP_INTERVAL_SECONDS", "60"))
+
+
+async def _reap_loop() -> None:
+    while True:
+        await asyncio.sleep(_REAP_INTERVAL_SECONDS)
+        try:
+            reaped = _sessions.reap_expired()
+            if reaped:
+                logger.warning("reaped %d TTL-expired session(s): %s", len(reaped), reaped)
+        except Exception:  # noqa: BLE001 — a reap-loop crash must never take the whole service down
+            logger.exception("session reap sweep failed")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    task = asyncio.create_task(_reap_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
+app = FastAPI(title="Verdikt sandbox-runner", lifespan=lifespan)
 
 # Every session's iptables ruleset explicitly DROPs traffic to these,
 # regardless of what's on the caller-supplied allow-list — a sandboxed
@@ -61,7 +100,9 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/sessions", response_model=CreateSessionResponse, status_code=201)
+@app.post(
+    "/sessions", response_model=CreateSessionResponse, status_code=201, dependencies=[Depends(require_api_key)]
+)
 async def create_session(payload: CreateSessionRequest) -> CreateSessionResponse:
     deny_ips = _resolve_peer_deny_ips()
     try:
@@ -70,6 +111,7 @@ async def create_session(payload: CreateSessionRequest) -> CreateSessionResponse
             allow_list=[e.model_dump() for e in payload.allow_list],
             image=payload.image,
             deny_ips=deny_ips,
+            ttl_seconds=payload.ttl_seconds,
         )
     except Exception as exc:  # noqa: BLE001 — surfaced to the caller, not swallowed
         logger.exception("session creation failed for scan_run_id=%s", payload.scan_run_id)
@@ -77,7 +119,7 @@ async def create_session(payload: CreateSessionRequest) -> CreateSessionResponse
     return CreateSessionResponse(session_id=session_id)
 
 
-@app.post("/sessions/{session_id}/exec", response_model=ExecResponse)
+@app.post("/sessions/{session_id}/exec", response_model=ExecResponse, dependencies=[Depends(require_api_key)])
 async def exec_in_session(session_id: str, payload: ExecRequest) -> ExecResponse:
     try:
         result = _sessions.exec_command(session_id, payload.command, payload.timeout_seconds)
@@ -86,7 +128,7 @@ async def exec_in_session(session_id: str, payload: ExecRequest) -> ExecResponse
     return ExecResponse(**result)
 
 
-@app.delete("/sessions/{session_id}", status_code=204)
+@app.delete("/sessions/{session_id}", status_code=204, dependencies=[Depends(require_api_key)])
 async def destroy_session(session_id: str) -> None:
     # Idempotent by design, not just tolerant of it: the main backend's
     # own cancellation/cleanup path may call this more than once for the
@@ -96,6 +138,14 @@ async def destroy_session(session_id: str) -> None:
     _sessions.destroy_session(session_id)
 
 
-@app.get("/sessions/{session_id}", response_model=SessionStatus)
+@app.get("/sessions/{session_id}", response_model=SessionStatus, dependencies=[Depends(require_api_key)])
 async def get_session_status(session_id: str) -> SessionStatus:
     return SessionStatus(**_sessions.session_status(session_id))
+
+
+@app.get("/sessions", response_model=list[SessionInfo], dependencies=[Depends(require_api_key)])
+async def list_sessions() -> list[SessionInfo]:
+    # Polled by the main backend's own reaper
+    # (app.agents.autonomous_pentest.reaper) to reconcile against
+    # ScanRun state — see that module for the other half of this.
+    return [SessionInfo(**s) for s in _sessions.list_sessions()]
