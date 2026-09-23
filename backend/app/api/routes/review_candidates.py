@@ -76,7 +76,7 @@ async def list_review_candidates(
     user: User = Depends(require_permission("review_candidate", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ReviewCandidate]:
-    await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    await get_scan_run_or_404(session, scan_run_id, user)
     result = await session.execute(
         select(ReviewCandidate).where(ReviewCandidate.scan_run_id == scan_run_id)
     )
@@ -92,7 +92,7 @@ async def promote_review_candidate(
     """§2 step 5: an analyst-reviewed candidate becomes a real Finding,
     flagged analyst_confirmed (not ai_confirmed) since it reached this
     state via human judgment, not the automated pipeline alone."""
-    candidate = await get_review_candidate_or_404(session, candidate_id, user.org_id)
+    candidate = await get_review_candidate_or_404(session, candidate_id, user)
     if candidate.status != "pending":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Candidate already {candidate.status}")
 
@@ -153,7 +153,7 @@ async def dismiss_review_candidate(
     user: User = Depends(require_permission("review_candidate", "update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> ReviewCandidate:
-    candidate = await get_review_candidate_or_404(session, candidate_id, user.org_id)
+    candidate = await get_review_candidate_or_404(session, candidate_id, user)
     if candidate.status != "pending":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Candidate already {candidate.status}")
 

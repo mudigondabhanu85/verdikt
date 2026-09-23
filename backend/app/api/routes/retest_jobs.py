@@ -42,7 +42,7 @@ async def retest_finding(
     user: User = Depends(require_permission("scan", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> RetestJob:
-    finding = await get_finding_or_404(session, finding_id, user.org_id)
+    finding = await get_finding_or_404(session, finding_id, user)
     scan_run = await session.get(ScanRun, finding.scan_run_id)
     scope_entries = list(
         (
@@ -111,7 +111,7 @@ async def list_retest_jobs(
     user: User = Depends(require_permission("scan", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[RetestJob]:
-    await get_finding_or_404(session, finding_id, user.org_id)
+    await get_finding_or_404(session, finding_id, user)
     result = await session.execute(
         select(RetestJob).where(RetestJob.finding_id == finding_id).order_by(RetestJob.created_at)
     )

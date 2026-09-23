@@ -28,7 +28,7 @@ async def create_version(
     user: User = Depends(require_permission("version", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> Version:
-    await get_project_or_404(session, project_id, user.org_id)
+    await get_project_or_404(session, project_id, user)
     version = Version(project_id=project_id, name=payload.name, created_by=user.id)
     session.add(version)
     await session.flush()
@@ -77,7 +77,7 @@ async def list_versions(
     user: User = Depends(require_permission("version", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[Version]:
-    await get_project_or_404(session, project_id, user.org_id)
+    await get_project_or_404(session, project_id, user)
     result = await session.execute(
         select(Version)
         .where(Version.project_id == project_id)
@@ -92,7 +92,7 @@ async def get_version(
     user: User = Depends(require_permission("version", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> Version:
-    return await get_version_or_404(session, version_id, user.org_id)
+    return await get_version_or_404(session, version_id, user)
 
 
 @router.post(
@@ -104,7 +104,7 @@ async def add_scope_entry(
     user: User = Depends(require_permission("version", "update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScopeEntry:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     entry = ScopeEntry(version_id=version_id, **payload.model_dump())
     session.add(entry)
     await write_audit_log(
@@ -126,7 +126,7 @@ async def list_scope_entries(
     user: User = Depends(require_permission("version", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ScopeEntry]:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     result = await session.execute(select(ScopeEntry).where(ScopeEntry.version_id == version_id))
     return list(result.scalars().all())
 
@@ -148,7 +148,7 @@ async def update_scope_entry(
     user: User = Depends(require_permission("version", "update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScopeEntry:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     entry = await _get_scope_entry_or_404(session, version_id, scope_entry_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(entry, field, value)
@@ -172,7 +172,7 @@ async def delete_scope_entry(
     user: User = Depends(require_permission("version", "delete")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     entry = await _get_scope_entry_or_404(session, version_id, scope_entry_id)
     await write_audit_log(
         session,

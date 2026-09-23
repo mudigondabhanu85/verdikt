@@ -40,7 +40,7 @@ async def upload_login_macro(
     LoginMacro row shape, same replay path (app.agents.macro.MacroPlayer),
     zero backend changes needed to treat the two interchangeably.
     """
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     credential = await _get_credential_or_404(session, version_id, credential_id)
 
     macro = LoginMacro(

@@ -31,7 +31,7 @@ async def start_burp_scan(
     per-call, never persisted — avoids inventing a new stored-secret
     concept for one integration.
     """
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
 
     scan_run = ScanRun(
         version_id=version_id,
@@ -97,8 +97,8 @@ async def import_burp_scan(
     Confirmed-Only Findings flow — a distinct, clearly-labeled import
     path, not a claim that our agents re-verified Burp's results.
     """
-    await get_version_or_404(session, version_id, user.org_id)
-    scan_run = await get_scan_run_or_404(session, payload.scan_run_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
+    scan_run = await get_scan_run_or_404(session, payload.scan_run_id, user)
     if scan_run.version_id != version_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Scan run not found for this version")
 

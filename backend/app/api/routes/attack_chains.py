@@ -20,7 +20,7 @@ async def list_attack_chains(
     user: User = Depends(require_permission("scan", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[AttackChain]:
-    await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    await get_scan_run_or_404(session, scan_run_id, user)
     result = await session.execute(
         select(AttackChain).where(AttackChain.scan_run_id == scan_run_id)
     )

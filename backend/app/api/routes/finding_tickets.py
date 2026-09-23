@@ -37,7 +37,7 @@ async def create_finding_ticket(
     user: User = Depends(require_permission("scan", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> FindingTicket:
-    finding = await get_finding_or_404(session, finding_id, user.org_id)
+    finding = await get_finding_or_404(session, finding_id, user)
 
     config = await session.get(TicketingConfig, payload.ticketing_config_id)
     if config is None or config.org_id != user.org_id:
@@ -81,6 +81,6 @@ async def list_finding_tickets(
     user: User = Depends(require_permission("scan", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[FindingTicket]:
-    await get_finding_or_404(session, finding_id, user.org_id)
+    await get_finding_or_404(session, finding_id, user)
     result = await session.execute(select(FindingTicket).where(FindingTicket.finding_id == finding_id))
     return list(result.scalars().all())

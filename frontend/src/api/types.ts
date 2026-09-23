@@ -13,13 +13,14 @@ export interface UserOut {
   is_active: boolean
   invited_at: string | null
   invite_accepted_at: string | null
+  project_ids: string[]
 }
 
 export interface UserInviteOut {
   id: string
   email: string
   role: Role
-  invite_token: string
+  invite_token: string | null
   invited_at: string
 }
 

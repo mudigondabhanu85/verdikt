@@ -21,7 +21,7 @@ async def create_business_rule(
     user: User = Depends(require_permission("business_rule", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> BusinessRule:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     rule = BusinessRule(
         version_id=version_id,
         rule_type=payload.rule_type,
@@ -49,7 +49,7 @@ async def list_business_rules(
     user: User = Depends(require_permission("business_rule", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[BusinessRule]:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     result = await session.execute(select(BusinessRule).where(BusinessRule.version_id == version_id))
     return list(result.scalars().all())
 
@@ -61,7 +61,7 @@ async def delete_business_rule(
     user: User = Depends(require_permission("business_rule", "delete")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     rule = await session.get(BusinessRule, rule_id)
     if rule is None or rule.version_id != version_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Business rule not found")

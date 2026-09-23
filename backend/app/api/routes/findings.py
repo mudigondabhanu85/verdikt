@@ -29,7 +29,7 @@ async def update_finding_status(
     won't silently flip one back to "open" just because the same
     signal reproduced again; reopening it here first is what does that.
     """
-    finding = await get_finding_or_404(session, finding_id, user.org_id)
+    finding = await get_finding_or_404(session, finding_id, user)
     finding.retest_status = payload.retest_status
     await write_audit_log(
         session,
@@ -57,7 +57,7 @@ async def delete_finding(
     irreversible and cascades to the Finding's Evidence row and any
     linked FindingTicket.
     """
-    finding = await get_finding_or_404(session, finding_id, user.org_id)
+    finding = await get_finding_or_404(session, finding_id, user)
     await write_audit_log(
         session,
         user=user,

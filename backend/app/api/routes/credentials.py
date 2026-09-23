@@ -86,7 +86,7 @@ async def add_credential_set(
     user: User = Depends(require_permission("credential", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> CredentialSet:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     credential = CredentialSet(
         version_id=version_id,
         label=payload.label,
@@ -124,7 +124,7 @@ async def list_credential_sets(
     user: User = Depends(require_permission("credential", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[CredentialSet]:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     result = await session.execute(
         select(CredentialSet).where(CredentialSet.version_id == version_id)
     )
@@ -139,7 +139,7 @@ async def update_credential_set(
     user: User = Depends(require_permission("credential", "update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> CredentialSet:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     credential = await _get_credential_or_404(session, version_id, credential_id)
 
     updates = payload.model_dump(exclude_unset=True)
@@ -177,7 +177,7 @@ async def delete_credential_set(
     user: User = Depends(require_permission("credential", "delete")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     credential = await _get_credential_or_404(session, version_id, credential_id)
     await write_audit_log(
         session,
@@ -249,7 +249,7 @@ async def test_login(
     instead. Explicit-login-endpoint, macro-replay, and api_token
     credentials are all fully exercised for real.
     """
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     credential = await _get_credential_or_404(session, version_id, credential_id)
 
     targets = list(
@@ -402,7 +402,7 @@ async def start_recording_macro(
     to happen inside the remote view.
     """
     await _reap_stale_recordings()
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     await _get_credential_or_404(session, version_id, credential_id)
 
     recorder = MacroRecorder()
@@ -431,7 +431,7 @@ async def finish_recording_macro(
     """
     if recording_id not in _ACTIVE_RECORDINGS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No active recording with that id")
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     credential = await _get_credential_or_404(session, version_id, credential_id)
     handle, _started_at = _ACTIVE_RECORDINGS.pop(recording_id, (None, None))
     if handle is None:
@@ -474,7 +474,7 @@ async def cancel_recording_macro(
     user: User = Depends(require_permission("credential", "update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     await _get_credential_or_404(session, version_id, credential_id)
     handle, _started_at = _ACTIVE_RECORDINGS.pop(recording_id, (None, None))
     if handle is not None:
@@ -492,7 +492,7 @@ async def list_login_macros(
     recorded macro (and how many steps) without re-deriving that from
     finish_recording_macro's one-shot response, which nothing previously
     persisted client-side."""
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     await _get_credential_or_404(session, version_id, credential_id)
     result = await session.execute(
         select(LoginMacro).where(LoginMacro.credential_set_id == credential_id)
@@ -537,7 +537,7 @@ async def replay_login_macro(
     after the target's login page changed and a recorded selector now
     hits the wrong element.
     """
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     credential = await _get_credential_or_404(session, version_id, credential_id)
     macro = await _get_macro_or_404(session, version_id, credential_id, macro_id)
 
@@ -602,7 +602,7 @@ async def delete_login_macro(
     macro — same rationale as rotate-secret existing instead of forcing
     a delete-and-recreate for a new token.
     """
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     await _get_credential_or_404(session, version_id, credential_id)
     macro = await _get_macro_or_404(session, version_id, credential_id, macro_id)
     await write_audit_log(

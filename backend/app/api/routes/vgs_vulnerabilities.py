@@ -214,7 +214,7 @@ async def get_report_draft(
     user: User = Depends(require_permission("vgs_vulnerability", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> VgsReportDraft:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     return await _get_or_create_draft(session, version_id)
 
 
@@ -225,7 +225,7 @@ async def update_report_draft(
     user: User = Depends(require_permission("vgs_vulnerability", "update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> VgsReportDraft:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     draft = await _get_or_create_draft(session, version_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(draft, field, value)
@@ -252,7 +252,7 @@ async def add_report_vulnerability(
     user: User = Depends(require_permission("vgs_vulnerability", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> VgsReportVulnerability:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     draft = await _get_or_create_draft(session, version_id)
 
     if payload.library_entry_id is not None:
@@ -418,7 +418,7 @@ async def list_report_vulnerabilities(
     user: User = Depends(require_permission("vgs_vulnerability", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[VgsReportVulnerability]:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     draft = await _get_or_create_draft(session, version_id)
     await _auto_seed_findings_into_draft(session, version_id, draft)
     result = await session.execute(
@@ -446,7 +446,7 @@ async def list_available_findings(
     or dismissed as a false positive; a group already added to this draft
     is flagged via already_added rather than hidden, so re-adding is a
     deliberate choice."""
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     draft = await _get_or_create_draft(session, version_id)
 
     groups = await _group_open_findings_for_version(session, version_id)
@@ -489,7 +489,7 @@ async def add_report_vulnerability_from_finding(
     user: User = Depends(require_permission("vgs_vulnerability", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> VgsReportVulnerability:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     draft = await _get_or_create_draft(session, version_id)
 
     finding = await session.get(Finding, finding_id)
@@ -558,7 +558,7 @@ async def update_report_vulnerability(
     user: User = Depends(require_permission("vgs_vulnerability", "update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> VgsReportVulnerability:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     vuln = await _get_report_vulnerability_or_404(session, version_id, vuln_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(vuln, field, value)
@@ -582,7 +582,7 @@ async def delete_report_vulnerability(
     user: User = Depends(require_permission("vgs_vulnerability", "delete")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     vuln = await _get_report_vulnerability_or_404(session, version_id, vuln_id)
     await write_audit_log(
         session,
@@ -610,7 +610,7 @@ async def add_evidence_step(
     user: User = Depends(require_permission("vgs_vulnerability", "update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> VgsEvidenceStep:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     await _get_report_vulnerability_or_404(session, version_id, vuln_id)
 
     screenshot_object_keys: list[str] = []
@@ -653,7 +653,7 @@ async def list_evidence_steps(
     user: User = Depends(require_permission("vgs_vulnerability", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[VgsEvidenceStep]:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     await _get_report_vulnerability_or_404(session, version_id, vuln_id)
     result = await session.execute(
         select(VgsEvidenceStep)
@@ -684,7 +684,7 @@ async def update_evidence_step(
     user: User = Depends(require_permission("vgs_vulnerability", "update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> VgsEvidenceStep:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     step = await _get_evidence_step_or_404(session, version_id, vuln_id, step_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(step, field, value)
@@ -710,7 +710,7 @@ async def add_evidence_step_screenshot(
     EvidenceEditor's per-step 'Add Image' button lets an analyst attach a
     screenshot to any step at any time, not just when first creating it;
     the original add_evidence_step endpoint above only covered creation."""
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     step = await _get_evidence_step_or_404(session, version_id, vuln_id, step_id)
 
     object_key = f"vgs-evidence/{vuln_id}/{uuid.uuid4().hex}-{screenshot.filename}"
@@ -738,7 +738,7 @@ async def delete_evidence_step(
     user: User = Depends(require_permission("vgs_vulnerability", "delete")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     step = await _get_evidence_step_or_404(session, version_id, vuln_id, step_id)
     await session.delete(step)
     await session.commit()
@@ -753,7 +753,7 @@ async def get_vgs_report_docx(
     user: User = Depends(require_permission("vgs_vulnerability", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     draft = await _get_or_create_draft(session, version_id)
 
     result = await session.execute(

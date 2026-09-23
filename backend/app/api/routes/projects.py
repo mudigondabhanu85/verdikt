@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_project_or_404, write_audit_log
+from app.api.deps import accessible_project_ids, get_project_or_404, write_audit_log
 from app.auth.rbac import require_permission
 from app.db.session import get_db_session
 from app.models.attack_chain import AttackChain, AttackChainEvidence
@@ -49,6 +49,9 @@ async def list_projects(
     query = select(Project).where(Project.org_id == user.org_id)
     if not include_archived:
         query = query.where(Project.archived_at.is_(None))
+    project_ids = await accessible_project_ids(session, user)
+    if project_ids is not None:
+        query = query.where(Project.id.in_(project_ids))
     result = await session.execute(query)
     return list(result.scalars().all())
 
@@ -59,7 +62,7 @@ async def get_project(
     user: User = Depends(require_permission("project", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> Project:
-    return await get_project_or_404(session, project_id, user.org_id)
+    return await get_project_or_404(session, project_id, user)
 
 
 @router.post("/{project_id}/archive", status_code=204)
@@ -68,7 +71,7 @@ async def archive_project(
     user: User = Depends(require_permission("project", "update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    project = await get_project_or_404(session, project_id, user.org_id)
+    project = await get_project_or_404(session, project_id, user)
     project.archived_at = datetime.now(timezone.utc)
     await write_audit_log(
         session,
@@ -87,7 +90,7 @@ async def unarchive_project(
     user: User = Depends(require_permission("project", "update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    project = await get_project_or_404(session, project_id, user.org_id)
+    project = await get_project_or_404(session, project_id, user)
     project.archived_at = None
     await write_audit_log(
         session,
@@ -152,7 +155,7 @@ async def delete_project(
     UI is expected to gate this behind a typed-confirmation dialog; the
     API's own guardrail is the permission check itself.
     """
-    project = await get_project_or_404(session, project_id, user.org_id)
+    project = await get_project_or_404(session, project_id, user)
     await write_audit_log(
         session,
         user=user,

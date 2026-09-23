@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import accessible_project_ids
 from app.auth.rbac import require_permission
 from app.db.session import get_db_session
 from app.models.finding import Finding
@@ -31,12 +32,15 @@ async def get_dashboard(
     user: User = Depends(require_permission("scan", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> DashboardOut:
+    project_ids = await accessible_project_ids(session, user)
+    project_filter = Project.org_id == user.org_id if project_ids is None else Project.id.in_(project_ids)
+
     total_projects = (
-        await session.execute(select(func.count(Project.id)).where(Project.org_id == user.org_id))
+        await session.execute(select(func.count(Project.id)).where(project_filter))
     ).scalar_one()
     total_versions = (
         await session.execute(
-            select(func.count(Version.id)).join(Project, Version.project_id == Project.id).where(Project.org_id == user.org_id)
+            select(func.count(Version.id)).join(Project, Version.project_id == Project.id).where(project_filter)
         )
     ).scalar_one()
     total_scan_runs = (
@@ -44,7 +48,7 @@ async def get_dashboard(
             select(func.count(ScanRun.id))
             .join(Version, ScanRun.version_id == Version.id)
             .join(Project, Version.project_id == Project.id)
-            .where(Project.org_id == user.org_id)
+            .where(project_filter)
         )
     ).scalar_one()
 
@@ -54,7 +58,7 @@ async def get_dashboard(
             .join(ScanRun, Finding.scan_run_id == ScanRun.id)
             .join(Version, ScanRun.version_id == Version.id)
             .join(Project, Version.project_id == Project.id)
-            .where(Project.org_id == user.org_id, Finding.retest_status != "fixed")
+            .where(project_filter, Finding.retest_status != "fixed")
             .group_by(Finding.severity)
         )
     ).all()
@@ -67,7 +71,7 @@ async def get_dashboard(
             select(ScanRun, Version.name, Project.name)
             .join(Version, ScanRun.version_id == Version.id)
             .join(Project, Version.project_id == Project.id)
-            .where(Project.org_id == user.org_id)
+            .where(project_filter)
             .order_by(ScanRun.created_at.desc())
             .limit(_RECENT_SCAN_RUN_LIMIT)
         )

@@ -103,7 +103,7 @@ async def create_scan_run(
     user: User = Depends(require_permission("scan", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScanRun:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     await _require_at_least_one_target(session, version_id)
     ai_provider_config_id = await _resolve_ai_provider_config_id(session, user.org_id, payload)
 
@@ -149,9 +149,9 @@ async def retest_scan_run(
     "false_positive_after_review" are left alone — a rescan doesn't get
     to silently override a human decision. See app.agents.retest.
     """
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     await _require_at_least_one_target(session, version_id)
-    prior = await get_scan_run_or_404(session, prior_scan_run_id, user.org_id)
+    prior = await get_scan_run_or_404(session, prior_scan_run_id, user)
     if prior.version_id != version_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Prior scan run not found for this version")
 
@@ -185,7 +185,7 @@ async def list_scan_runs(
     user: User = Depends(require_permission("scan", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ScanRunOut]:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     scan_runs = list(
         (
             await session.execute(
@@ -276,7 +276,7 @@ async def get_scan_run(
     user: User = Depends(require_permission("scan", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScanRunDetail:
-    scan_run = await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    scan_run = await get_scan_run_or_404(session, scan_run_id, user)
     return await _scan_run_detail(session, scan_run)
 
 
@@ -286,7 +286,7 @@ async def cancel_scan_run(
     user: User = Depends(require_permission("scan", "update")),
     session: AsyncSession = Depends(get_db_session),
 ) -> ScanRun:
-    scan_run = await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    scan_run = await get_scan_run_or_404(session, scan_run_id, user)
     if scan_run.status not in ("pending", "running"):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -319,7 +319,7 @@ async def delete_scan_run(
     user: User = Depends(require_permission("scan", "delete")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    scan_run = await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    scan_run = await get_scan_run_or_404(session, scan_run_id, user)
     if scan_run.status in ("pending", "running"):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -386,7 +386,7 @@ async def list_findings(
     user: User = Depends(require_permission("scan", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[Finding]:
-    await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    await get_scan_run_or_404(session, scan_run_id, user)
     return await _list_findings(session, scan_run_id)
 
 
@@ -423,7 +423,7 @@ async def get_report_json(
     user: User = Depends(require_permission("scan", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
-    scan_run = await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    scan_run = await get_scan_run_or_404(session, scan_run_id, user)
     detail = await _scan_run_detail(session, scan_run)
     findings = await _list_findings(session, scan_run_id)
     executive_summary = await _get_or_generate_executive_summary(session, scan_run, detail, findings)
@@ -445,7 +445,7 @@ async def get_report_html(
     user: User = Depends(require_permission("scan", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> str:
-    scan_run = await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    scan_run = await get_scan_run_or_404(session, scan_run_id, user)
     detail = await _scan_run_detail(session, scan_run)
     findings = await _list_findings(session, scan_run_id)
     executive_summary = await _get_or_generate_executive_summary(session, scan_run, detail, findings)
@@ -468,7 +468,7 @@ async def get_report_pdf(
     user: User = Depends(require_permission("scan", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
-    scan_run = await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    scan_run = await get_scan_run_or_404(session, scan_run_id, user)
     detail = await _scan_run_detail(session, scan_run)
     findings = await _list_findings(session, scan_run_id)
     executive_summary = await _get_or_generate_executive_summary(session, scan_run, detail, findings)
@@ -496,7 +496,7 @@ async def get_report_docx(
     user: User = Depends(require_permission("scan", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
-    scan_run = await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    scan_run = await get_scan_run_or_404(session, scan_run_id, user)
     detail = await _scan_run_detail(session, scan_run)
     findings = await _list_findings(session, scan_run_id)
     executive_summary = await _get_or_generate_executive_summary(session, scan_run, detail, findings)
@@ -537,7 +537,7 @@ async def get_report_vgs_docx(
     copy of one specific scan; use the workspace when curation (picking
     a subset, editing write-ups, adding evidence steps by hand) matters.
     """
-    scan_run = await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    scan_run = await get_scan_run_or_404(session, scan_run_id, user)
     findings = await _list_findings(session, scan_run_id)
     groups = group_findings(findings)
 
@@ -627,7 +627,7 @@ async def get_report_csv(
     user: User = Depends(require_permission("scan", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
-    await get_scan_run_or_404(session, scan_run_id, user.org_id)
+    await get_scan_run_or_404(session, scan_run_id, user)
     findings = await _list_findings(session, scan_run_id)
     csv_text = render_csv_report(findings)
     return Response(
@@ -651,8 +651,8 @@ async def get_scan_run_diff(
     "fixed" during a rescan — this endpoint doesn't introduce a second,
     subtly different notion of "fixed".
     """
-    later = await get_scan_run_or_404(session, later_scan_run_id, user.org_id)
-    earlier = await get_scan_run_or_404(session, earlier_scan_run_id, user.org_id)
+    later = await get_scan_run_or_404(session, later_scan_run_id, user)
+    earlier = await get_scan_run_or_404(session, earlier_scan_run_id, user)
     if later.version_id != earlier.version_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Both scan runs must belong to the same Version")
 

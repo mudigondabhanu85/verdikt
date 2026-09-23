@@ -116,3 +116,99 @@ async def test_invite_requires_user_create_permission(client, db_adapter):
         "/users/invite", json={"email": "blocked@acme.io", "role": "analyst"}, headers=viewer["headers"]
     )
     assert resp.status_code == 403
+
+
+async def test_invite_with_a_password_creates_an_immediately_usable_account(client):
+    admin = await register_org_admin(client)
+
+    invited = await client.post(
+        "/users/invite",
+        json={"email": "directpw@acme.io", "role": "analyst", "password": "set-directly-123"},
+        headers=admin["headers"],
+    )
+    assert invited.status_code == 201, invited.text
+    body = invited.json()
+    assert body["invite_token"] is None  # no link to hand off — the account is already usable
+
+    logged_in = await client.post(
+        "/auth/login", json={"email": "directpw@acme.io", "password": "set-directly-123"}
+    )
+    assert logged_in.status_code == 200
+
+    listed = await client.get("/users", headers=admin["headers"])
+    created = next(u for u in listed.json() if u["email"] == "directpw@acme.io")
+    assert created["invite_accepted_at"] is not None
+
+
+async def test_invite_with_a_short_password_is_rejected(client):
+    admin = await register_org_admin(client)
+    resp = await client.post(
+        "/users/invite",
+        json={"email": "shortpw@acme.io", "role": "analyst", "password": "short"},
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 422
+
+
+async def test_role_update_changes_what_the_user_can_do(client, db_adapter):
+    admin = await register_org_admin(client)
+    org_id = (await client.get("/auth/me", headers=admin["headers"])).json()["org_id"]
+    viewer = await create_user_with_role(db_adapter, org_id=org_id, role="viewer", email="promote@acme.io")
+
+    blocked = await client.post(
+        "/users/invite", json={"email": "x2@acme.io", "role": "analyst"}, headers=viewer["headers"]
+    )
+    assert blocked.status_code == 403
+
+    updated = await client.patch(
+        f"/users/{viewer['user_id']}/role", json={"role": "org_admin"}, headers=admin["headers"]
+    )
+    assert updated.status_code == 204
+
+    now_allowed = await client.post(
+        "/users/invite", json={"email": "x3@acme.io", "role": "analyst"}, headers=viewer["headers"]
+    )
+    assert now_allowed.status_code == 201
+
+
+async def test_role_update_rejects_unknown_role(client, db_adapter):
+    admin = await register_org_admin(client)
+    org_id = (await client.get("/auth/me", headers=admin["headers"])).json()["org_id"]
+    target = await create_user_with_role(db_adapter, org_id=org_id, role="viewer", email="badrole@acme.io")
+
+    resp = await client.patch(
+        f"/users/{target['user_id']}/role", json={"role": "superuser"}, headers=admin["headers"]
+    )
+    assert resp.status_code == 400
+
+
+async def test_cannot_demote_the_last_active_org_admin(client):
+    admin = await register_org_admin(client)
+    me = await client.get("/auth/me", headers=admin["headers"])
+    admin_id = me.json()["id"]
+
+    resp = await client.patch(f"/users/{admin_id}/role", json={"role": "viewer"}, headers=admin["headers"])
+    assert resp.status_code == 400
+
+
+async def test_demoting_one_of_two_org_admins_is_allowed(client, db_adapter):
+    admin = await register_org_admin(client)
+    org_id = (await client.get("/auth/me", headers=admin["headers"])).json()["org_id"]
+    second_admin = await create_user_with_role(db_adapter, org_id=org_id, role="org_admin", email="second2@acme.io")
+
+    resp = await client.patch(
+        f"/users/{second_admin['user_id']}/role", json={"role": "analyst"}, headers=admin["headers"]
+    )
+    assert resp.status_code == 204
+
+
+async def test_role_update_is_org_scoped(client, db_adapter):
+    admin_a = await register_org_admin(client, org_name="Org RA", email="ra@a.io")
+    admin_b = await register_org_admin(client, org_name="Org RB", email="rb@b.io")
+    org_b_id = (await client.get("/auth/me", headers=admin_b["headers"])).json()["org_id"]
+    b_user = await create_user_with_role(db_adapter, org_id=org_b_id, role="viewer", email="bv@b.io")
+
+    resp = await client.patch(
+        f"/users/{b_user['user_id']}/role", json={"role": "org_admin"}, headers=admin_a["headers"]
+    )
+    assert resp.status_code == 404

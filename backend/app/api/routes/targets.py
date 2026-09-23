@@ -22,7 +22,7 @@ async def add_target(
     user: User = Depends(require_permission("target", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> Target:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     target = Target(version_id=version_id, **payload.model_dump())
     session.add(target)
 
@@ -75,7 +75,7 @@ async def list_targets(
     user: User = Depends(require_permission("target", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[Target]:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     result = await session.execute(select(Target).where(Target.version_id == version_id))
     return list(result.scalars().all())
 
@@ -87,7 +87,7 @@ async def delete_target(
     user: User = Depends(require_permission("target", "delete")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     target = await session.get(Target, target_id)
     if target is None or target.version_id != version_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Target not found")

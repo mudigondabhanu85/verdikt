@@ -22,7 +22,7 @@ async def create_chatbot_target(
     user: User = Depends(require_permission("chatbot_target", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> ChatbotTarget:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     target = ChatbotTarget(
         version_id=version_id,
         label=payload.label,
@@ -60,7 +60,7 @@ async def list_chatbot_targets(
     user: User = Depends(require_permission("chatbot_target", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ChatbotTarget]:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     result = await session.execute(select(ChatbotTarget).where(ChatbotTarget.version_id == version_id))
     return list(result.scalars().all())
 
@@ -72,7 +72,7 @@ async def delete_chatbot_target(
     user: User = Depends(require_permission("chatbot_target", "delete")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     target = await session.get(ChatbotTarget, target_id)
     if target is None or target.version_id != version_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Chatbot target not found")

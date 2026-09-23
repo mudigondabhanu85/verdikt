@@ -19,6 +19,7 @@ from app.models.notification_config import NotificationConfig
 from app.models.oidc_provider_config import OidcProviderConfig
 from app.models.organization import Organization, User
 from app.models.project import Project, ScopeEntry, Version
+from app.models.project_membership import ProjectMembership
 from app.models.rbac import RolePermission
 from app.models.retest_job import RetestJob
 from app.models.review_candidate import ReviewCandidate
@@ -57,6 +58,7 @@ __all__ = [
     "Project",
     "ScopeEntry",
     "Version",
+    "ProjectMembership",
     "RolePermission",
     "RetestJob",
     "ReviewCandidate",

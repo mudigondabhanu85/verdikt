@@ -32,7 +32,7 @@ async def create_chatbot_agency_probe(
     user: User = Depends(require_permission("chatbot_target", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> ChatbotAgencyProbe:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     await _get_target_or_404(session, version_id, target_id)
     probe = ChatbotAgencyProbe(
         chatbot_target_id=target_id,
@@ -60,7 +60,7 @@ async def list_chatbot_agency_probes(
     user: User = Depends(require_permission("chatbot_target", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ChatbotAgencyProbe]:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     await _get_target_or_404(session, version_id, target_id)
     result = await session.execute(
         select(ChatbotAgencyProbe).where(ChatbotAgencyProbe.chatbot_target_id == target_id)
@@ -76,7 +76,7 @@ async def delete_chatbot_agency_probe(
     user: User = Depends(require_permission("chatbot_target", "delete")),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     await _get_target_or_404(session, version_id, target_id)
     probe = await session.get(ChatbotAgencyProbe, probe_id)
     if probe is None or probe.chatbot_target_id != target_id:

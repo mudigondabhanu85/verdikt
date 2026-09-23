@@ -247,12 +247,19 @@ export const api = {
 
   users: {
     list: () => request<UserOut[]>('/users'),
-    invite: (body: { email: string; role: string }) =>
+    invite: (body: { email: string; role: string; password?: string }) =>
       request<UserInviteOut>('/users/invite', { method: 'POST', body }),
     acceptInvite: (body: { invite_token: string; password: string }) =>
       request<TokenResponse>('/users/accept-invite', { method: 'POST', body }),
     deactivate: (userId: string) => request<void>(`/users/${userId}/deactivate`, { method: 'POST' }),
     reactivate: (userId: string) => request<void>(`/users/${userId}/reactivate`, { method: 'POST' }),
+    updateRole: (userId: string, role: string) =>
+      request<void>(`/users/${userId}/role`, { method: 'PATCH', body: { role } }),
+    updateProjectMemberships: (userId: string, projectIds: string[]) =>
+      request<void>(`/users/${userId}/project-memberships`, {
+        method: 'PUT',
+        body: { project_ids: projectIds },
+      }),
   },
 
   versions: {

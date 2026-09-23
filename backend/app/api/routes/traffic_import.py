@@ -164,7 +164,7 @@ async def import_traffic(
     user: User = Depends(require_permission("traffic", "create")),
     session: AsyncSession = Depends(get_db_session),
 ) -> TrafficImportResult:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
 
     filename = file.filename or ""
     suffix = Path(filename.lower()).suffix
@@ -252,7 +252,7 @@ async def add_manual_traffic(
     request/response pair here instead of a whole file, which the HAR/
     Burp-file/Zest importers exist for.
     """
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
 
     row = TrafficInteraction(
         version_id=version_id,
@@ -312,7 +312,7 @@ async def list_traffic_interactions(
     user: User = Depends(require_permission("traffic", "read")),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[TrafficInteractionOut]:
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     result = await session.execute(
         select(TrafficInteraction).where(TrafficInteraction.version_id == version_id)
     )
@@ -331,7 +331,7 @@ async def delete_traffic_interaction(
     secret they don't want sitting in Verdikt's DB, without needing to
     delete and re-import the entire batch to drop just that one row.
     """
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     row = await session.get(TrafficInteraction, interaction_id)
     if row is None or row.version_id != version_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Traffic interaction not found")
@@ -362,7 +362,7 @@ async def clear_traffic_interactions(
     clears everything for this version — a full reset before
     re-uploading.
     """
-    await get_version_or_404(session, version_id, user.org_id)
+    await get_version_or_404(session, version_id, user)
     query = select(TrafficInteraction).where(TrafficInteraction.version_id == version_id)
     if source is not None:
         query = query.where(TrafficInteraction.source == source)
