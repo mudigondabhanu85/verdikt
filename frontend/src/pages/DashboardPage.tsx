@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client'
-import { SeverityBadge, StatusBadge } from '../components/Badges'
+import { SeverityBadge, StatusBadge, FindingCountsSummary } from '../components/Badges'
 
 export function DashboardPage() {
   const { data, isLoading } = useQuery({
@@ -57,13 +57,7 @@ export function DashboardPage() {
                 <StatusBadge status={run.status} />
               </span>
               <span className="flex items-center gap-2 text-xs text-gray-500">
-                {Object.entries(run.finding_counts_by_severity)
-                  .filter(([, count]) => count > 0)
-                  .map(([severity, count]) => (
-                    <span key={severity} className="flex items-center gap-1">
-                      <SeverityBadge severity={severity} /> {count}
-                    </span>
-                  ))}
+                <FindingCountsSummary counts={run.finding_counts_by_severity} />
                 {run.started_at && <span>{new Date(run.started_at).toLocaleString()}</span>}
               </span>
             </Link>

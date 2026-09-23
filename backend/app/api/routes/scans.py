@@ -1,11 +1,11 @@
 import asyncio
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse, Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -184,12 +184,45 @@ async def list_scan_runs(
     version_id: uuid.UUID,
     user: User = Depends(require_permission("scan", "read")),
     session: AsyncSession = Depends(get_db_session),
-) -> list[ScanRun]:
+) -> list[ScanRunOut]:
     await get_version_or_404(session, version_id, user.org_id)
-    result = await session.execute(
-        select(ScanRun).where(ScanRun.version_id == version_id).order_by(ScanRun.created_at.desc())
+    scan_runs = list(
+        (
+            await session.execute(
+                select(ScanRun).where(ScanRun.version_id == version_id).order_by(ScanRun.created_at.desc())
+            )
+        ).scalars()
     )
-    return list(result.scalars().all())
+    if not scan_runs:
+        return []
+
+    # One aggregate query for every run's severity breakdown, not one
+    # query per run — the Scan Runs tab lists every run for a version at
+    # once, and N+1 here would mean N+1 round trips on every page load.
+    severity_rows = (
+        await session.execute(
+            select(Finding.scan_run_id, Finding.severity, func.count())
+            .where(Finding.scan_run_id.in_([sr.id for sr in scan_runs]))
+            .group_by(Finding.scan_run_id, Finding.severity)
+        )
+    ).all()
+    counts_by_run: dict[uuid.UUID, dict[str, int]] = defaultdict(dict)
+    for scan_run_id, severity, count in severity_rows:
+        counts_by_run[scan_run_id][severity] = count
+
+    results = []
+    for scan_run in scan_runs:
+        # model_validate (not an explicit ScanRunOut(...) constructor
+        # call) so every field picks up automatically from the ORM
+        # object by name — the explicit-kwargs shape is what silently
+        # dropped `mode` and the llm_cost_usd/token fields once before
+        # in this exact file (see _scan_run_detail's own comments).
+        out = ScanRunOut.model_validate(scan_run)
+        out.finding_counts_by_severity = {
+            sev: counts_by_run[scan_run.id].get(sev, 0) for sev in ("Critical", "High", "Medium", "Low")
+        }
+        results.append(out)
+    return results
 
 
 async def _scan_run_detail(session: AsyncSession, scan_run: ScanRun) -> ScanRunDetail:

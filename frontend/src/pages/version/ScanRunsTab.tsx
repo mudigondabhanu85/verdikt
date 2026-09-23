@@ -3,7 +3,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api, ApiError } from '../../api/client'
 import { useAuth, canWrite, canRunAutonomousPentest } from '../../auth/AuthContext'
-import { StatusBadge } from '../../components/Badges'
+import { StatusBadge, FindingCountsSummary } from '../../components/Badges'
+
+// "3m 12s" / "45s" — never a raw millisecond count, and never a
+// negative/garbage value if the timestamps are momentarily inconsistent
+// (e.g. clock skew between the row's own started_at and the moment this
+// renders for a still-running scan).
+function formatDuration(startedAt: string | null, completedAt: string | null): string | null {
+  if (!startedAt) return null
+  const end = completedAt ? new Date(completedAt).getTime() : Date.now()
+  const start = new Date(startedAt).getTime()
+  const totalSeconds = Math.max(0, Math.round((end - start) / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+}
 
 // The consent step for POST .../autonomous-pentest-sessions — a typed-
 // match confirmation naming the real target host(s), not a generic
@@ -184,24 +198,41 @@ export function ScanRunsTab({ versionId }: { versionId: string }) {
       <ul className="divide-y divide-gray-200 rounded border border-gray-200 bg-white">
         {scanRuns?.map((run) => {
           const isActive = run.status === 'pending' || run.status === 'running'
+          const duration = formatDuration(run.started_at, run.completed_at)
           return (
-            <li key={run.id} className="flex items-center justify-between px-4 py-3">
+            <li key={run.id} className="flex items-center justify-between gap-4 px-4 py-3">
               <Link to={`/scan-runs/${run.id}`} className="flex-1 hover:underline">
-                <span className="mr-3 font-mono text-xs text-gray-400">{run.id.slice(0, 8)}</span>
-                {run.mode === 'autonomous_ai' && (
-                  <span className="mr-3 rounded bg-purple-100 px-1.5 py-0.5 text-xs font-medium text-purple-800">
-                    AI pentest
-                  </span>
-                )}
-                <StatusBadge status={run.status} />
-                {run.started_at && (
-                  <span className="ml-3 text-xs text-gray-400">{new Date(run.started_at).toLocaleString()}</span>
-                )}
-                {run.error && <span className="ml-3 text-xs text-red-600">{run.error}</span>}
-                {run.warning && (
-                  <span className="ml-3 text-xs text-amber-700" title={run.warning}>
-                    ⚠ found nothing — likely misconfigured
-                  </span>
+                <div>
+                  <span className="mr-3 font-mono text-xs text-gray-400">{run.id.slice(0, 8)}</span>
+                  {run.mode === 'autonomous_ai' && (
+                    <span className="mr-3 rounded bg-purple-100 px-1.5 py-0.5 text-xs font-medium text-purple-800">
+                      AI pentest
+                    </span>
+                  )}
+                  <StatusBadge status={run.status} />
+                  {run.started_at && (
+                    <span className="ml-3 text-xs text-gray-400">{new Date(run.started_at).toLocaleString()}</span>
+                  )}
+                  {duration && (
+                    <span className="ml-3 text-xs text-gray-400">
+                      {isActive ? `running ${duration}` : duration}
+                    </span>
+                  )}
+                  {run.error && <span className="ml-3 text-xs text-red-600">{run.error}</span>}
+                  {run.warning && (
+                    <span className="ml-3 text-xs text-amber-700" title={run.warning}>
+                      ⚠ found nothing — likely misconfigured
+                    </span>
+                  )}
+                </div>
+                {!isActive && (
+                  <div className="mt-1">
+                    {Object.values(run.finding_counts_by_severity).some((c) => c > 0) ? (
+                      <FindingCountsSummary counts={run.finding_counts_by_severity} />
+                    ) : (
+                      <span className="text-xs text-gray-400">No findings</span>
+                    )}
+                  </div>
                 )}
               </Link>
               {canWrite(user?.role) && (

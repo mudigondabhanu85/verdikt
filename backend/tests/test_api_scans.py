@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from tests.conftest import create_project_and_version, register_org_admin
+from tests.test_api_reporting import _seed_scan_run_with_findings
 
 
 class _FixtureSiteHandler(BaseHTTPRequestHandler):
@@ -676,3 +677,43 @@ async def test_delete_a_running_scan_is_blocked_until_cancelled(client, fixture_
 
     delete_again = await client.delete(f"/scan-runs/{scan_run_id}", headers=admin["headers"])
     assert delete_again.status_code == 204
+
+
+async def test_list_scan_runs_includes_finding_counts_by_severity(client, db_adapter):
+    """The Scan Runs tab needs a vulnerability count per run without a
+    click-through into each one — this is the direct fix for that: the
+    list endpoint (not just the single-run detail endpoint) now carries
+    the same finding_counts_by_severity breakdown."""
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+
+    scan_run_id_1 = await _seed_scan_run_with_findings(
+        db_adapter,
+        version_id,
+        findings=[
+            {"check_id": "sql-injection", "severity": "Critical"},
+            {"check_id": "missing-hsts", "severity": "Low"},
+            {"check_id": "missing-csp", "severity": "Low"},
+        ],
+    )
+    scan_run_id_2 = await _seed_scan_run_with_findings(db_adapter, version_id, findings=[])
+
+    resp = await client.get(f"/versions/{version_id}/scan-runs", headers=admin["headers"])
+    assert resp.status_code == 200, resp.text
+    by_id = {row["id"]: row for row in resp.json()}
+
+    assert by_id[scan_run_id_1]["finding_counts_by_severity"] == {
+        "Critical": 1, "High": 0, "Medium": 0, "Low": 2,
+    }
+    assert by_id[scan_run_id_2]["finding_counts_by_severity"] == {
+        "Critical": 0, "High": 0, "Medium": 0, "Low": 0,
+    }
+
+
+async def test_list_scan_runs_with_no_runs_returns_an_empty_list(client, db_adapter):
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+
+    resp = await client.get(f"/versions/{version_id}/scan-runs", headers=admin["headers"])
+    assert resp.status_code == 200
+    assert resp.json() == []

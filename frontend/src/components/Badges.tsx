@@ -32,3 +32,23 @@ export function StatusBadge({ status, testId }: { status: string; testId?: strin
     </span>
   )
 }
+
+// Shared by the Dashboard's recent-runs list and the per-version Scan
+// Runs tab — same compact "severity badge + count" rendering in both
+// places, so a scan's vulnerability count is visible without a
+// click-through no matter which list you're looking at it from.
+export function FindingCountsSummary({ counts }: { counts: Record<string, number> }) {
+  const entries = Object.entries(counts).filter(([, count]) => count > 0)
+  if (entries.length === 0) {
+    return null
+  }
+  return (
+    <span className="flex items-center gap-2">
+      {entries.map(([severity, count]) => (
+        <span key={severity} className="flex items-center gap-1 text-xs text-gray-600">
+          <SeverityBadge severity={severity} /> {count}
+        </span>
+      ))}
+    </span>
+  )
+}

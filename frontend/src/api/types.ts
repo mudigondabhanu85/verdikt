@@ -211,6 +211,7 @@ export interface ScanRunOut {
   llm_cost_usd: string
   llm_input_tokens: number
   llm_output_tokens: number
+  finding_counts_by_severity: Record<string, number>
 }
 
 export interface AgentJobOut {
@@ -252,7 +253,6 @@ export interface DashboardOut {
 
 export interface ScanRunDetail extends ScanRunOut {
   agent_jobs: AgentJobOut[]
-  finding_counts_by_severity: Record<string, number>
   tech_stack_fingerprint: Record<string, unknown> | null
 }
 

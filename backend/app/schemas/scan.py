@@ -37,6 +37,11 @@ class ScanRunOut(BaseModel):
     llm_cost_usd: Decimal = Decimal(0)
     llm_input_tokens: int = 0
     llm_output_tokens: int = 0
+    # Same shape as ScanRunDetail's own field below — populated here too
+    # so the scan-runs LIST (what the Scan Runs tab actually renders)
+    # can show a vulnerability count per run without a click-through,
+    # instead of only being visible on each run's own detail page.
+    finding_counts_by_severity: dict[str, int] = {}
 
     model_config = {"from_attributes": True}
 
