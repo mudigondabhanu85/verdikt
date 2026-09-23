@@ -434,8 +434,10 @@ export const api = {
   autonomousPentest: {
     confirmationPhrase: (versionId: string) =>
       request<ConfirmationPhraseOut>(`/versions/${versionId}/autonomous-pentest-sessions/confirmation-phrase`),
-    create: (versionId: string, body: { confirmation_text: string; objective: string }) =>
-      request<ScanRunOut>(`/versions/${versionId}/autonomous-pentest-sessions`, { method: 'POST', body }),
+    create: (
+      versionId: string,
+      body: { confirmation_text: string; objective: string; credential_id?: string | null },
+    ) => request<ScanRunOut>(`/versions/${versionId}/autonomous-pentest-sessions`, { method: 'POST', body }),
     commands: (scanRunId: string) => request<PentestCommandOut[]>(`/scan-runs/${scanRunId}/pentest-commands`),
   },
 

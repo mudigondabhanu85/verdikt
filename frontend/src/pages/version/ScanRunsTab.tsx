@@ -27,9 +27,23 @@ function formatDuration(startedAt: string | null, completedAt: string | null): s
 // docstring for why this is a request field, not just RBAC.
 function AutonomousPentestPanel({ versionId, onDone }: { versionId: string; onDone: () => void }) {
   const [objective, setObjective] = useState('')
+  const [credentialId, setCredentialId] = useState<string>('')
   const [confirmationText, setConfirmationText] = useState('')
   const [showConfirm, setShowConfirm] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Only offered when there's a real login to skip — an unambiguous
+  // single credential still auto-applies server-side with no picker
+  // needed, and this Version may have none at all (unauthenticated
+  // targets). See backend/app/schemas/autonomous_pentest.py's own
+  // docstring for why 2+ credentials need an explicit choice: the
+  // pre-auth cookie jar is credential-specific (e.g. DVWA's low/high
+  // security cookie), so guessing one would be silently wrong for the
+  // others.
+  const credentialsQuery = useQuery({
+    queryKey: ['versions', versionId, 'credentials'],
+    queryFn: () => api.credentials.list(versionId),
+  })
 
   const phraseQuery = useQuery({
     queryKey: ['versions', versionId, 'autonomous-pentest-confirmation-phrase'],
@@ -38,7 +52,12 @@ function AutonomousPentestPanel({ versionId, onDone }: { versionId: string; onDo
   })
 
   const startMutation = useMutation({
-    mutationFn: () => api.autonomousPentest.create(versionId, { confirmation_text: confirmationText, objective }),
+    mutationFn: () =>
+      api.autonomousPentest.create(versionId, {
+        confirmation_text: confirmationText,
+        objective,
+        credential_id: credentialId || null,
+      }),
     onSuccess: () => {
       setError(null)
       onDone()
@@ -47,6 +66,7 @@ function AutonomousPentestPanel({ versionId, onDone }: { versionId: string; onDo
   })
 
   if (!showConfirm) {
+    const credentials = credentialsQuery.data ?? []
     return (
       <div className="mt-2 rounded border border-purple-200 bg-purple-50 p-3">
         <label className="mb-1 block text-xs font-medium text-purple-900">
@@ -58,6 +78,25 @@ function AutonomousPentestPanel({ versionId, onDone }: { versionId: string; onDo
           placeholder="e.g. identify SQL injection vulnerabilities"
           className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus:border-purple-500 focus:outline-none"
         />
+        {credentials.length > 1 && (
+          <>
+            <label className="mb-1 mt-2 block text-xs font-medium text-purple-900">
+              Pre-authenticate as (skips the AI's own login attempt)
+            </label>
+            <select
+              value={credentialId}
+              onChange={(e) => setCredentialId(e.target.value)}
+              className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus:border-purple-500 focus:outline-none"
+            >
+              <option value="">Don't pre-authenticate — let the AI log in itself</option>
+              {credentials.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label} ({c.masked_reference})
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         <div className="mt-2 flex items-center gap-2">
           <button
             onClick={() => setShowConfirm(true)}
