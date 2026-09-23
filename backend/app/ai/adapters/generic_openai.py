@@ -3,7 +3,16 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from app.ai.adapters.base import AgentResponse, AIProviderAdapter, Message, estimate_tokens
+from app.ai.adapters._openai_tools import build_openai_messages, build_openai_tools, parse_openai_tool_response
+from app.ai.adapters.base import (
+    AgentResponse,
+    AIProviderAdapter,
+    ConversationTurn,
+    Message,
+    ToolCallResponse,
+    ToolSpec,
+    estimate_tokens,
+)
 
 
 class GenericOpenAIAdapter(AIProviderAdapter):
@@ -82,6 +91,33 @@ class GenericOpenAIAdapter(AIProviderAdapter):
             output_tokens=output_tokens,
             model=model,
         )
+
+    async def complete_with_tools(
+        self,
+        *,
+        system: str,
+        turns: list[ConversationTurn],
+        model: str,
+        tools: list[ToolSpec],
+        max_tokens: int = 2048,
+    ) -> ToolCallResponse:
+        response = await self._client.chat.completions.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=build_openai_messages(system, turns),
+            tools=build_openai_tools(tools),
+            temperature=0,
+        )
+        choice = response.choices[0]
+        result = parse_openai_tool_response(choice.message, usage=response.usage, model=model)
+        if response.usage is None:
+            # See complete()'s identical fallback above — some self-
+            # hosted gateways omit `usage` even on a successful
+            # tool-calling response.
+            prompt_text = system + "".join(t.content or "" for t in turns)
+            result.input_tokens = estimate_tokens(prompt_text)
+            result.output_tokens = estimate_tokens(result.content or "")
+        return result
 
     def estimate_cost(self, input_tokens: int, output_tokens: int, model: str) -> Decimal:
         return (

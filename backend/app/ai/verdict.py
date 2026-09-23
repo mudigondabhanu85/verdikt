@@ -22,6 +22,33 @@ class Verdict(BaseModel):
     reasoning: str
 
 
+class FindingProposal(BaseModel):
+    """What app.ai.prompts.autonomous_pentest.yaml's system prompt asks
+    the model to emit once it has confirmed a real vulnerability with
+    actual tool-collected evidence — see
+    app.agents.autonomous_pentest.runner, the only caller. Deliberately
+    a *proposal*: the runner still requires this to parse successfully
+    against this schema before it becomes an ordinary Finding row (same
+    "never guess a Finding into existence from unparseable output" rule
+    parse_verdict already applies below), and unlike every deterministic
+    check's Finding, there's no YAML catalog entry behind it — the
+    model's own free-text title/description/evidence become the
+    Finding's content directly, the same way app.agents.business_logic
+    already builds a Finding from an LLM verdict's free-text reasoning
+    rather than a fixed catalog lookup.
+    """
+
+    title: str
+    severity: Literal["Critical", "High", "Medium", "Low"]
+    cwe_id: str
+    owasp_2025_category: str
+    affected_endpoint: str
+    plain_language_summary: str
+    technical_description: str
+    remediation: str
+    evidence: str
+
+
 def extract_json_objects(raw_content: str) -> list[dict]:
     """Strips markdown code fences (see _CODE_FENCE_RE's rationale above)
     and returns every fenced/bare block that parses as a JSON object,
@@ -51,6 +78,22 @@ def parse_verdict(raw_content: str) -> Verdict | None:
     for data in extract_json_objects(raw_content):
         try:
             return Verdict(**data)
+        except ValidationError:
+            continue
+    return None
+
+
+def parse_finding_proposal(raw_content: str) -> FindingProposal | None:
+    """Same fence-tolerant, fail-safe parsing as parse_verdict, for the
+    autonomous pentest loop's Finding-proposal responses instead of a
+    triage verdict. A response with no valid proposal (plain
+    investigative narration, a mid-loop status update, a final "nothing
+    found" summary) correctly returns None rather than raising — the
+    caller only persists a Finding when this actually parses.
+    """
+    for data in extract_json_objects(raw_content):
+        try:
+            return FindingProposal(**data)
         except ValidationError:
             continue
     return None

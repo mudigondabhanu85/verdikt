@@ -2,7 +2,14 @@ from decimal import Decimal
 
 import httpx
 
-from app.ai.adapters.base import AgentResponse, AIProviderAdapter, Message
+from app.ai.adapters.base import (
+    AgentResponse,
+    AIProviderAdapter,
+    ConversationTurn,
+    Message,
+    ToolCallResponse,
+    ToolSpec,
+)
 
 # USD per million tokens (input, output). Approximate — keep these current;
 # they only drive the §10.5 budget guardrail, not billing.
@@ -82,6 +89,28 @@ class GeminiAdapter(AIProviderAdapter):
             input_tokens=usage.get("promptTokenCount", 0),
             output_tokens=usage.get("candidatesTokenCount", 0),
             model=model,
+        )
+
+    async def complete_with_tools(
+        self,
+        *,
+        system: str,
+        turns: list[ConversationTurn],
+        model: str,
+        tools: list[ToolSpec],
+        max_tokens: int = 2048,
+    ) -> ToolCallResponse:
+        # Deferred to Phase 3 (see the AI Pentest Mode plan) — Gemini's
+        # REST function-calling shape is a third, distinct wire format
+        # from both Claude's and OpenAI's (see ConversationTurn's own
+        # docstring), and isn't on the critical path for Phase 2's first
+        # working loop. Raising here (rather than silently returning no
+        # tool calls, which would look like "the model chose to stop")
+        # makes an attempt to run an autonomous session on this provider
+        # fail loudly and immediately, not with a confusing empty result.
+        raise NotImplementedError(
+            "GeminiAdapter does not yet support tool-calling — the autonomous pentest mode "
+            "currently requires a Claude or OpenAI-compatible provider."
         )
 
     def estimate_cost(self, input_tokens: int, output_tokens: int, model: str) -> Decimal:

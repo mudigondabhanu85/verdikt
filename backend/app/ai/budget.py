@@ -4,7 +4,14 @@ from decimal import Decimal
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.adapters.base import AgentResponse, AIProviderAdapter, Message
+from app.ai.adapters.base import (
+    AgentResponse,
+    AIProviderAdapter,
+    ConversationTurn,
+    Message,
+    ToolCallResponse,
+    ToolSpec,
+)
 from app.config import get_settings
 from app.models.scan import ScanRun
 
@@ -122,6 +129,45 @@ class BudgetGuard:
 
             try:
                 response = await self._provider.complete(messages, model=model, max_tokens=max_tokens)
+            except BudgetExceededError:
+                raise
+            except Exception as exc:
+                if not _is_transient_provider_error(exc):
+                    raise
+                raise ProviderUnavailableError(str(exc)) from exc
+            cost = self._provider.estimate_cost(response.input_tokens, response.output_tokens, model)
+            self._scan_run.llm_cost_usd = self.spent + cost
+            self._scan_run.llm_input_tokens = (self._scan_run.llm_input_tokens or 0) + response.input_tokens
+            self._scan_run.llm_output_tokens = (self._scan_run.llm_output_tokens or 0) + response.output_tokens
+            await self._session.commit()
+            return response
+
+    async def guarded_complete_with_tools(
+        self,
+        *,
+        system: str,
+        turns: list[ConversationTurn],
+        model: str,
+        tools: list[ToolSpec],
+        max_tokens: int = 2048,
+    ) -> ToolCallResponse:
+        """Tool-calling counterpart to guarded_complete — same cost-cap
+        check, same transient-vs-permanent error classification, same
+        atomic-under-lock spend accounting. Used by
+        app.agents.autonomous_pentest.runner's multi-turn loop instead of
+        guarded_complete, which only ever does a single-shot text
+        completion."""
+        async with self._lock:
+            if self.spent >= self._cap:
+                raise BudgetExceededError(
+                    f"LLM budget exhausted for scan run {self._scan_run.id}: "
+                    f"${self.spent} spent of ${self._cap} cap"
+                )
+
+            try:
+                response = await self._provider.complete_with_tools(
+                    system=system, turns=turns, model=model, tools=tools, max_tokens=max_tokens
+                )
             except BudgetExceededError:
                 raise
             except Exception as exc:

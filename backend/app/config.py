@@ -88,6 +88,17 @@ class Settings(BaseSettings):
     # doing nothing) — most deployments running only the deterministic
     # agents never need this service at all.
     sandbox_runner_base_url: str | None = None
+    # Hard bounds on the Phase 2 autonomous pentest loop
+    # (app.agents.autonomous_pentest.runner) — same "safe by default,
+    # configurable per deployment" discipline as crawl_max_pages/
+    # crawl_max_depth below. BudgetGuard's own $ cap already bounds
+    # spend; these bound the two things a $ cap alone doesn't: how long
+    # a session can run wall-clock, and how many tool-calling turns it
+    # can take even if every individual call is cheap (a model stuck in
+    # an unproductive loop, re-running the same probe repeatedly, would
+    # otherwise never hit the cost cap while still never finishing).
+    autonomous_pentest_max_turns: int = 20
+    autonomous_pentest_max_duration_seconds: int = 600
 
     # Crawl bounds (app.agents.recon.ReconAgent) — deliberately
     # configurable rather than hardcoded, since 300 pages at depth 6 is a

@@ -79,6 +79,9 @@ async def test_guarded_complete_wraps_provider_connection_errors(db_adapter):
         async def complete(self, messages, *, model, max_tokens=1024):
             raise ConnectionError("Connection error.")
 
+        async def complete_with_tools(self, *, system, turns, model, tools, max_tokens=2048):
+            raise ConnectionError("Connection error.")
+
         def estimate_cost(self, input_tokens, output_tokens, model):
             return Decimal(0)
 
@@ -137,6 +140,9 @@ async def test_guarded_complete_does_not_mask_permanent_failures(db_adapter):
 
     class _BadCredentialsProvider(AIProviderAdapter):
         async def complete(self, messages, *, model, max_tokens=1024):
+            raise _AuthError("Incorrect API key provided")
+
+        async def complete_with_tools(self, *, system, turns, model, tools, max_tokens=2048):
             raise _AuthError("Incorrect API key provided")
 
         def estimate_cost(self, input_tokens, output_tokens, model):

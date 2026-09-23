@@ -2,7 +2,15 @@ from decimal import Decimal
 
 from openai import AsyncOpenAI
 
-from app.ai.adapters.base import AgentResponse, AIProviderAdapter, Message
+from app.ai.adapters._openai_tools import build_openai_messages, build_openai_tools, parse_openai_tool_response
+from app.ai.adapters.base import (
+    AgentResponse,
+    AIProviderAdapter,
+    ConversationTurn,
+    Message,
+    ToolCallResponse,
+    ToolSpec,
+)
 
 # USD per million tokens (input, output). Approximate — keep these current;
 # they only drive the §10.5 budget guardrail, not billing.
@@ -46,6 +54,25 @@ class OpenAIAdapter(AIProviderAdapter):
             output_tokens=usage.completion_tokens if usage else 0,
             model=model,
         )
+
+    async def complete_with_tools(
+        self,
+        *,
+        system: str,
+        turns: list[ConversationTurn],
+        model: str,
+        tools: list[ToolSpec],
+        max_tokens: int = 2048,
+    ) -> ToolCallResponse:
+        response = await self._client.chat.completions.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=build_openai_messages(system, turns),
+            tools=build_openai_tools(tools),
+            temperature=0,
+        )
+        choice = response.choices[0]
+        return parse_openai_tool_response(choice.message, usage=response.usage, model=model)
 
     def estimate_cost(self, input_tokens: int, output_tokens: int, model: str) -> Decimal:
         input_price, output_price = _pricing_for(model)
