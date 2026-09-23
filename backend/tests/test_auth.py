@@ -41,3 +41,57 @@ async def test_login_wrong_password_rejected(client):
 async def test_me_requires_bearer_token(client):
     resp = await client.get("/auth/me")
     assert resp.status_code == 401
+
+
+async def test_change_password_then_login_with_the_new_one(client):
+    session = await register_org_admin(client, email="changer@acme.io", password="old-password-123")
+    resp = await client.post(
+        "/auth/change-password",
+        json={"current_password": "old-password-123", "new_password": "new-password-456"},
+        headers=session["headers"],
+    )
+    assert resp.status_code == 204
+
+    old_login = await client.post(
+        "/auth/login", json={"email": "changer@acme.io", "password": "old-password-123"}
+    )
+    assert old_login.status_code == 401
+
+    new_login = await client.post(
+        "/auth/login", json={"email": "changer@acme.io", "password": "new-password-456"}
+    )
+    assert new_login.status_code == 200
+
+
+async def test_change_password_rejects_a_wrong_current_password(client):
+    session = await register_org_admin(client, email="wrongcur@acme.io", password="real-password-123")
+    resp = await client.post(
+        "/auth/change-password",
+        json={"current_password": "not-the-real-one", "new_password": "new-password-456"},
+        headers=session["headers"],
+    )
+    assert resp.status_code == 401
+
+    # The password on file must be unchanged after a rejected attempt.
+    login = await client.post(
+        "/auth/login", json={"email": "wrongcur@acme.io", "password": "real-password-123"}
+    )
+    assert login.status_code == 200
+
+
+async def test_change_password_rejects_a_too_short_new_password(client):
+    session = await register_org_admin(client, email="shortpw@acme.io", password="real-password-123")
+    resp = await client.post(
+        "/auth/change-password",
+        json={"current_password": "real-password-123", "new_password": "short"},
+        headers=session["headers"],
+    )
+    assert resp.status_code == 422
+
+
+async def test_change_password_requires_a_bearer_token(client):
+    resp = await client.post(
+        "/auth/change-password",
+        json={"current_password": "whatever", "new_password": "new-password-456"},
+    )
+    assert resp.status_code == 401

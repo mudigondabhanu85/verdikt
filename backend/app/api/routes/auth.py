@@ -6,7 +6,7 @@ from app.auth.dependencies import get_current_user
 from app.auth.security import create_access_token, hash_password, verify_password
 from app.db.session import get_db_session
 from app.models.organization import Organization, User
-from app.schemas.auth import LoginRequest, TokenResponse, UserOut, UserRegister
+from app.schemas.auth import ChangePasswordRequest, LoginRequest, TokenResponse, UserOut, UserRegister
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -53,3 +53,22 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_db_se
 @router.get("/me", response_model=UserOut)
 async def me(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_password(
+    payload: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> None:
+    # SSO-only users (§9) have no password on file to check against — the
+    # thing this endpoint exists to change doesn't exist for them.
+    if user.hashed_password is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "This account signs in via SSO and has no password to change.",
+        )
+    if not verify_password(payload.current_password, user.hashed_password):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Current password is incorrect")
+    user.hashed_password = hash_password(payload.new_password)
+    await session.commit()

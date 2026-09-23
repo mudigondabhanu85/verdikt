@@ -226,6 +226,8 @@ export const api = {
     login: (body: { email: string; password: string }) =>
       request<TokenResponse>('/auth/login', { method: 'POST', body }),
     me: () => request<UserOut>('/auth/me'),
+    changePassword: (body: { current_password: string; new_password: string }) =>
+      request<void>('/auth/change-password', { method: 'POST', body }),
   },
 
   organizations: {

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, BASE_URL } from '../api/client'
+import { api, ApiError, BASE_URL } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import {
   AI_PROVIDER_TYPES,
@@ -448,6 +448,87 @@ function OidcProvidersSection() {
   )
 }
 
+// Every user gets this, regardless of role — it's a personal account
+// setting, not an org-admin privilege, unlike everything else on this
+// page. Requires the current password (verified server-side) rather
+// than a bare "set new password" — the one thing standing between an
+// attacker with a stolen, still-logged-in browser tab and permanently
+// locking the real owner out.
+function ChangePasswordSection() {
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState(false)
+
+  const mismatch = newPassword.length > 0 && confirmPassword.length > 0 && newPassword !== confirmPassword
+
+  const changeMutation = useMutation({
+    mutationFn: () => api.auth.changePassword({ current_password: currentPassword, new_password: newPassword }),
+    onSuccess: () => {
+      setError(null)
+      setSuccess(true)
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
+    },
+    onError: (err) => {
+      setSuccess(false)
+      setError(err instanceof ApiError ? err.message : 'Could not change the password')
+    },
+  })
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    setSuccess(false)
+    if (!currentPassword || !newPassword || mismatch) return
+    changeMutation.mutate()
+  }
+
+  return (
+    <section className="mb-10">
+      <h2 className="mb-3 text-lg font-medium text-gray-800">Change Password</h2>
+      <form onSubmit={handleSubmit} className="max-w-sm space-y-2">
+        <input
+          value={currentPassword}
+          onChange={(e) => setCurrentPassword(e.target.value)}
+          placeholder="Current password"
+          type="password"
+          autoComplete="current-password"
+          className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+        />
+        <input
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          placeholder="New password (min. 8 characters)"
+          type="password"
+          autoComplete="new-password"
+          minLength={8}
+          className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+        />
+        <input
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          placeholder="Confirm new password"
+          type="password"
+          autoComplete="new-password"
+          className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+        />
+        {mismatch && <p className="text-xs text-red-600">New passwords don't match.</p>}
+        <button
+          type="submit"
+          disabled={changeMutation.isPending || !currentPassword || !newPassword || mismatch}
+          className="rounded bg-purple-700 px-4 py-2 text-sm font-medium text-white hover:bg-purple-800 disabled:opacity-50"
+        >
+          {changeMutation.isPending ? 'Changing…' : 'Change password'}
+        </button>
+        {success && <p className="text-xs text-green-700">Password changed.</p>}
+        {error && <p className="text-xs text-red-600">{error}</p>}
+      </form>
+    </section>
+  )
+}
+
 export function AccountPage() {
   const { user } = useAuth()
   const { data: org } = useQuery({ queryKey: ['organizations', 'me'], queryFn: api.organizations.me })
@@ -460,6 +541,8 @@ export function AccountPage() {
           {user.email} · <span className="uppercase">{user.role}</span> {org && <>· {org.name}</>}
         </p>
       )}
+
+      <ChangePasswordSection />
 
       {user?.role === 'org_admin' && (
         <>
