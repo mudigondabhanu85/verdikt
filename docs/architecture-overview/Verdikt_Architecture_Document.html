@@ -74,6 +74,15 @@ memory or prior documentation). Section 18 documents where the current build
 diverges from the original design specification — honestly, both where the
 build fell short and where it went further.</em></p>
 <hr />
+<h1 id="verdikt">Verdikt</h1>
+<h2 id="ai-multi-agent-web-application-api-security-testing-platform">AI Multi-Agent Web Application &amp; API Security Testing Platform</h2>
+<p><strong>Architecture &amp; Product Overview — Full Technical Reference</strong></p>
+<p><em>Every fact in this document, including the reference appendices, was verified
+directly against the codebase at the time of writing (not reconstructed from
+memory or prior documentation). Section 18 documents where the current build
+diverges from the original design specification — honestly, both where the
+build fell short and where it went further.</em></p>
+<hr />
 <h2 id="1-executive-summary">1. Executive Summary</h2>
 <p>Verdikt is an AI-assisted, multi-agent DAST (Dynamic Application Security
 Testing) platform that performs manual-assessment-quality web, API, and
@@ -93,6 +102,14 @@ path for every issue. One target type in that DAG — an analyst-configured
 same scan run covers four fundamentally different surfaces in one pass:
 traditional multi-page web applications, JavaScript SPAs, JSON/REST APIs,
 and LLM-backed chatbots.</p>
+<p>A second, genuinely different scan mode (<code>ScanRun.mode="autonomous_ai"</code>,
+§5.6) sits alongside that deterministic DAG rather than replacing it: a
+real LLM, given actual shell tool-calling inside an isolated, network-
+restricted sandbox, decides for itself turn by turn what to investigate —
+live-verified to find real, evidence-backed Critical/High findings
+(SQL injection auth bypass, IDOR, OS command injection, reflected/stored/
+DOM XSS, CSRF) against both a public internet target and a systematic
+24-session sweep of DVWA.</p>
 <p>The system is explicitly designed so <strong>no single AI vendor is
 load-bearing</strong>. Every LLM-dependent agent talks to a pluggable <code>AIProviderAdapter</code>
 interface — Claude, OpenAI, Gemini, Grok, or any self-hosted/in-house model
@@ -104,15 +121,17 @@ configuration, is substitute a same-family sibling of that one configured
 model for a small number of specific tasks whose volume or complexity
 profile differs sharply from the rest of the scan (§6.2) — this is
 zero-configuration model tiering, not per-agent routing an analyst sets up.</p>
-<p><strong>Current state, verified against the running codebase:</strong> 57 files under
+<p><strong>Current state, verified against the running codebase:</strong> 61 files under
 <code>app/agents/</code> (35 of them graph nodes, the rest shared infrastructure and
-support modules), 32 API route modules, 36 persisted data models, 10
-external integrations, 22 YAML check catalogs (47 statically defined check
-IDs, plus a further dozen dynamically-generated ones), 39 Alembic
-migrations, 21 RBAC resources, and a backend test suite of <strong>126 files /
-721 collected tests</strong> — all figures confirmed by direct inspection and by
-running the test collector, not estimated. Full reference tables for every
-one of these are in the appendices (§13–§24).</p>
+support modules, including the autonomous-pentest mode's own runner/
+reaper/sandbox-client trio, §5.6), 33 API route modules, 37 persisted data
+models (§15, including <code>PentestCommand</code>), 10 external integrations, 22
+YAML check catalogs (47 statically defined check IDs, plus a further dozen
+dynamically-generated ones), 40 Alembic migrations, 22 RBAC resources
+(§21, including <code>autonomous_pentest</code>), and a backend test suite of
+<strong>129 files / 832 passing tests</strong> — all figures confirmed by direct
+inspection and by running the test suite, not estimated. Full reference
+tables for every one of these are in the appendices (§13–§24).</p>
 <hr />
 <h2 id="2-the-problem">2. The Problem</h2>
 <p>Manual web/API penetration testing is thorough but doesn't scale: a
@@ -229,7 +248,7 @@ the test suite runs against ephemeral SQLite with zero external services
 Postgres, not by the unit suite).</p>
 <p><strong>Frontend:</strong> Vite + React + TypeScript, TanStack Query for server state,
 React Router, Tailwind CSS. A hand-written typed fetch client
-(<code>src/api/client.ts</code>, 28 namespaced sub-objects, 67 exported types in
+(<code>src/api/client.ts</code>, 29 namespaced sub-objects, 71 exported types in
 <code>src/api/types.ts</code>) mirrors the backend's Pydantic schemas.</p>
 <p><strong>Agent orchestration:</strong> LangGraph builds a 35-node directed graph per scan
 run, with genuine parallel fan-out where checks don't depend on each other
@@ -607,6 +626,206 @@ single shared implementation (explicit <code>domain</code> + <code>path="/"</cod
 did), covered by a regression test that verifies against real Playwright
 behavior.</p>
 <hr />
+<h3 id="56-a-second-execution-mode-ai-driven-autonomous-pentest">5.6 A Second Execution Mode: AI-Driven Autonomous Pentest</h3>
+<p>The 35-node DAG above (§5.1) is <strong>deterministic</strong> — every node always
+runs, each one testing exactly what it was coded to test. <code>ScanRun.mode</code>
+(<code>"deterministic"</code> default, or <code>"autonomous_ai"</code>) adds a genuinely
+different second mode built directly in response to user feedback on an
+early version of this platform: a real LLM, given actual shell tool-calling
+inside an isolated sandbox, decides turn by turn what to investigate —
+the way a human penetration tester would, not a fixed checklist. It does
+not replace the graph; the two run side by side, and a Version's scan
+history can contain runs of both kinds.</p>
+<p>Deliberately <strong>not</strong> run through <code>app.agents.graph</code>/LangGraph at all —
+<code>app.agents.autonomous_pentest.runner.execute_autonomous_pentest_session</code>
+is its own module, for the same reason <code>_run_chain_analysis</code> (§5.1)
+already runs outside the graph: an open-ended, variable-length,
+non-deterministic sequence of model-chosen steps doesn't fit a DAG's join
+semantics.</p>
+<h4 id="561-sandbox-isolation">5.6.1 Sandbox isolation</h4>
+<pre class="mermaid">
+flowchart TB
+    subgraph Main["Main backend<br/>(large dependency surface;<br/>parses untrusted target responses)"]
+        API["POST /versions/{id}/<br/>autonomous-pentest-sessions"]
+        RUNNER["autonomous_pentest.runner<br/>(the turn-by-turn loop)"]
+    end
+    subgraph Sidecar["sandbox-runner sidecar<br/>(small, separately auditable service)"]
+        SR["Docker socket lives HERE only —<br/>never in the main backend"]
+    end
+    subgraph Session["One ephemeral container per session"]
+        SB["pentest-tools image<br/>curl, nmap, sqlmap, nikto, ffuf<br/>NET_ADMIN only — nothing else privileged"]
+    end
+    API --> RUNNER
+    RUNNER -->|"Authorization: Bearer<br/>shared secret"| SR
+    SR -->|"create / exec / destroy"| SB
+    SB -->|"iptables egress<br/>allow-list only"| TARGET["Authorized target host(s)"]
+</pre>
+<p>Docker-socket access is effectively host-root-equivalent (trivially
+launches a container with <code>-v /:/host</code> and chroots into the host). The
+main backend already has the largest dependency surface in the system and
+directly parses untrusted target HTTP responses; if it were ever
+compromised — a dependency CVE, or a prompt-injection payload in a
+scanned response tricking the model into misusing its own tool access —
+granting it Docker-socket power would be a categorically bigger blast
+radius than "a compromised ephemeral sandbox," which is <em>supposed</em> to run
+attacker-adjacent commands against a target. <code>sandbox-runner</code> does exactly
+three things (create a session container, exec into it, destroy it) —
+small enough to actually audit, unlike the alternative.</p>
+<p>A shared-secret <code>Authorization: Bearer</code> key protects every call from the
+main backend to <code>sandbox-runner</code> — a real gap closed during hardening,
+not present from the start: an unauthenticated internal API in front of a
+Docker-socket-holding service means "reachable on the compose network" is
+the entire access control.</p>
+<h4 id="562-network-layer-scope-enforcement-not-an-http-proxy">5.6.2 Network-layer scope enforcement — not an HTTP proxy</h4>
+<p>An <code>HTTP_PROXY</code>/<code>HTTPS_PROXY</code> allow-list only constrains tools that honor
+it; <code>nmap -sS</code> and raw sockets bypass it entirely. Enforcement instead
+happens at the network layer: each session container gets its own Docker
+bridge network, and immediately after start, <code>sandbox-runner</code> applies an
+iptables ruleset inside that container's own netns — default-deny on the
+<code>OUTPUT</code> chain, explicit <code>ACCEPT</code> only for the session's resolved
+allow-list (derived from the Version's in-scope <code>ScopeEntry</code> rows,
+<code>purpose="target"</code> only — a <code>purpose="login_only"</code> third-party IdP host
+never becomes a pentest target, the same distinction §5.5 already makes
+for the deterministic crawl), and explicit <code>DROP</code> rules ahead of the
+default for cloud-metadata (<code>169.254.169.254</code>) and sibling compose
+services regardless of what the allow-list says.</p>
+<p><strong>Live-verified, not just designed</strong>: from inside a running session's own
+container, both <code>curl</code> and a raw <code>nmap</code> SYN scan against a second,
+non-allow-listed target on the same host (different port) were blocked at
+the network layer — confirmed again in an adversarial pass where the
+model itself was explicitly instructed to try reaching the out-of-scope
+host, with the same result.</p>
+<h4 id="563-the-agentic-loop-and-multi-provider-tool-calling">5.6.3 The agentic loop and multi-provider tool-calling</h4>
+<p>The loop (<code>_run_agentic_loop</code>) gives the model two tools —
+<code>shell_exec(command, timeout_seconds)</code> and a path-restricted
+<code>read_file(path)</code> for the sandbox's own scratch space — and three
+independent hard caps, any one of which stops the session cleanly:
+<code>autonomous_pentest_max_turns</code> (default 30), a wall-clock deadline
+(default 600s), and the existing <code>BudgetGuard</code> <code>$</code> cap (§6.1), reused
+as-is.</p>
+<p>This required extending the AI provider layer (§6) with genuine multi-turn
+tool-calling (<code>complete_with_tools</code>) — every existing call site up to this
+point (every triage/verdict call throughout §5) is single-turn text
+completion. Each provider's tool-calling wire format is a real, distinct
+shape, not a shared convention: Claude nests <code>tool_use</code>/<code>tool_result</code> as
+content blocks inside a handful of user/assistant messages; OpenAI (and
+therefore the OpenAI-compatible/Grok path) sends one separate
+<code>role: "tool"</code> message per result; Gemini uses <code>role: "model"</code> carrying
+<code>functionCall</code> parts and <code>role: "user"</code> carrying <code>functionResponse</code> parts
+back, with no dedicated tool/function role in its real v1beta REST API at
+all (verified directly against Google's own reference before writing any
+code — a wrong guess here would have shipped silently broken). All three
+translations live inside their own adapter; the loop itself stays
+provider-agnostic. This means every one of the six adapters in §6 —
+including Gemini and Grok, previously single-turn-only — now supports the
+autonomous pentest mode with zero changes to the loop itself.</p>
+<h4 id="564-evidence-payload-highlighting-and-independent-screenshot-proof">5.6.4 Evidence, payload highlighting, and independent screenshot proof</h4>
+<p>A finding the model proposes is required to include the literal
+<code>request_raw</code> and <code>response_raw</code> that prove it — not a paraphrase — and a
+proposal missing either fails to parse and is never persisted, the same
+"never guess a Finding into existence" discipline §5.3 already applies to
+every deterministic check. The proposal also carries an optional
+<code>payload</code> (the exact substring to highlight — populating the <em>same</em>
+<code>Evidence.payload</code> column and <code>find_highlight_match</code> machinery §9 already
+uses for deterministic findings, so highlighting needed zero new
+rendering code anywhere).</p>
+<p>For a GET-reachable reflected or DOM-based XSS specifically, the model can
+supply <code>poc_url</code>/<code>poc_param</code> instead of a working payload of its own; the
+harness then reuses <code>app.agents.xss_browser_proof.attempt_browser_proof</code>
+— the exact same, already-proven mechanism the deterministic <code>xss</code> check
+(§5) uses — to independently reload the page in a real headless browser
+with its own known-reliable execution payloads and capture a real
+screenshot. The model only has to correctly identify <em>where</em> the
+injection point is.</p>
+<h4 id="565-live-results">5.6.5 Live results</h4>
+<p>Real, unscripted sessions run during development, not curated demos:</p>
+<table>
+<thead>
+<tr>
+<th>Severity</th>
+<th>Finding</th>
+<th>Target</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Critical</td>
+<td>SQL injection auth bypass (<code>admin' OR '1'='1</code>)</td>
+<td>demo.testfire.net (public internet target)</td>
+</tr>
+<tr>
+<td>Critical</td>
+<td>IDOR — fund transfer to an unowned account</td>
+<td>demo.testfire.net</td>
+</tr>
+<tr>
+<td>High</td>
+<td>Reflected XSS, independently screenshot-verified</td>
+<td>demo.testfire.net</td>
+</tr>
+<tr>
+<td>Critical</td>
+<td>Blind SQL injection (low <strong>and</strong> high DVWA security)</td>
+<td>DVWA</td>
+</tr>
+<tr>
+<td>Critical</td>
+<td>OS command injection via a newline filter bypass (high security)</td>
+<td>DVWA</td>
+</tr>
+<tr>
+<td>High</td>
+<td>Reflected / stored / DOM-based XSS</td>
+<td>DVWA</td>
+</tr>
+<tr>
+<td>High</td>
+<td>CSRF on the password-change form (low security)</td>
+<td>DVWA</td>
+</tr>
+</tbody>
+</table>
+<p>The DVWA results came from a systematic 24-session sweep — one focused
+session per vulnerability category, at both DVWA's "low" and "high"
+security levels — run specifically to answer a reliability question, not
+to showcase successes.</p>
+<h4 id="566-an-honest-reliability-finding">5.6.6 An honest reliability finding</h4>
+<p>The sweep's own transcripts revealed the dominant cause of a category
+coming back with zero findings: <strong>most never reached the vulnerability at
+all</strong> — they exhausted their entire turn budget failing DVWA's login.
+DVWA requires extracting a fresh CSRF token from the login form and
+reusing it, matched to the same session cookie, in an immediate follow-up
+POST; every session got identical instructions for this, and it succeeded
+in some and failed in others — non-determinism in how carefully an LLM
+executes a fragile, stateful, multi-step curl sequence, not a difference
+in investigative ability once actually authenticated. Even where login
+succeeded, the same category/level combination found a real vulnerability
+in one independent run and nothing in another — inherent to an
+LLM-driven investigation, which is not exhaustive the way the
+deterministic graph is.</p>
+<p><strong>The identified fix, not yet built</strong>: pre-authenticate the sandbox using
+the existing, already-proven <code>SessionManager</code>/Playwright login mechanism
+(§5, the same one the deterministic checks use via <code>CredentialSet</code>)
+<em>before</em> the model's own turn budget starts, handing it a ready-made
+cookie jar instead of asking it to re-derive a fragile login sequence
+from scratch every session. This is the single highest-leverage remaining
+gap in this mode's reliability — see §23.</p>
+<h4 id="567-consent-scope-and-audit">5.6.7 Consent, scope, and audit</h4>
+<p><code>POST /versions/{id}/autonomous-pentest-sessions</code> requires a
+<code>confirmation_text</code> field matching a server-provided phrase that names
+the real, resolved target host(s) — a stronger version of the ordinary
+delete-confirmation pattern used elsewhere, justified because this is the
+one action in the platform that runs live exploitation tooling with real
+side effects against a real target, not an accidental probe side effect.
+<code>autonomous_pentest</code> is the 22nd RBAC resource (§21), seeded narrower than
+every other resource by default: only <code>org_admin</code> gets <code>create</code>, where
+every other resource's default grant reaches <code>project_lead</code> or wider.
+Every command the model runs is persisted as an immutable
+<code>PentestCommand</code> row (§15) — sequence number, exact command, full
+stdout/stderr, exit code, and the model's own stated rationale — the
+full, queryable chain-of-custody transcript shown live in the app's own
+Pentest Transcript tab (§22) while the session is still running.</p>
+<hr />
 <h2 id="6-ai-provider-abstraction-any-llm-configured-once">6. AI Provider Abstraction — Any LLM, Configured Once</h2>
 <p>Every LLM-dependent agent goes through one interface
 (<code>app.ai.adapters.base.AIProviderAdapter</code>), and which real model answers is
@@ -634,6 +853,10 @@ when <code>AI_PROVIDER=fake</code>, the framework's own default). Only Claude, O
 and <code>custom</code> are reachable as the deployment-wide <code>.env</code> default —
 <strong>Gemini and Grok are only reachable through a per-org <code>AIProviderConfig</code>
 in the UI</strong>, never via <code>.env</code>.</p>
+<p>Every adapter also implements <code>complete_with_tools</code> — genuine multi-turn
+tool-calling, added specifically for the AI-driven autonomous pentest mode
+(§5.6.3), alongside the single-turn <code>complete()</code> every triage/verdict call
+site above already used and still uses unchanged.</p>
 <p><strong>Configuration is entirely UI-driven</strong> for the per-org path: from the
 Account page, an org registers an <code>AIProviderConfig</code> and marks it
 "Default" (<code>is_default</code>, at most one per org, enforced by a database
@@ -700,7 +923,7 @@ at all — a custom/self-hosted gateway included) gets exactly today's
 single-model behavior for every tier, automatically and silently, never an
 error.</p>
 <p>This is the <strong>second</strong> attempt at task-aware model selection in this
-codebase's history, and the first one that stuck — see §18, item 17 for
+codebase's history, and the first one that stuck — see §18, item 18 for
 why the first attempt (<code>app.ai.model_routing</code>, migrations
 <code>0029_ai_provider_config_model_tiers</code> / <code>0032_drop_ai_provider_model_tiers</code>)
 was built and then deliberately reverted, and what's structurally
@@ -722,7 +945,15 @@ By category:</p>
   survives into an export without the standard leading-quote/tab/CR
   mitigation — a real finding, not a guess: the agent best-effort probes
   for an actual export endpoint and is honest in the write-up when it
-  can't find one)</li>
+  can't find one). Every one of these probes runs against all four
+  injection-point shapes a real target exposes — a query-string
+  parameter, a <code>&lt;form&gt;</code> field, a JSON request body field (a
+  client-rendered SPA's own API calls, discovered from imported
+  traffic), and a numeric REST path segment (<code>/rest/products/{id}</code>,
+  reusing the same id-detection <code>app.agents.idor</code> already uses for
+  IDOR) — closing a real gap where a SPA's real vulnerable surface
+  (Juice Shop's own login/product endpoints) was invisible to
+  query/form-only probing.</li>
 <li><strong>Broken access control</strong> — IDOR, vertical/horizontal privilege
   escalation</li>
 <li><strong>Session &amp; auth failures</strong> — JWT alg-none/alg-confusion/weak-secret,
@@ -1006,10 +1237,12 @@ flowchart TB
             DB[("db<br/>postgres:16-alpine<br/>named volume: verdikt_pgdata<br/>host port 5433 (avoids native-Postgres collision)")]
             BE["backend<br/>python:3.12-slim + Playwright/Chromium<br/>+ Xvfb/x11vnc/fluxbox/novnc<br/>(installed at BUILD time)<br/>runs `alembic upgrade head`<br/>then uvicorn --loop asyncio"]
             FEC["frontend<br/>node:22-slim, real Vite dev server<br/>npm run dev -- --host 0.0.0.0"]
+            SR["sandbox-runner<br/>holds the Docker socket (§5.6.1)<br/>no published host port —<br/>internal compose network only"]
         end
         Browser["Browser<br/>localhost:5173"]
     end
     BE -->|"db:5432"| DB
+    BE -->|"Bearer-authenticated<br/>internal HTTP"| SR
     Browser -->|"HTTP"| FEC
     Browser -->|"HTTP :8095"| BE
     Browser -->|"VNC-in-iframe<br/>127.0.0.1:6080"| BE
@@ -1053,6 +1286,11 @@ flowchart TB
   an existing engagement was silently unreachable, so every scan against
   them ran to completion and reported zero findings with no visible
   error, not a connection failure.</li>
+<li><code>sandbox-runner</code> (§5.6.1) mounts <code>/var/run/docker.sock</code> — the one
+  genuinely sensitive line in the whole compose file — and dynamically
+  creates/destroys further, ephemeral <code>pentest-tools</code> containers per
+  autonomous-pentest session, not shown as static services in the diagram
+  above since they only exist for a session's lifetime.</li>
 <li>Migrations run automatically on container start (a no-op once already
   current) — a fresh database gets its schema with zero manual steps.</li>
 <li>The backend's build-time virtualenv is protected from the dev bind-mount
@@ -1093,10 +1331,24 @@ backed by <code>GET /browser-extension/download</code>, which zips the source on
 demand so the download is always in sync with the checked-in extension) is
 the practical equivalent: download, <code>chrome://extensions</code> → Developer
 mode → Load unpacked, record, export, upload.</p>
+<p>A saved macro can be re-verified on demand, independent of a full scan,
+via <strong>Replay</strong> (<code>POST /credentials/{id}/macros/{macro_id}/replay</code>, one
+button per saved macro in the Credentials tab's macro-management list):
+headlessly replays that exact recording against the real target and
+reports a genuine pass/fail verdict. This is also where the real audit
+signal for "did the application actually accept this login" lives —
+<code>MacroPlayer.replay()</code> doesn't trust "some cookie came back" alone (many
+apps set a session/CSRF cookie on the login page itself, before
+credentials are even checked); it also reports whether a <em>visible</em>
+password field is still present on the page the macro ended on and the
+final navigation's HTTP status. <code>SessionManager._login_via_macro</code> treats
+a still-visible password field as a failed login regardless of cookies —
+the same stronger check applies to every real scan's own macro-based
+login, not just the interactive Replay button.</p>
 <hr />
 <h2 id="14-testing-quality-discipline">14. Testing &amp; Quality Discipline</h2>
 <ul>
-<li><strong>126 test files, 721 collected tests</strong> — confirmed by running
+<li><strong>124 test files, 756 collected tests</strong> — confirmed by running
   <code>pytest --collect-only</code>, not estimated.</li>
 <li>Real fixtures over mocks wherever practically possible: real local HTTP
   servers standing in for a target application, a real headless browser
@@ -1219,6 +1471,11 @@ mode → Load unpacked, record, export, upload.</p>
 <td><code>name</code> (unique)</td>
 </tr>
 <tr>
+<td><code>PentestCommand</code></td>
+<td><code>pentest_commands</code></td>
+<td><code>agent_job_id</code>→agent_jobs <strong>CASCADE</strong>, <code>sequence_number</code>, <code>tool_name</code>, <code>command</code>, <code>stdout</code>/<code>stderr</code>, <code>exit_code</code>, <code>scope_decision</code> (<code>"allowed"</code>/<code>"blocked"</code>/<code>"unknown"</code> — §5.6), <code>model_rationale</code></td>
+</tr>
+<tr>
 <td><code>User</code></td>
 <td><code>users</code></td>
 <td><code>org_id</code>, <code>email</code> (unique), <code>hashed_password</code>, <code>role</code>, <code>is_active</code>, <code>oidc_subject</code>, <code>invite_token</code></td>
@@ -1261,7 +1518,7 @@ mode → Load unpacked, record, export, upload.</p>
 <tr>
 <td><code>ScanRun</code></td>
 <td><code>scan_runs</code></td>
-<td><code>version_id</code>, <code>status</code>, <code>requested_by</code>, <code>error</code>, <code>warning</code>, <code>llm_cost_usd</code> (Numeric 10,4), <code>executive_summary</code>, <code>ai_provider_config_id</code> (nullable), <code>tech_stack_fingerprint</code> (JSON)</td>
+<td><code>version_id</code>, <code>status</code>, <code>mode</code> (<code>"deterministic"</code> default or <code>"autonomous_ai"</code> — §5.6), <code>requested_by</code>, <code>error</code>, <code>warning</code>, <code>llm_cost_usd</code> (Numeric 10,4), <code>executive_summary</code>, <code>ai_provider_config_id</code> (nullable), <code>tech_stack_fingerprint</code> (JSON)</td>
 </tr>
 <tr>
 <td><code>AgentJob</code></td>
@@ -1313,7 +1570,7 @@ mode → Load unpacked, record, export, upload.</p>
 <p><strong><code>AuthorizationRecord</code>, referenced in the original design's guardrail #1,
 does not exist in the current model set</strong> — confirmed removed (§18).</p>
 <hr />
-<h2 id="16-appendix-full-api-route-reference-32-modules">16. Appendix — Full API Route Reference (32 modules)</h2>
+<h2 id="16-appendix-full-api-route-reference-33-modules">16. Appendix — Full API Route Reference (33 modules)</h2>
 <table>
 <thead>
 <tr>
@@ -1337,6 +1594,10 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 <tr>
 <td><code>auth.py</code></td>
 <td><code>POST /auth/register</code>, <code>POST /auth/login</code>, <code>GET /auth/me</code></td>
+</tr>
+<tr>
+<td><code>autonomous_pentest.py</code></td>
+<td><code>GET /versions/{id}/autonomous-pentest-sessions/confirmation-phrase</code>, <code>POST /versions/{id}/autonomous-pentest-sessions</code> (§5.6.7 — typed consent required), <code>GET /scan-runs/{id}/pentest-commands</code></td>
 </tr>
 <tr>
 <td><code>browser_extension.py</code></td>
@@ -1364,7 +1625,7 @@ does not exist in the current model set</strong> — confirmed removed (§18).</
 </tr>
 <tr>
 <td><code>credentials.py</code></td>
-<td><code>POST /credentials</code> (accepts <code>extra_cookies</code>/<code>extra_headers</code>), <code>GET /credentials</code>, <code>PATCH /credentials/{id}</code>, <code>DELETE /credentials/{id}</code>, <code>POST /credentials/{id}/test-login</code>, <code>POST /credentials/{id}/record-macro/start</code>, <code>POST /credentials/{id}/record-macro/{recording_id}/finish</code>, <code>POST /credentials/{id}/record-macro/{recording_id}/cancel</code>, <code>GET /credentials/{id}/macros</code>, <code>DELETE /credentials/{id}/macros/{macro_id}</code></td>
+<td><code>POST /credentials</code> (accepts <code>extra_cookies</code>/<code>extra_headers</code>), <code>GET /credentials</code>, <code>PATCH /credentials/{id}</code>, <code>DELETE /credentials/{id}</code>, <code>POST /credentials/{id}/test-login</code>, <code>POST /credentials/{id}/record-macro/start</code>, <code>POST /credentials/{id}/record-macro/{recording_id}/finish</code>, <code>POST /credentials/{id}/record-macro/{recording_id}/cancel</code>, <code>GET /credentials/{id}/macros</code>, <code>DELETE /credentials/{id}/macros/{macro_id}</code>, <code>POST /credentials/{id}/macros/{macro_id}/replay</code></td>
 </tr>
 <tr>
 <td><code>dashboard.py</code></td>
@@ -1622,6 +1883,14 @@ decisions diverged from the original design, in both directions.</p>
     spec's own check list</strong> — Weak Password Policy, CSV/Formula Injection,
     Known Vulnerable Components, and a hardened rebuild of Failure to
     Invalidate Session on Logout (§5.1, §7).</li>
+<li><strong>The entire AI-driven autonomous pentest mode (§5.6)</strong> — not in the
+    spec at all, in any form. The spec's own AI usage model was triage
+    only: a deterministic probe runs, an LLM confirms or rejects the
+    verdict. §5.6 is a second, genuinely different execution mode built
+    directly in response to direct user feedback partway through this
+    project rejecting that architecture — a real LLM with actual shell
+    tool-calling inside an isolated sandbox, deciding for itself what to
+    investigate, not triaging something already decided for it.</li>
 </ol>
 <p><strong>Matches the spec closely:</strong></p>
 <ol>
@@ -1738,7 +2007,7 @@ above already produced, for a fixed set of call sites in <code>graph.py</code> /
 <code>runner.py</code> / <code>scans.py</code>. There is nothing here for an operator or analyst
 to configure.</p>
 <hr />
-<h2 id="20-appendix-migration-history-39-files-one-linear-chain">20. Appendix — Migration History (39 files, one linear chain)</h2>
+<h2 id="20-appendix-migration-history-40-files-one-linear-chain">20. Appendix — Migration History (40 files, one linear chain)</h2>
 <p><code>0001_initial_schema</code> → <code>0001b_widen_alembic_version_column</code> (widens
 <code>alembic_version.version_num</code> for this project's long revision slugs) →
 <code>0002_scan_findings_and_permissions</code> → <code>0003_phase2_review_candidates_and_login_config</code>
@@ -1760,7 +2029,9 @@ to configure.</p>
 <code>0031_drop_spark_specific_columns</code> → <code>0032_drop_ai_provider_model_tiers</code> →
 <code>0033_vgs_auto_seed_finding_memory</code> → <code>0034_scope_entry_purpose</code> →
 <code>0035_evidence_payload</code> → <code>0036_chatbot_targets</code> →
-<code>0037_chatbot_agency_probes</code> → <code>0038_credential_extra_headers</code>.</p>
+<code>0037_chatbot_agency_probes</code> → <code>0038_credential_extra_headers</code> →
+<code>0039_autonomous_pentest</code> (adds <code>scan_runs.mode</code>, the <code>pentest_commands</code>
+table, and seeds the <code>autonomous_pentest</code> RBAC resource — §5.6, §15, §21).</p>
 <p>Two of these pairs are worth reading together, not in isolation: <code>0024</code>
 added columns for a since-removed, org-specific internal LLM gateway
 integration (never a general-purpose feature, and out of scope once that
@@ -1770,7 +2041,7 @@ route different agents to different models); <code>0032</code> drops it, in favo
 the single-configured-model design described in §1/§6 — real functionality
 that shipped, was used, and was deliberately simplified back out once it
 proved to be complexity without enough benefit, not a mistake papered over
-(§6.2/§18 item 17 covers the second, schema-free attempt that replaced it).
+(§6.2/§18 item 18 covers the second, schema-free attempt that replaced it).
 <code>0033</code> tracks a persistent <code>auto_seeded_finding_ids</code> column on
 <code>VgsReportDraft</code> (§10) that records every <code>Finding.id</code> an auto-seed pass
 has ever offered a report draft, independent of whether the resulting
@@ -1786,14 +2057,15 @@ seed needed in <code>0037</code> since it's a sub-resource of <code>chatbot_targ
 nullable.</p>
 <hr />
 <h2 id="21-appendix-rbac-matrix">21. Appendix — RBAC Matrix</h2>
-<p><strong>21 resources</strong>: <code>organization</code>, <code>project</code>, <code>version</code>, <code>target</code>,
+<p><strong>22 resources</strong>: <code>organization</code>, <code>project</code>, <code>version</code>, <code>target</code>,
 <code>credential</code>, <code>traffic</code>, <code>scan</code>, <code>finding</code>, <code>review_candidate</code>, <code>business_rule</code>,
 <code>ai_provider_config</code>, <code>oidc_provider_config</code>, <code>notification_config</code>,
 <code>ticketing_config</code>, <code>cmdb_config</code>, <code>vgs_config</code>, <code>user</code>, <code>org_branding</code>,
-<code>saml_config</code>, <code>vgs_vulnerability</code>, <code>chatbot_target</code> — each with
-<code>create</code>/<code>read</code>/<code>update</code>/<code>delete</code>. <code>chatbot_agency_probe</code> rows are a
-sub-resource of <code>chatbot_target</code> (same pattern <code>VgsEvidenceStep</code> uses for
-<code>vgs_vulnerability</code>) — no separate resource.</p>
+<code>saml_config</code>, <code>vgs_vulnerability</code>, <code>chatbot_target</code>, <code>autonomous_pentest</code>
+(§5.6.7) — each with <code>create</code>/<code>read</code>/<code>update</code>/<code>delete</code>.
+<code>chatbot_agency_probe</code> rows are a sub-resource of <code>chatbot_target</code> (same
+pattern <code>VgsEvidenceStep</code> uses for <code>vgs_vulnerability</code>) — no separate
+resource.</p>
 <table>
 <thead>
 <tr>
@@ -1804,11 +2076,11 @@ sub-resource of <code>chatbot_target</code> (same pattern <code>VgsEvidenceStep<
 <tbody>
 <tr>
 <td><code>org_admin</code></td>
-<td>Full CRUD on all 21 resources</td>
+<td>Full CRUD on all 22 resources</td>
 </tr>
 <tr>
 <td><code>project_lead</code></td>
-<td>Full CRUD on engagement resources; read-only on <code>organization</code>; no access to <code>user</code> management</td>
+<td>Full CRUD on engagement resources; read-only on <code>organization</code>; read-only on <code>autonomous_pentest</code> (no <code>create</code> — see below); no access to <code>user</code> management</td>
 </tr>
 <tr>
 <td><code>analyst</code></td>
@@ -1820,38 +2092,51 @@ sub-resource of <code>chatbot_target</code> (same pattern <code>VgsEvidenceStep<
 </tr>
 </tbody>
 </table>
+<p><strong><code>autonomous_pentest</code> is seeded narrower than every other resource</strong> —
+only <code>org_admin</code> gets <code>create</code>, deliberately: this is the one action in
+the platform that runs live exploitation tooling with real side effects
+against a real target (§5.6.7), and it starts more restricted than
+<code>scan:create</code> on purpose, widening later is purely a data change
+(<code>RolePermission</code> insert) if that turns out to be too narrow in practice.</p>
 <hr />
 <h2 id="22-appendix-frontend-route-page-map">22. Appendix — Frontend Route &amp; Page Map</h2>
-<div class="codehilite"><pre><span></span><code><span class="o">/</span><span class="n">login</span><span class="p">,</span><span class="w"> </span><span class="o">/</span><span class="n">register</span><span class="p">,</span><span class="w"> </span><span class="o">/</span><span class="n">accept</span><span class="o">-</span><span class="n">invite</span><span class="p">,</span><span class="w"> </span><span class="o">/</span><span class="n">oidc</span><span class="o">-</span><span class="n">callback</span><span class="w">   </span><span class="p">(</span><span class="n">public</span><span class="p">)</span>
-<span class="n">Protected</span><span class="w"> </span><span class="p">(</span><span class="n">behind</span><span class="w"> </span><span class="n">Layout</span><span class="p">)</span><span class="o">:</span>
-<span class="w">  </span><span class="o">/</span><span class="w">                          </span><span class="err">→</span><span class="w"> </span><span class="n">ProjectsPage</span>
-<span class="w">  </span><span class="o">/</span><span class="n">dashboard</span><span class="w">                 </span><span class="err">→</span><span class="w"> </span><span class="n">DashboardPage</span>
-<span class="w">  </span><span class="o">/</span><span class="n">projects</span><span class="o">/:</span><span class="n">projectId</span><span class="w">       </span><span class="err">→</span><span class="w"> </span><span class="n">ProjectDetailPage</span>
-<span class="w">  </span><span class="o">/</span><span class="n">versions</span><span class="o">/:</span><span class="n">versionId</span><span class="w">       </span><span class="err">→</span><span class="w"> </span><span class="n">VersionDetailPage</span>
-<span class="w">  </span><span class="o">/</span><span class="n">scan</span><span class="o">-</span><span class="n">runs</span><span class="o">/:</span><span class="n">scanRunId</span><span class="w">      </span><span class="err">→</span><span class="w"> </span><span class="n">ScanRunDetailPage</span>
-<span class="w">  </span><span class="o">/</span><span class="n">vgs</span><span class="w">                       </span><span class="err">→</span><span class="w"> </span><span class="n">VgsLandingPage</span>
-<span class="w">  </span><span class="o">/</span><span class="n">vgs</span><span class="o">/:</span><span class="n">versionId</span><span class="w">            </span><span class="err">→</span><span class="w"> </span><span class="n">VgsWorkspacePage</span>
-<span class="w">  </span><span class="o">/</span><span class="n">account</span><span class="w">                   </span><span class="err">→</span><span class="w"> </span><span class="n">AccountPage</span>
-</code></pre></div>
+<pre><code>/login, /register, /accept-invite, /oidc-callback   (public)
+Protected (behind Layout):
+  /                          → ProjectsPage
+  /dashboard                 → DashboardPage
+  /projects/:projectId       → ProjectDetailPage
+  /versions/:versionId       → VersionDetailPage
+  /scan-runs/:scanRunId      → ScanRunDetailPage
+  /vgs                       → VgsLandingPage
+  /vgs/:versionId            → VgsWorkspacePage
+  /account                   → AccountPage
+</code></pre>
 <ul>
 <li><strong>Account page sections</strong> (own file each): Branding, CMDB Configs,
   Notification Configs, SAML Configs, Ticketing Configs, Users, VGS
   Configs. (AI Provider Configs remains inline in <code>AccountPage.tsx</code>.)</li>
 <li><strong>Scan Run detail tabs</strong>: Agent Jobs, Diff, Findings, Reports, Review
-  Candidates, Site Map, Ticket.</li>
+  Candidates, Site Map, Ticket — plus a <strong>Pentest Transcript</strong> tab shown
+  instead of Site Map/Diff/Review Candidates for a <code>mode="autonomous_ai"</code>
+  run (§5.6), live-polling <code>GET /scan-runs/{id}/pentest-commands</code> the same
+  way the rest of the app already polls a running scan's status, not a
+  new push-update mechanism.</li>
 <li><strong>Version detail tabs</strong>: Burp, Business Rules, Chatbot Targets,
-  Credentials, Macro Recording, Scan Runs, Scope, Targets, Traffic — plus
+  Credentials, Macro Recording, Scan Runs, Scope, Targets, Traffic — the
+  Scan Runs tab has both a "Start new scan" and a "Start AI-driven
+  pentest" action (§5.6.7), behind separate RBAC checks — plus
   dedicated business-rule sub-forms (Credential Select, HTTP Method
   Select, Price/Quantity Tampering, Race Condition, Resource Isolation,
   Workflow Order), a nested Agency Probes section under each chatbot
   target (§4/§7), and VGS report sub-tabs (Evidence, Generate, Project
   Info, Vulnerabilities).</li>
-<li><strong>API client</strong>: <code>src/api/client.ts</code> exposes 28 namespaced sub-objects
+<li><strong>API client</strong>: <code>src/api/client.ts</code> exposes 29 namespaced sub-objects
   (auth, organizations, projects, users, versions, targets, credentials,
   businessRules, scanRuns, retestJobs, reviewCandidates, apiKeys,
   aiProviderConfigs, traffic, burp, notificationConfigs, ticketingConfigs,
   findingTickets, cmdbConfigs, vgsConfigs, samlConfigs, orgBranding,
   attackChains, oidcProviderConfigs, chatbotTargets, chatbotAgencyProbes,
+  autonomousPentest (§5.6.7),
   among others); <code>src/api/types.ts</code> defines 67 exported types.</li>
 </ul>
 <hr />
@@ -1864,7 +2149,7 @@ sub-resource of <code>chatbot_target</code> (same pattern <code>VgsEvidenceStep<
 <li>A depth/intensity profile (Quick/Standard/Deep) as a scan-trigger option.</li>
 <li>Extending <code>app.ai.model_tiers</code>'s family table to Gemini once Google's
   3.x naming settles past the October 2026 retirement of the 2.5 line
-  (§6.2, §18 item 17) — deliberately deferred rather than shipping a
+  (§6.2, §18 item 18) — deliberately deferred rather than shipping a
   guessed model id.</li>
 <li>A more sophisticated file-upload bypass technique (JPEG polyglot, or
   chaining an accepted upload with a discovered local-file-inclusion
@@ -1879,6 +2164,20 @@ sub-resource of <code>chatbot_target</code> (same pattern <code>VgsEvidenceStep<
 <li>Indirect prompt injection via RAG-corpus poisoning for the Chatbot
   Pentest capability — deferred pending a safe, generic way to plant
   content into an arbitrary target's retrieval corpus.</li>
+<li><strong>Sandbox pre-authentication for the AI-driven pentest mode (§5.6.6)</strong> —
+  the single highest-leverage reliability improvement identified so far:
+  pre-authenticate a session using the existing <code>CredentialSet</code>/
+  <code>SessionManager</code> mechanism before the model's own turn budget starts,
+  removing the dominant cause of a category coming back empty (losing the
+  login sequence itself, not failing to find the vulnerability).</li>
+<li>A one-click "comprehensive scan" mode that automatically fans out into
+  one focused autonomous-pentest session per vulnerability category and
+  aggregates the results — productizing the manual 24-session sweep
+  (§5.6.5) that currently has to be triggered by hand, one session at a
+  time.</li>
+<li>Automated, independent screenshot re-verification (§5.6.4) currently
+  covers GET-reachable reflected/DOM XSS only — extending it to other
+  browser-observable finding classes is a natural follow-up.</li>
 </ul>
 <hr />
 <h2 id="24-frequently-asked-questions">24. Frequently Asked Questions</h2>
@@ -1973,6 +2272,10 @@ for that credential, the header-shaped equivalent of the pre-existing
 an imported Postman/API collection's custom auth header can be saved and
 reused for API scans alongside, not instead of, a normal login flow.</p>
 <hr />
+<p><em>This document reflects the system exactly as implemented, verified
+directly against the codebase. Architecture diagrams are provided
+separately as Mermaid (<code>.mmd</code>) source files, directly importable into
+Miro's Mermaid-import feature.</em></p><hr />
 <p><em>This document reflects the system exactly as implemented, verified
 directly against the codebase. Architecture diagrams are provided
 separately as Mermaid (<code>.mmd</code>) source files, directly importable into

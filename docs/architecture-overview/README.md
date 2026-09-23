@@ -13,28 +13,33 @@ at the time of writing.
   capability — direct prompt injection, hidden-context extraction,
   improper output handling, excessive agency, and unexpected code
   execution against the OWASP LLM Top 10 2026 and Agentic Top 10 2026),
-  the Confirmed-Only Findings pipeline, the pluggable AI provider layer,
-  vulnerability coverage, VGS integration (three modes), enterprise
-  hardening, deployment (Docker + manual + standalone browser extension),
-  and testing discipline — plus full reference appendices (every data
-  model, API route, check ID, config setting, migration, and RBAC
-  resource), a Frequently Asked Questions section, and an honest "spec
-  vs. reality" delta against `docs/BUILD_SPEC.md`. The `.html` version
-  renders its diagrams live via Mermaid; the `.docx` version embeds them
-  as images.
-- **`Verdikt_Presentation.pptx`** — a 23-slide deck covering the same
+  the AI-driven autonomous pentest mode (§5.6 — a second, non-deterministic
+  execution mode with real sandboxed shell tool-calling, independent
+  screenshot proof, and an honest reliability finding from a systematic
+  24-session DVWA sweep), the Confirmed-Only Findings pipeline, the
+  pluggable AI provider layer, vulnerability coverage, VGS integration
+  (three modes), enterprise hardening, deployment (Docker + manual +
+  standalone browser extension), and testing discipline — plus full
+  reference appendices (every data model, API route, check ID, config
+  setting, migration, and RBAC resource), a Frequently Asked Questions
+  section, and an honest "spec vs. reality" delta against
+  `docs/BUILD_SPEC.md`. The `.html` version renders its diagrams live via
+  Mermaid; the `.docx` version embeds them as images.
+- **`Verdikt_Presentation.pptx`** — a 25-slide deck covering the same
   material at presentation depth, including a tech-stack ("app info")
   slide, a "by the numbers" slide, a dedicated "data handling & security"
   slide (multi-tenant isolation, scope enforcement, what does/doesn't
-  leave the org's own infrastructure), an honest spec-vs-reality slide,
-  and a closing FAQ slide.
-- **`diagrams/*.mmd`** — the 6 architecture diagrams as Mermaid source:
+  leave the org's own infrastructure), two slides on the AI-driven
+  autonomous pentest mode (architecture + live results/reliability), an
+  honest spec-vs-reality slide, and a closing FAQ slide.
+- **`diagrams/*.mmd`** — the 7 architecture diagrams as Mermaid source:
   system architecture, data model (ER diagram), the verified 35-node scan
-  DAG, the Confirmed-Only Findings pipeline, AI provider resolution order,
+  DAG, the Confirmed-Only Findings pipeline, the AI-driven autonomous
+  pentest mode's sandbox isolation model, AI provider resolution order,
   and deployment topology. Miro has a native Mermaid-import feature, so
   these can be dropped directly into a board and remain editable — there's
   no separate literal "Miro file format" to export to instead.
-- **`diagrams/*.png`** — the same 6 diagrams pre-rendered at high
+- **`diagrams/*.png`** — the same 7 diagrams pre-rendered at high
   resolution, used to embed them in the `.docx` and `.pptx`.
 
 ## Regenerating

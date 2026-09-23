@@ -1,0 +1,15 @@
+flowchart TB
+    subgraph Main["Main backend<br/>(large dependency surface;<br/>parses untrusted target responses)"]
+        API["POST /versions/{id}/<br/>autonomous-pentest-sessions"]
+        RUNNER["autonomous_pentest.runner<br/>(the turn-by-turn loop)"]
+    end
+    subgraph Sidecar["sandbox-runner sidecar<br/>(small, separately auditable service)"]
+        SR["Docker socket lives HERE only —<br/>never in the main backend"]
+    end
+    subgraph Session["One ephemeral container per session"]
+        SB["pentest-tools image<br/>curl, nmap, sqlmap, nikto, ffuf<br/>NET_ADMIN only — nothing else privileged"]
+    end
+    API --> RUNNER
+    RUNNER -->|"Authorization: Bearer<br/>shared secret"| SR
+    SR -->|"create / exec / destroy"| SB
+    SB -->|"iptables egress<br/>allow-list only"| TARGET["Authorized target host(s)"]
