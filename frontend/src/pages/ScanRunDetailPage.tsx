@@ -9,6 +9,7 @@ import { FindingsTab } from './scanrun/FindingsTab'
 import { ReviewCandidatesTab } from './scanrun/ReviewCandidatesTab'
 import { ReportsTab } from './scanrun/ReportsTab'
 import { DiffTab } from './scanrun/DiffTab'
+import { PentestTranscriptTab } from './scanrun/PentestTranscriptTab'
 
 export function ScanRunDetailPage() {
   const { scanRunId } = useParams<{ scanRunId: string }>()
@@ -30,6 +31,11 @@ export function ScanRunDetailPage() {
       </Link>
       <div className="mb-1 flex items-center gap-3">
         <h1 className="text-2xl font-semibold">Scan Run</h1>
+        {scanRun.mode === 'autonomous_ai' && (
+          <span className="rounded bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-800">
+            AI-driven pentest
+          </span>
+        )}
         <StatusBadge status={scanRun.status} testId="scan-run-status" />
         <span className="font-mono text-xs text-gray-400">{scanRun.id}</span>
       </div>
@@ -40,14 +46,27 @@ export function ScanRunDetailPage() {
       </p>
 
       <Tabs
-        tabs={[
-          { key: 'agent-jobs', label: 'Agent Jobs', content: <AgentJobsTab scanRun={scanRun} /> },
-          { key: 'site-map', label: 'Site Map', content: <SiteMapTab scanRun={scanRun} /> },
-          { key: 'findings', label: 'Findings', content: <FindingsTab scanRunId={scanRunId} /> },
-          { key: 'review-candidates', label: 'Review Candidates', content: <ReviewCandidatesTab scanRunId={scanRunId} /> },
-          { key: 'reports', label: 'Reports', content: <ReportsTab scanRunId={scanRunId} /> },
-          { key: 'diff', label: 'Diff', content: <DiffTab scanRunId={scanRunId} versionId={scanRun.version_id} /> },
-        ]}
+        tabs={
+          scanRun.mode === 'autonomous_ai'
+            ? [
+                // The AI-driven mode's own tool-use transcript replaces
+                // Site Map/Diff/Review Candidates here — those are all
+                // specific to the deterministic agents' own crawl/XSS-
+                // proof pipeline, which this mode never runs.
+                { key: 'transcript', label: 'Pentest Transcript', content: <PentestTranscriptTab scanRun={scanRun} /> },
+                { key: 'agent-jobs', label: 'Agent Jobs', content: <AgentJobsTab scanRun={scanRun} /> },
+                { key: 'findings', label: 'Findings', content: <FindingsTab scanRunId={scanRunId} /> },
+                { key: 'reports', label: 'Reports', content: <ReportsTab scanRunId={scanRunId} /> },
+              ]
+            : [
+                { key: 'agent-jobs', label: 'Agent Jobs', content: <AgentJobsTab scanRun={scanRun} /> },
+                { key: 'site-map', label: 'Site Map', content: <SiteMapTab scanRun={scanRun} /> },
+                { key: 'findings', label: 'Findings', content: <FindingsTab scanRunId={scanRunId} /> },
+                { key: 'review-candidates', label: 'Review Candidates', content: <ReviewCandidatesTab scanRunId={scanRunId} /> },
+                { key: 'reports', label: 'Reports', content: <ReportsTab scanRunId={scanRunId} /> },
+                { key: 'diff', label: 'Diff', content: <DiffTab scanRunId={scanRunId} versionId={scanRun.version_id} /> },
+              ]
+        }
       />
     </div>
   )

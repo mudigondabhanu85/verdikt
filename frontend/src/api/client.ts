@@ -30,6 +30,8 @@ import type {
   ReviewCandidateOut,
   SamlConfigOut,
   SamlIdpMetadataUpload,
+  ConfirmationPhraseOut,
+  PentestCommandOut,
   ScanRunDetail,
   ScanRunDiffOut,
   ScanRunOut,
@@ -422,6 +424,19 @@ export const api = {
       request<ScanRunDiffOut>(`/scan-runs/${laterScanRunId}/diff/${earlierScanRunId}`),
     cancel: (scanRunId: string) => request<ScanRunOut>(`/scan-runs/${scanRunId}/cancel`, { method: 'POST' }),
     delete: (scanRunId: string) => request<void>(`/scan-runs/${scanRunId}`, { method: 'DELETE' }),
+  },
+
+  // The AI-driven autonomous pentest mode (mode="autonomous_ai" on the
+  // same ScanRun/AgentJob shape scanRuns above already uses) — a real
+  // shell/CLI tool-use loop against a network-isolated sandbox, not the
+  // deterministic per-check agents. See backend/app/api/routes/
+  // autonomous_pentest.py.
+  autonomousPentest: {
+    confirmationPhrase: (versionId: string) =>
+      request<ConfirmationPhraseOut>(`/versions/${versionId}/autonomous-pentest-sessions/confirmation-phrase`),
+    create: (versionId: string, body: { confirmation_text: string; objective: string }) =>
+      request<ScanRunOut>(`/versions/${versionId}/autonomous-pentest-sessions`, { method: 'POST', body }),
+    commands: (scanRunId: string) => request<PentestCommandOut[]>(`/scan-runs/${scanRunId}/pentest-commands`),
   },
 
   findings: {

@@ -21,6 +21,10 @@ class ScanRunOut(BaseModel):
     id: uuid.UUID
     version_id: uuid.UUID
     status: str
+    # "deterministic" (the existing 57-agent graph) | "autonomous_ai" —
+    # see app.models.scan.SCAN_RUN_MODES. The frontend uses this to show
+    # the Pentest Transcript tab only where it applies.
+    mode: str = "deterministic"
     started_at: datetime | None
     completed_at: datetime | None
     error: str | None

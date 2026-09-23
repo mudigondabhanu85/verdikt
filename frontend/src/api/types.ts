@@ -92,6 +92,25 @@ export interface TestLoginResult {
   message: string
 }
 
+export interface ConfirmationPhraseOut {
+  confirmation_phrase: string
+}
+
+export interface PentestCommandOut {
+  id: string
+  sequence_number: number
+  tool_name: string
+  command: string
+  stdout: string | null
+  stderr: string | null
+  exit_code: number | null
+  scope_decision: 'allowed' | 'blocked' | 'unknown'
+  blocked_reason: string | null
+  started_at: string
+  completed_at: string | null
+  model_rationale: string | null
+}
+
 export const BUSINESS_RULE_TYPES = [
   'resource_isolation',
   'workflow_order',
@@ -177,10 +196,13 @@ export interface RaceConditionConfig {
 
 export type ScanRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 
+export type ScanRunMode = 'deterministic' | 'autonomous_ai'
+
 export interface ScanRunOut {
   id: string
   version_id: string
   status: ScanRunStatus
+  mode: ScanRunMode
   started_at: string | null
   completed_at: string | null
   error: string | null

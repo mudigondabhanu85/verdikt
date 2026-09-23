@@ -94,3 +94,13 @@ export function canWrite(role: string | undefined): boolean {
 export function canReview(role: string | undefined): boolean {
   return role !== 'viewer' && role !== undefined
 }
+
+// autonomous_pentest:create is seeded org_admin-only (see
+// app/auth/rbac_seed.py's autonomous_pentest_resource_grants — narrower
+// than every other resource, since this runs live exploitation tooling
+// with real side effects, not a read-mostly crawl). Deliberately NOT
+// canWrite() (org_admin/project_lead) — showing the control to a
+// project_lead who'd just get a 403 back is worse than not showing it.
+export function canRunAutonomousPentest(role: string | undefined): boolean {
+  return role === 'org_admin'
+}

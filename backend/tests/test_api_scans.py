@@ -431,6 +431,41 @@ async def test_get_scan_run_reports_real_llm_token_and_cost_usage(client, fixtur
     assert Decimal(body["llm_cost_usd"]) == Decimal("1.2345")
 
 
+async def test_get_scan_run_reports_the_real_mode_not_the_schema_default(client, fixture_site, db_adapter):
+    """Same failure shape as the llm_cost_usd/tokens bug above, found
+    live in the browser: _scan_run_detail's ScanRunDetail(...) call
+    never passed mode either, so an autonomous_ai run's detail page
+    silently showed "deterministic" (the schema default) — rendering
+    the wrong tab layout (Site Map/Diff/Review Candidates instead of
+    Pentest Transcript) for every AI-driven pentest session.
+    """
+    import uuid as uuid_module
+
+    from app.models.scan import ScanRun
+    from tests.conftest import session_scope
+
+    host, port = fixture_site
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+    await _authorize_and_target(client, admin["headers"], version_id, host, port)
+
+    async with session_scope(db_adapter) as session:
+        scan_run = ScanRun(
+            version_id=uuid_module.UUID(version_id),
+            status="completed",
+            requested_by=uuid_module.uuid4(),
+            mode="autonomous_ai",
+        )
+        session.add(scan_run)
+        await session.commit()
+        await session.refresh(scan_run)
+        scan_run_id = str(scan_run.id)
+
+    detail = await client.get(f"/scan-runs/{scan_run_id}", headers=admin["headers"])
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["mode"] == "autonomous_ai"
+
+
 async def test_full_scan_flow_completes_and_produces_report(client, fixture_site, monkeypatch):
     # Isolate from this dev environment's real deployment-wide AI_PROVIDER
     # setting (a real incident: recon_planner and ai_business_logic_plan

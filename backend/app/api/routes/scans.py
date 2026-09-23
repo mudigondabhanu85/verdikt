@@ -206,6 +206,14 @@ async def _scan_run_detail(session: AsyncSession, scan_run: ScanRun) -> ScanRunD
         id=scan_run.id,
         version_id=scan_run.version_id,
         status=scan_run.status,
+        # Real, live-found bug: this constructor never passed mode, so
+        # ScanRunDetail's schema default ("deterministic") silently won
+        # for every scan run regardless of its actual mode — an
+        # autonomous_ai run's detail page rendered the deterministic
+        # agents' own tab layout instead of the Pentest Transcript tab.
+        # Same failure shape this function's own llm_cost_usd/token
+        # fields comment already documents fixing once before.
+        mode=scan_run.mode,
         started_at=scan_run.started_at,
         completed_at=scan_run.completed_at,
         error=scan_run.error,
