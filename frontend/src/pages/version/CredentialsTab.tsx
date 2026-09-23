@@ -228,6 +228,8 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="username"
+                name="target-username"
+                autoComplete="off"
                 className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
               />
             )}
@@ -236,6 +238,8 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
               onChange={(e) => setSecret(e.target.value)}
               placeholder={credentialType === 'api_token' ? 'bearer token / API key' : 'password / secret'}
               type="password"
+              name="target-secret"
+              autoComplete="new-password"
               className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
             />
             <input
@@ -357,6 +361,8 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
                     value={editUsername}
                     onChange={(e) => setEditUsername(e.target.value)}
                     placeholder="new username (leave blank to keep current)"
+                    name="target-username-edit"
+                    autoComplete="off"
                     className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
                   />
                   <input
@@ -364,6 +370,8 @@ export function CredentialsTab({ versionId }: { versionId: string }) {
                     onChange={(e) => setEditSecret(e.target.value)}
                     placeholder="new secret (leave blank to keep current)"
                     type="password"
+                    name="target-secret-edit"
+                    autoComplete="new-password"
                     className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
                   />
                   <input
