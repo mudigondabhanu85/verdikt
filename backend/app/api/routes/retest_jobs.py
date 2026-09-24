@@ -59,9 +59,17 @@ async def retest_finding(
         job.status = "completed"
         job.result = "not_supported"
         job.error = (
-            f"Single-finding retest isn't supported yet for check type {finding.check_id!r} — "
-            "it needs either a fresh authenticated session or AI-assisted payload validation "
-            "that this endpoint doesn't perform. Run a full rescan to re-verify it instead."
+            (
+                "AI-pentest findings need a fresh, focused AI-driven investigation to "
+                "re-verify, not a single instant replay — use the 'Re-verify with AI' "
+                "option on the finding instead of this endpoint."
+            )
+            if finding.check_id == "ai-pentest-finding"
+            else (
+                f"Single-finding retest isn't supported yet for check type {finding.check_id!r} — "
+                "it needs either a fresh authenticated session or AI-assisted payload validation "
+                "that this endpoint doesn't perform. Run a full rescan to re-verify it instead."
+            )
         )
         job.completed_at = datetime.now(timezone.utc)
     else:

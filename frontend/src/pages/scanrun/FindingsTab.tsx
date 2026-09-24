@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { api, ApiError } from '../../api/client'
 import { AuthenticatedImage } from '../../components/AuthenticatedImage'
 import { SeverityBadge, StatusBadge } from '../../components/Badges'
@@ -161,6 +162,145 @@ const RETEST_RESULT_LABELS: Record<string, string> = {
   error: 'Error',
 }
 
+// AI-pentest findings (check_id "ai-pentest-finding" — every autonomous
+// session uses this one check_id regardless of the actual vulnerability
+// type, see app.agents.autonomous_pentest.runner._persist_confirmed_finding)
+// were never in app.agents.retest_registry.RETEST_HANDLERS at all: they
+// were confirmed by an open-ended LLM investigation, not one fixed
+// deterministic HTTP probe, so there's no single request to "replay."
+// POST .../retest for one of these always came back "not_supported" —
+// real, but the fix isn't a synchronous handler, it's a real (if
+// smaller and narrower) AI-driven re-investigation, reusing the exact
+// same engine and consent flow the original finding came from rather
+// than inventing a second one.
+function AiRetestSection({ versionId, finding }: { versionId: string; finding: FindingOut }) {
+  const [showConfirm, setShowConfirm] = useState(false)
+  const [confirmationText, setConfirmationText] = useState('')
+  const [credentialId, setCredentialId] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [lastScanRunId, setLastScanRunId] = useState<string | null>(null)
+
+  const { data: credentials } = useQuery({
+    queryKey: ['versions', versionId, 'credentials'],
+    queryFn: () => api.credentials.list(versionId),
+  })
+
+  const phraseQuery = useQuery({
+    queryKey: ['versions', versionId, 'autonomous-pentest-confirmation-phrase'],
+    queryFn: () => api.autonomousPentest.confirmationPhrase(versionId),
+    enabled: showConfirm,
+  })
+
+  const objective = [
+    `Confirm whether this previously-confirmed vulnerability is still present: "${finding.title}"`,
+    `at ${finding.affected_endpoints[0] ?? '(endpoint not recorded)'}.`,
+    finding.evidence?.payload ? `It was originally proven with this payload: ${finding.evidence.payload}.` : '',
+    'Re-verify using the same or an equivalent technique and report using the same JSON finding schema if it still reproduces.',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  const startMutation = useMutation({
+    mutationFn: () =>
+      api.autonomousPentest.create(versionId, {
+        confirmation_text: confirmationText,
+        objective,
+        credential_id: credentialId || null,
+      }),
+    onSuccess: (scanRun) => {
+      setError(null)
+      setLastScanRunId(scanRun.id)
+      setShowConfirm(false)
+      setConfirmationText('')
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : 'Could not start the retest'),
+  })
+
+  const phrase = phraseQuery.data?.confirmation_phrase
+
+  return (
+    <div>
+      <h4 className="mb-1 font-medium text-gray-700">Retest</h4>
+      <p className="mb-2 text-xs text-gray-500">
+        This finding came from an open-ended AI investigation, not one fixed check — re-verifying it means
+        running a fresh, focused AI session against the same target rather than a single instant replay.
+      </p>
+
+      {!showConfirm && !lastScanRunId && (
+        <button
+          onClick={() => setShowConfirm(true)}
+          className="rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-50"
+        >
+          Re-verify with AI
+        </button>
+      )}
+
+      {showConfirm && (
+        <div className="rounded border border-purple-200 bg-purple-50 p-2 text-xs">
+          {credentials && credentials.length > 1 && (
+            <>
+              <label className="mb-1 block font-medium text-purple-900">Pre-authenticate as</label>
+              <select
+                value={credentialId}
+                onChange={(e) => setCredentialId(e.target.value)}
+                className="mb-2 w-full rounded border border-gray-300 px-2 py-1 focus:border-purple-500 focus:outline-none"
+              >
+                <option value="">Don't pre-authenticate — let the AI log in itself</option>
+                {credentials.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label} ({c.masked_reference})
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+          <p className="mb-2 text-purple-900">
+            This runs real exploitation tooling in an isolated sandbox again. To confirm, type the phrase below
+            exactly.
+          </p>
+          {phraseQuery.isLoading && <p className="text-gray-500">Loading…</p>}
+          {phrase && (
+            <>
+              <p className="mb-2 rounded bg-white px-2 py-1 font-mono">{phrase}</p>
+              <input
+                value={confirmationText}
+                onChange={(e) => setConfirmationText(e.target.value)}
+                placeholder="Type the phrase above"
+                className="mb-2 w-full rounded border border-gray-300 px-2 py-1 focus:border-purple-500 focus:outline-none"
+              />
+            </>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => startMutation.mutate()}
+              disabled={!phrase || confirmationText !== phrase || startMutation.isPending}
+              className="rounded bg-purple-700 px-3 py-1 font-medium text-white hover:bg-purple-800 disabled:opacity-50"
+            >
+              {startMutation.isPending ? 'Starting…' : 'Start retest'}
+            </button>
+            <button onClick={() => setShowConfirm(false)} className="text-gray-500 hover:underline">
+              cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+
+      {lastScanRunId && (
+        <p className="text-xs text-gray-600">
+          Retest session started —{' '}
+          <Link to={`/scan-runs/${lastScanRunId}`} className="text-purple-700 hover:underline">
+            view its live transcript and findings →
+          </Link>
+          . This original finding's status isn't updated automatically; review the new session's result and
+          mark this one Fixed/Reopened yourself once you've seen it.
+        </p>
+      )}
+    </div>
+  )
+}
+
 function RetestSection({ scanRunId, finding }: { scanRunId: string; finding: FindingOut }) {
   const queryClient = useQueryClient()
 
@@ -219,7 +359,15 @@ function RetestSection({ scanRunId, finding }: { scanRunId: string; finding: Fin
   )
 }
 
-function FindingDetail({ scanRunId, finding }: { scanRunId: string; finding: FindingOut }) {
+function FindingDetail({
+  scanRunId,
+  versionId,
+  finding,
+}: {
+  scanRunId: string
+  versionId: string
+  finding: FindingOut
+}) {
   return (
     <div className="space-y-3 border-t border-gray-100 bg-gray-50 px-4 py-4 text-sm">
       <p className="text-gray-700">{finding.plain_language_summary}</p>
@@ -255,7 +403,11 @@ function FindingDetail({ scanRunId, finding }: { scanRunId: string; finding: Fin
       </div>
 
       <FindingStatusControl scanRunId={scanRunId} finding={finding} />
-      <RetestSection scanRunId={scanRunId} finding={finding} />
+      {finding.check_id === 'ai-pentest-finding' ? (
+        <AiRetestSection versionId={versionId} finding={finding} />
+      ) : (
+        <RetestSection scanRunId={scanRunId} finding={finding} />
+      )}
       <TicketSection findingId={finding.id} />
 
       {finding.evidence && (
@@ -312,7 +464,15 @@ function groupFindings(findings: FindingOut[]): FindingGroup[] {
   return Array.from(byKey.values()).sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
 }
 
-function FindingGroupRow({ scanRunId, group }: { scanRunId: string; group: FindingGroup }) {
+function FindingGroupRow({
+  scanRunId,
+  versionId,
+  group,
+}: {
+  scanRunId: string
+  versionId: string
+  group: FindingGroup
+}) {
   const [groupOpen, setGroupOpen] = useState(false)
   const [expandedInstance, setExpandedInstance] = useState<string | null>(null)
   const shared = group.instances[0]
@@ -357,7 +517,9 @@ function FindingGroupRow({ scanRunId, group }: { scanRunId: string; group: Findi
                     <StatusBadge status={finding.retest_status} />
                   </span>
                 </button>
-                {expandedInstance === finding.id && <FindingDetail scanRunId={scanRunId} finding={finding} />}
+                {expandedInstance === finding.id && (
+                  <FindingDetail scanRunId={scanRunId} versionId={versionId} finding={finding} />
+                )}
               </li>
             ))}
           </ul>
@@ -367,7 +529,7 @@ function FindingGroupRow({ scanRunId, group }: { scanRunId: string; group: Findi
   )
 }
 
-export function FindingsTab({ scanRunId }: { scanRunId: string }) {
+export function FindingsTab({ scanRunId, versionId }: { scanRunId: string; versionId: string }) {
   const [severityFilter, setSeverityFilter] = useState<string>('all')
 
   const { data: findings, isLoading } = useQuery({
@@ -405,7 +567,7 @@ export function FindingsTab({ scanRunId }: { scanRunId: string }) {
 
       <ul className="divide-y divide-gray-200 rounded border border-gray-200 bg-white">
         {groups.map((group) => (
-          <FindingGroupRow key={group.key} scanRunId={scanRunId} group={group} />
+          <FindingGroupRow key={group.key} scanRunId={scanRunId} versionId={versionId} group={group} />
         ))}
       </ul>
     </div>

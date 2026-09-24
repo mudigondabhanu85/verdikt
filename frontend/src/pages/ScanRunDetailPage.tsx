@@ -55,13 +55,13 @@ export function ScanRunDetailPage() {
                 // proof pipeline, which this mode never runs.
                 { key: 'transcript', label: 'Pentest Transcript', content: <PentestTranscriptTab scanRun={scanRun} /> },
                 { key: 'agent-jobs', label: 'Agent Jobs', content: <AgentJobsTab scanRun={scanRun} /> },
-                { key: 'findings', label: 'Findings', content: <FindingsTab scanRunId={scanRunId} /> },
+                { key: 'findings', label: 'Findings', content: <FindingsTab scanRunId={scanRunId} versionId={scanRun.version_id} /> },
                 { key: 'reports', label: 'Reports', content: <ReportsTab scanRunId={scanRunId} /> },
               ]
             : [
                 { key: 'agent-jobs', label: 'Agent Jobs', content: <AgentJobsTab scanRun={scanRun} /> },
                 { key: 'site-map', label: 'Site Map', content: <SiteMapTab scanRun={scanRun} /> },
-                { key: 'findings', label: 'Findings', content: <FindingsTab scanRunId={scanRunId} /> },
+                { key: 'findings', label: 'Findings', content: <FindingsTab scanRunId={scanRunId} versionId={scanRun.version_id} /> },
                 { key: 'review-candidates', label: 'Review Candidates', content: <ReviewCandidatesTab scanRunId={scanRunId} /> },
                 { key: 'reports', label: 'Reports', content: <ReportsTab scanRunId={scanRunId} /> },
                 { key: 'diff', label: 'Diff', content: <DiffTab scanRunId={scanRunId} versionId={scanRun.version_id} /> },

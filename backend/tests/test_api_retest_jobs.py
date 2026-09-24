@@ -142,6 +142,28 @@ async def test_retest_not_supported_for_unregistered_check(client, db_adapter):
     assert "full rescan" in body["error"]
 
 
+async def test_retest_not_supported_for_ai_pentest_finding_points_at_the_ai_reverify_option(client, db_adapter):
+    """ai-pentest-finding never had a registered handler — every
+    autonomous session uses this one check_id regardless of the actual
+    vulnerability type, so there's no single fixed request to replay.
+    The generic "run a full rescan" message doesn't apply here (there's
+    no equivalent one-click deterministic rescan) — this checks it gets
+    its own, accurate message instead."""
+    admin = await register_org_admin(client)
+    _, version_id = await create_project_and_version(client, admin["headers"])
+    finding_id = await _seed_finding(
+        db_adapter, version_id, check_id="ai-pentest-finding", affected_endpoint="http://site.test/xss?name=1"
+    )
+
+    resp = await client.post(f"/findings/{finding_id}/retest", headers=admin["headers"])
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["status"] == "completed"
+    assert body["result"] == "not_supported"
+    assert "Re-verify with AI" in body["error"]
+    assert "full rescan" not in body["error"]
+
+
 async def test_retest_never_overrides_analyst_locked_status(client, db_adapter):
     admin = await register_org_admin(client)
     _, version_id = await create_project_and_version(client, admin["headers"])
